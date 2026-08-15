@@ -1,0 +1,6 @@
+{"epoch": 1, "total_epochs": 5, "loss": 0.005396, "best_loss": 0.005396, "elapsed_sec": 0.1, "percent": 20.0, "status": "training", "device": "cpu"}
+{"epoch": 2, "total_epochs": 5, "loss": 0.003386, "best_loss": 0.003386, "elapsed_sec": 0.1, "percent": 40.0, "status": "training", "device": "cpu"}
+{"epoch": 3, "total_epochs": 5, "loss": 0.002025, "best_loss": 0.002025, "elapsed_sec": 0.2, "percent": 60.0, "status": "training", "device": "cpu"}
+{"epoch": 4, "total_epochs": 5, "loss": 0.001155, "best_loss": 0.001155, "elapsed_sec": 0.2, "percent": 80.0, "status": "training", "device": "cpu"}
+{"epoch": 5, "total_epochs": 5, "loss": 0.000687, "best_loss": 0.000687, "elapsed_sec": 0.3, "percent": 100.0, "status": "training", "device": "cpu"}
+{"status": "done", "mode": "standard", "epochs": 5, "best_loss": 0.000687, "trainable_params": 67840, "total_params": 133888, "elapsed_sec": 0.4, "output_path": "model_standard.onnx", "model_bytes": 527767, "device": "cpu", "passed": true}

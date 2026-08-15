@@ -1,0 +1,11 @@
+node_modules/
+out/
+dist/
+*.pyc
+__pycache__/
+.env
+engine/.venv/
+engine/venv/
+
+# Project exclude paths
+/src/preload/index.d.ts

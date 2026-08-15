@@ -1,0 +1,23 @@
+openssl rand -hex 32 > "$HOME/.ruanjian-license-signing-secret"
+chmod 600 "$HOME/.ruanjian-license-signing-secret"
+
+export AWS_REGION=us-east-1
+export LICENSE_SIGNING_SECRET_FILE="$HOME/.ruanjian-license-signing-secret"
+
+scripts/deploy-license.sh
+
+
+OutputKey                        OutputValue                      Description                    
+------------------------------------------------------------------------------------------------
+LicenseVerifierFunctionArn       arn:aws:lambda:us-east-          Lambda function ARN            
+                                 1:641628981129:function:ruanji                                  
+                                 an-license-LicenseVerifier-                                     
+                                 PvtpXcPjNguj                                                    
+LicenseVerifierRoleArn           arn:aws:iam::641628981129:role   Least-privilege Lambda         
+                                 /ruanjian-license-               execution role ARN             
+                                 LicenseVerifierRole-                                            
+                                 ChqhDnO5JDuf                                                    
+LicenseVerifierUrl               https://5pmjnezmzrbjw2tjmnzpt2   Public HTTPS endpoint for POST 
+                                 32xy0duvyr.lambda-url.us-        /verify                        
+                                 east-1.on.aws/                                                  
+------------------------------------------------------------------------------------------------

@@ -1,0 +1,102 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Ruanjian subscription license verification API
+
+Parameters:
+  LicenseSigningSecret:
+    Type: String
+    NoEcho: true
+    MinLength: 32
+    Description: HMAC secret shared with the Electron app license configuration
+  PaymentProvider:
+    Type: String
+    Default: custom
+    AllowedValues:
+      - custom
+      - stripe
+      - lemonsqueezy
+      - paddle
+  StripeApiKey:
+    Type: String
+    Default: ''
+    NoEcho: true
+  LemonApiKey:
+    Type: String
+    Default: ''
+    NoEcho: true
+  MockMode:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+  ExpiryDays:
+    Type: Number
+    Default: 30
+    MinValue: 1
+    MaxValue: 366
+
+Globals:
+  Function:
+    Runtime: python3.11
+    Timeout: 10
+    MemorySize: 256
+    Architectures:
+      - arm64
+    Environment:
+      Variables:
+        LICENSE_SIGNING_SECRET: !Ref LicenseSigningSecret
+        PAYMENT_PROVIDER: !Ref PaymentProvider
+        STRIPE_API_KEY: !Ref StripeApiKey
+        LEMON_API_KEY: !Ref LemonApiKey
+        MOCK_MODE: !Ref MockMode
+        EXPIRY_DAYS: !Ref ExpiryDays
+
+Resources:
+  LicenseVerifierRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Description: Least-privilege execution role for the Ruanjian license verifier
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: WriteLicenseVerifierLogs
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${AWS::StackName}-LicenseVerifier:*
+
+  LicenseVerifier:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: .
+      Handler: handler.handler
+      Role: !GetAtt LicenseVerifierRole.Arn
+      FunctionUrlConfig:
+        AuthType: NONE
+        Cors:
+          AllowOrigins:
+            - '*'
+          AllowMethods:
+            - POST
+          AllowHeaders:
+            - Content-Type
+
+Outputs:
+  LicenseVerifierFunctionArn:
+    Description: Lambda function ARN
+    Value: !GetAtt LicenseVerifier.Arn
+  LicenseVerifierRoleArn:
+    Description: Least-privilege Lambda execution role ARN
+    Value: !GetAtt LicenseVerifierRole.Arn
+  LicenseVerifierUrl:
+    Description: Public HTTPS endpoint for POST /verify
+    Value: !GetAtt LicenseVerifierUrl.FunctionUrl

@@ -1,0 +1,140 @@
+name: CI — Engine Tests & Benchmark
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'engine/**'
+      - '.github/workflows/ci.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'engine/**'
+
+jobs:
+  test:
+    name: Engine Tests (${{ matrix.os }}, Python ${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os:     [ubuntu-22.04, macos-14]
+        python: ["3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+
+      - name: Install CPU-only dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install \
+            "numpy>=1.26" \
+            "onnx>=1.16" \
+            "onnxruntime>=1.18" \
+            "soundfile>=0.12" \
+            "cryptography>=42" \
+            torch --index-url https://download.pytorch.org/whl/cpu
+
+      - name: Run fast test suite
+        working-directory: engine
+        run: |
+          python _test_suite.py \
+            --fast \
+            --output ../test-report-${{ matrix.os }}-py${{ matrix.python }}.json
+
+      - name: Run benchmark (short duration)
+        working-directory: engine
+        run: |
+          python _bench.py \
+            --iters 1 \
+            --dur 5 \
+            --output ../bench-report-${{ matrix.os }}-py${{ matrix.python }}.json
+
+      - name: Upload test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-report-${{ matrix.os }}-py${{ matrix.python }}
+          path: |
+            test-report-*.json
+            bench-report-*.json
+          retention-days: 30
+
+      - name: Check all tests passed
+        working-directory: engine
+        run: |
+          python _test_suite.py --fast --skip training
+          # Non-zero exit from _test_suite.py fails this step
+
+  benchmark-full:
+    name: Full Benchmark (CPU, 30s audio)
+    runs-on: ubuntu-22.04
+    # Only run on main branch pushes to avoid slow CI on every PR
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install \
+            "numpy>=1.26" "onnx>=1.16" "onnxruntime>=1.18" \
+            "soundfile>=0.12" "cryptography>=42" \
+            torch --index-url https://download.pytorch.org/whl/cpu
+
+      - name: Run full test suite with JSON report
+        working-directory: engine
+        run: |
+          python _test_suite.py \
+            --output ../full-test-report.json
+
+      - name: Run full benchmark
+        working-directory: engine
+        run: |
+          python _bench.py \
+            --iters 3 \
+            --dur 30 \
+            --output ../full-bench-report.json
+
+      - name: Upload full reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: full-reports
+          path: |
+            full-test-report.json
+            full-bench-report.json
+          retention-days: 90
+
+      - name: Print performance summary
+        run: |
+          python - <<'EOF'
+          import json, sys
+          r = json.load(open("full-test-report.json"))
+          passed = r["summary"]["passed"]
+          total  = r["summary"]["total"]
+          print(f"\n{'='*60}")
+          print(f"  Performance Report  ({r['tier']} tier)")
+          print(f"{'='*60}")
+          for t in r["results"]:
+              icon = "✓" if t["passed"] else "✗"
+              print(f"  {icon} {t['id']}  {t['name']:<35}  {t['elapsed']:.2f}s")
+          print(f"{'='*60}")
+          print(f"  {passed}/{total} passed")
+          print(f"{'='*60}\n")
+          sys.exit(0 if passed == total else 1)
+          EOF

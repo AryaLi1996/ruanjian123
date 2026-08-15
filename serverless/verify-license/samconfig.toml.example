@@ -1,0 +1,9 @@
+version = 0.1
+
+[default.deploy.parameters]
+stack_name = "ruanjian-license"
+region = "us-east-1"
+resolve_s3 = true
+confirm_changeset = true
+capabilities = "CAPABILITY_NAMED_IAM"
+parameter_overrides = "PaymentProvider=custom MockMode=false ExpiryDays=30"

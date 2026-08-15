@@ -1,0 +1,45 @@
+{
+  "name": "ruanjian",
+  "version": "0.1.0",
+  "description": "Desktop AI application",
+  "private": true,
+  "main": "out/main/index.js",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/your-org/ruanjian.git"
+  },
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build && electron-builder",
+    "build:unpack": "electron-vite build && electron-builder --dir",
+    "build:win-portable": "electron-vite build && electron-builder --win portable --x64",
+    "build:win-nsis": "electron-vite build && WIN_INSTALLER=nsis electron-builder --win nsis --x64",
+    "build:mac-arm64": "electron-vite build && electron-builder --mac dmg --arm64",
+    "build:mac-x64": "electron-vite build && electron-builder --mac dmg --x64",
+    "build:mac-universal": "electron-vite build && electron-builder --mac dmg --universal",
+    "preview": "electron-vite preview",
+    "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
+    "test:engine": "cd engine && python3 _test_suite.py --fast --skip training",
+    "bench:engine": "cd engine && python3 _bench.py --iters 1 --dur 5"
+  },
+  "dependencies": {
+    "electron-log": "^5.1.7",
+    "electron-updater": "^6.3.4",
+    "i18next": "^26.3.6",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-i18next": "^17.0.11",
+    "zustand": "^5.0.14"
+  },
+  "devDependencies": {
+    "@types/node": "^20.16.0",
+    "@types/react": "^18.3.1",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "electron": "^31.4.0",
+    "electron-builder": "^24.13.3",
+    "electron-vite": "^2.3.0",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.10"
+  }
+}
