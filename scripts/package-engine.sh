@@ -47,13 +47,29 @@ fi
 DIST_DIR="$OUT_DIR/ruanjian-engine"
 STAMP="$OUT_DIR/.source-hash"
 
+# Windows detection, for the things that genuinely differ there: PyInstaller's
+# --add-data separator, and the .exe suffix on its output executable. Under
+# Git Bash / MSYS (what GitHub's windows-latest runner and most local Windows
+# bash setups use), `uname -s` reports something like "MINGW64_NT-10.0...",
+# not "Windows" — match the MSYS/MINGW/Cygwin family.
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*) IS_WINDOWS=1 ;;
+  *)                    IS_WINDOWS=0 ;;
+esac
+ADD_DATA_SEP=":"
+ENGINE_EXE_NAME="ruanjian-engine"
+if [ "$IS_WINDOWS" = 1 ]; then
+  ADD_DATA_SEP=";"
+  ENGINE_EXE_NAME="ruanjian-engine.exe"
+fi
+
 # Skip the (multi-minute) PyInstaller rebuild when nothing the bundle depends
 # on has actually changed since the last successful build. Pass --force (or
 # set FORCE_ENGINE_REBUILD=1) to bypass this and rebuild unconditionally.
 FORCE_REBUILD="${FORCE_ENGINE_REBUILD:-0}"
 [ "${1:-}" = "--force" ] && FORCE_REBUILD=1
 
-if [ "$FORCE_REBUILD" != 1 ] && [ -x "$DIST_DIR/ruanjian-engine" ] && [ -f "$STAMP" ]; then
+if [ "$FORCE_REBUILD" != 1 ] && [ -x "$DIST_DIR/$ENGINE_EXE_NAME" ] && [ -f "$STAMP" ]; then
   CURRENT_HASH="$(
     find "$ENGINE_DIR" \( -name '*.py' -o -name '*.onnx' -o -name 'requirements.txt' \) -type f \
       -exec shasum -a 256 {} \; | sort | shasum -a 256 | awk '{print $1}'
@@ -65,11 +81,24 @@ if [ "$FORCE_REBUILD" != 1 ] && [ -x "$DIST_DIR/ruanjian-engine" ] && [ -f "$STA
 fi
 
 # PY is the argv prefix used for every python invocation below. For the
-# unversioned (no ENGINE_ARCH) path this is just the system python3, exactly
+# unversioned (no ENGINE_ARCH) path this is just the system Python, exactly
 # as before. For an arch-specific macOS build it points at a dedicated venv,
 # built and locked to that architecture, so x64 and arm64 dependency trees
 # never share (and corrupt) a single site-packages directory.
-PY=(python3)
+#
+# Windows Python installs (python.org installer, actions/setup-python, the
+# Microsoft Store package) register the command as `python`, not `python3`
+# — `python3` is a macOS/Linux convention. Prefer python3 where it exists
+# (keeps picking the right interpreter on a machine that has both python
+# 2 and 3 on PATH) and fall back to python otherwise.
+if command -v python3 >/dev/null 2>&1; then
+  PY=(python3)
+elif command -v python >/dev/null 2>&1; then
+  PY=(python)
+else
+  echo "[package-engine] No python3/python interpreter found on PATH." >&2
+  exit 1
+fi
 
 # Finds a Python 3 binary that can actually execute the x86_64 slice under
 # Rosetta — i.e. a universal2 build (python.org installer) or a native
@@ -174,14 +203,14 @@ cd "$ENGINE_DIR"
 # Collect all .onnx files as data assets
 ONNX_ARGS=()
 for f in *.onnx; do
-  [ -f "$f" ] && ONNX_ARGS+=("--add-data" "$f:.")
+  [ -f "$f" ] && ONNX_ARGS+=("--add-data" "$f$ADD_DATA_SEP.")
 done
 
 "${PY[@]}" -m PyInstaller main.py \
   --name          ruanjian-engine \
   --onedir \
   "${ONNX_ARGS[@]}" \
-  --add-data      "*.py:." \
+  --add-data      "*.py$ADD_DATA_SEP." \
   --hidden-import soundfile \
   --hidden-import onnxruntime \
   --hidden-import numpy \
@@ -197,7 +226,7 @@ find "$ENGINE_DIR" \( -name '*.py' -o -name '*.onnx' -o -name 'requirements.txt'
   -exec shasum -a 256 {} \; | sort | shasum -a 256 | awk '{print $1}' > "$STAMP"
 
 SIZE=$(du -sh "$DIST_DIR" | cut -f1)
-echo "[package-engine] Done. Bundle: $DIST_DIR ($SIZE)"
+echo "[package-engine] Done. Bundle: $DIST_DIR/$ENGINE_EXE_NAME ($SIZE)"
 
 # --- Cross-arch reconciliation (macOS universal builds only) ---------------
 #

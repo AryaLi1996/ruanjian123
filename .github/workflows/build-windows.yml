@@ -1,0 +1,49 @@
+name: Build Windows Installer
+
+# Manual trigger only for now — this produces a real ruanjian-engine.exe
+# (PyInstaller can't cross-compile, so this has to run on an actual Windows
+# machine; a GitHub-hosted windows-latest runner is the stand-in for that)
+# and packages the portable .exe installer via electron-builder.
+on:
+  workflow_dispatch: {}
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      # scripts/package-engine.sh is a bash script; windows-latest runners
+      # ship Git for Windows, which provides the bash used here.
+      - name: Build the Python engine (PyInstaller)
+        shell: bash
+        run: bash scripts/package-engine.sh --force
+
+      - name: Build renderer + main
+        run: npx electron-vite build
+
+      - name: Package Windows portable .exe
+        run: npx electron-builder --win portable --x64
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ruanjian-windows-portable
+          path: dist/*.exe
+          retention-days: 14
