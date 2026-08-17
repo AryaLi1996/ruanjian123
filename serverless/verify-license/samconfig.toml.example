@@ -7,3 +7,5 @@ resolve_s3 = true
 confirm_changeset = true
 capabilities = "CAPABILITY_NAMED_IAM"
 parameter_overrides = "PaymentProvider=custom MockMode=false ExpiryDays=30"
+# For real Stripe payment verification, use instead:
+# parameter_overrides = "PaymentProvider=stripe StripeApiKey=sk_live_... StripeWebhookSecret=whsec_... MockMode=false ExpiryDays=30"
