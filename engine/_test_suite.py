@@ -127,6 +127,29 @@ def reconstruction_db(original: np.ndarray, *stems: np.ndarray) -> float:
     ))
 
 
+def _json_fallback(obj: Any) -> Any:
+    """
+    json.dumps default= hook: coerces numpy scalar types that slip into a
+    test's metrics/passed fields into native Python types.
+    numpy.float64/int64 already subclass float/int, so the stdlib encoder
+    handles them natively — this exists for numpy.bool specifically, which
+    (unlike those) is NOT a bool subclass and reaches here instead, plus as
+    a safety net for anything else numpy that ends up in a report field a
+    future test adds. Two known sources already fixed at their root (T03's
+    `and`-chain ending in np.all(), watermark.py's z-score going through
+    np.sqrt) — this is defense in depth against the next one.
+    """
+    if isinstance(obj, np.bool_):
+        return bool(obj)
+    if isinstance(obj, np.integer):
+        return int(obj)
+    if isinstance(obj, np.floating):
+        return float(obj)
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
+
+
 # ── Test result type ───────────────────────────────────────────────────────────
 
 class TestResult(TypedDict):
@@ -233,7 +256,14 @@ def test_t03_synthesis(duration: float, targets: dict) -> TestResult:
             "ep":            res["ep"],
         }
         r["targets"] = {"synthesis_rt_ratio": targets["synthesis_rt_ratio"]}
-        r["passed"]  = (rt <= targets["synthesis_rt_ratio"]
+        # bool(...) at the end: np.all() returns numpy.bool, and `and` just
+        # passes through whichever operand it last evaluated rather than
+        # coercing to a native bool — so without this, r["passed"] ends up
+        # numpy.bool here too, which crashes json.dumps in main() below
+        # (numpy.bool isn't a subclass of the builtin bool the way
+        # numpy.float64 is a subclass of float, so it misses the encoder's
+        # native-type fast path).
+        r["passed"]  = bool(rt <= targets["synthesis_rt_ratio"]
                         and float(np.sqrt(np.mean(audio ** 2))) > 1e-4
                         and np.all(np.isfinite(audio)))
         if rt > targets["synthesis_rt_ratio"]:
@@ -674,7 +704,7 @@ def main() -> None:
     }
 
     if args.output:
-        Path(args.output).write_text(json.dumps(report, indent=2))
+        Path(args.output).write_text(json.dumps(report, indent=2, default=_json_fallback))
         print(f"Report written to {args.output}")
 
     # CI exit code

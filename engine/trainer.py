@@ -363,7 +363,20 @@ def _pick_device() -> str:
     if torch.cuda.is_available():
         return "cuda"
     if torch.backends.mps.is_available():
-        return "mps"
+        try:
+            # Some environments (notably GitHub Actions' macOS runners —
+            # VMs without real GPU passthrough) report MPS as available via
+            # this check but can't actually allocate on it, failing with
+            # "MPS backend out of memory" on the very first real tensor op.
+            # A tiny canary allocation catches that upfront instead of
+            # failing partway through a training run; also protects a real
+            # user's machine if MPS is simply in a bad state for other
+            # reasons (e.g. another app pinning GPU memory) — either way,
+            # CPU is always a safe fallback for a small model like this.
+            torch.zeros(1, device="mps")
+            return "mps"
+        except RuntimeError:
+            pass
     return "cpu"
 
 

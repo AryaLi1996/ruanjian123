@@ -50,6 +50,7 @@ or the assumed clip length change, recalibrate all three together.
 from __future__ import annotations
 
 import hashlib
+import math
 import time
 from pathlib import Path
 from typing import TypedDict
@@ -210,8 +211,14 @@ class Watermarker:
         # z ≈ N(0, 1) under "no matching watermark present", regardless of
         # how loud the audio is — energy normalizes that out here, once,
         # rather than per frame (which is what threw the signal away before).
-        z = raw_sum / (np.sqrt(energy) + 1e-8)
-        det = z > THRESHOLD
+        # math.sqrt (not np.sqrt) keeps z a plain Python float rather than
+        # numpy.float64 — otherwise `det = z > THRESHOLD` below becomes a
+        # numpy.bool, which json.dumps can't serialize (unlike numpy.float64,
+        # numpy.bool isn't a subclass of the builtin type, so it doesn't hit
+        # the encoder's normal int/float/bool fast path) and callers that
+        # write this result to JSON (e.g. _test_suite.py's report) crash.
+        z = raw_sum / (math.sqrt(energy) + 1e-8)
+        det = bool(z > THRESHOLD)
 
         if   z > THRESHOLD * 2.0: confidence = "high"
         elif z > THRESHOLD:        confidence = "medium"
