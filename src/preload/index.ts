@@ -24,6 +24,10 @@ contextBridge.exposeInMainWorld('engine', {
   saveRecording: (buffer: ArrayBuffer, defaultName: string): Promise<string | null> =>
     ipcRenderer.invoke('fs:save-recording', buffer, defaultName),
 
+  // Online lyrics search (Playback/Monitor page, lrclib.org)
+  searchLyrics: (query: { track: string; artist?: string }): Promise<unknown[]> =>
+    ipcRenderer.invoke('lyrics:search', query),
+
   // Report renderer crashes caught by the React error boundary
   logRendererError: (payload: unknown): Promise<void> =>
     ipcRenderer.invoke('log:renderer-error', payload),
