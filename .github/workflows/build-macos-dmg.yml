@@ -1,0 +1,134 @@
+name: Build macOS DMG
+
+# Manual trigger only for now — like build-windows.yml, this produces a real
+# PyInstaller-bundled ruanjian-engine per architecture (no cross-compiling),
+# so it needs actual macOS runners, and packages a signed(-ish, ad-hoc) .dmg
+# via electron-builder for each CPU architecture separately.
+#
+# x64 and arm64 each need a *natively built* engine bundle (PyInstaller
+# embeds arch-specific binaries — see scripts/package-engine.sh), so this
+# runs as two independent jobs rather than one universal build:
+#   - arm64: runs directly on the runner's native Apple Silicon Python.
+#   - x64:   the runner itself is arm64 (macos-14), so the x64 leg builds
+#            the engine under Rosetta 2, using a universal2 Python install
+#            (python.org's installer) per scripts/package-engine.sh's
+#            find_x64_python() — see its comments for why a plain Homebrew/
+#            CLT python3 (arm64-only) won't work here.
+on:
+  workflow_dispatch: {}
+
+jobs:
+  build-macos-x64:
+    runs-on: macos-14
+    timeout-minutes: 90
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # macos-14 runners are Apple Silicon; Rosetta 2 ships pre-installed on
+      # GitHub's hosted arm64 runners, but this is cheap and idempotent
+      # (exits 0 with "Rosetta is already installed" if so) — keep it as a
+      # safety net rather than assuming the image never changes.
+      - name: Ensure Rosetta 2 is installed
+        run: softwareupdate --install-rosetta --agree-to-license
+
+      # scripts/package-engine.sh's ENGINE_ARCH=x64 path requires a
+      # universal2 (or native x86_64) Python at one of a few hardcoded
+      # locations so it can run under `arch -x86_64` via Rosetta — the
+      # arm64-only python3 that ships on this runner doesn't qualify.
+      # python.org's official "macos11" installer is universal2 and lands
+      # at exactly one of the paths find_x64_python() checks.
+      - name: Install universal2 Python 3.11 (for the x64 engine build)
+        run: |
+          curl -fsSL -o /tmp/python-universal2.pkg \
+            https://www.python.org/ftp/python/3.11.9/python-3.11.9-macos11.pkg
+          sudo installer -pkg /tmp/python-universal2.pkg -target /
+          /Library/Frameworks/Python.framework/Versions/3.11/bin/python3 -V
+          arch -x86_64 /Library/Frameworks/Python.framework/Versions/3.11/bin/python3 -c 'import platform; print(platform.machine())'
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Build the Python engine for x64 (PyInstaller, via Rosetta)
+        env:
+          ENGINE_ARCH: x64
+        run: bash scripts/package-engine.sh --force
+
+      - name: Build renderer + main
+        run: npx electron-vite build
+
+      # Bypass npx / the node_modules/.bin shim and call electron-builder's
+      # CLI entry point directly (see build-windows.yml for why: npx has
+      # shown silent no-op flakiness there). --publish never: electron-builder.js
+      # has a `publish: [{ provider: github, ... }]` block for the real
+      # auto-updater, which would otherwise try to prep release/update-feed
+      # metadata and fail the run on a missing GH_TOKEN. This workflow only
+      # needs the built .dmg, not a publish attempt.
+      - name: Package macOS x64 .dmg
+        env:
+          DEBUG: electron-builder
+        run: |
+          node node_modules/electron-builder/out/cli/cli.js --mac dmg --x64 --publish never
+          echo "--- dist/ contents after packaging ---"
+          find dist -maxdepth 2 2>&1 || echo "(dist/ does not exist)"
+
+      - name: Upload DMG artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ruanjian-macos-x64-dmg
+          path: dist/*.dmg
+          retention-days: 14
+          # Default is "warn" — a step whose glob matches nothing still
+          # reports success. Fail loud instead, same as build-windows.yml.
+          if-no-files-found: error
+
+  build-macos-arm64:
+    runs-on: macos-14
+    timeout-minutes: 90
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Build the Python engine for arm64 (PyInstaller)
+        env:
+          ENGINE_ARCH: arm64
+        run: bash scripts/package-engine.sh --force
+
+      - name: Build renderer + main
+        run: npx electron-vite build
+
+      - name: Package macOS arm64 .dmg
+        env:
+          DEBUG: electron-builder
+        run: |
+          node node_modules/electron-builder/out/cli/cli.js --mac dmg --arm64 --publish never
+          echo "--- dist/ contents after packaging ---"
+          find dist -maxdepth 2 2>&1 || echo "(dist/ does not exist)"
+
+      - name: Upload DMG artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ruanjian-macos-arm64-dmg
+          path: dist/*.dmg
+          retention-days: 14
+          if-no-files-found: error
