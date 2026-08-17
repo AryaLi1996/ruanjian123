@@ -38,8 +38,22 @@ jobs:
       - name: Build renderer + main
         run: npx electron-vite build
 
+      # The previous two runs produced zero log output for this step (it
+      # completed "successfully" in ~2s with nothing printed, no .exe in
+      # dist/) despite the exact same `npx <tool>` pattern working fine one
+      # step above for electron-vite — genuinely unclear why yet. Switching
+      # to bash (matching the PyInstaller step, which is known to work) and
+      # forcing electron-builder's DEBUG logging + an explicit post-mortem
+      # directory listing, so if it still comes up empty the next run's logs
+      # actually explain why instead of just silently reporting success.
       - name: Package Windows portable .exe
-        run: npx electron-builder --win portable --x64
+        shell: bash
+        env:
+          DEBUG: electron-builder
+        run: |
+          npx electron-builder --win portable --x64
+          echo "--- dist/ contents after packaging ---"
+          find dist -maxdepth 2 2>&1 || echo "(dist/ does not exist)"
 
       - name: Upload installer artifact
         uses: actions/upload-artifact@v4
