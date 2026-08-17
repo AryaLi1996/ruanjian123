@@ -35,13 +35,19 @@ jobs:
       - name: Install CPU-only dependencies
         run: |
           python -m pip install --upgrade pip
+          # torch's --index-url must be its own pip invocation — passed on
+          # the same command line as the other packages, it scopes to the
+          # *entire* install (pip has no "index-url applies to this package
+          # only" syntax), so pip would only search PyTorch's CPU wheel
+          # index for numpy/onnx/onnxruntime/soundfile/cryptography too —
+          # none of which it hosts — and every install fails immediately.
           pip install \
             "numpy>=1.26" \
             "onnx>=1.16" \
             "onnxruntime>=1.18" \
             "soundfile>=0.12" \
-            "cryptography>=42" \
-            torch --index-url https://download.pytorch.org/whl/cpu
+            "cryptography>=42"
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
 
       - name: Run fast test suite
         working-directory: engine
@@ -92,10 +98,14 @@ jobs:
 
       - name: Install dependencies
         run: |
+          # See the same split in the `test` job above — torch's
+          # --index-url must not share a pip invocation with the other
+          # packages, or pip searches only PyTorch's CPU wheel index for
+          # everything and fails to find non-torch packages.
           pip install \
             "numpy>=1.26" "onnx>=1.16" "onnxruntime>=1.18" \
-            "soundfile>=0.12" "cryptography>=42" \
-            torch --index-url https://download.pytorch.org/whl/cpu
+            "soundfile>=0.12" "cryptography>=42"
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
 
       - name: Run full test suite with JSON report
         working-directory: engine
