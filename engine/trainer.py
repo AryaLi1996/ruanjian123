@@ -132,6 +132,19 @@ def apply_lora(
     model.layer1 = cls(model.layer1, r, a)
     if mode == "professional":
         model.layer2 = cls(model.layer2, r, a)
+    else:
+        # Standard mode is LoRA-only on layer1 (see docstring: "layer1 only").
+        # LoRALinear freezes the *original* weights it wraps in its own
+        # __init__, but layer2 here is never wrapped at all — it's left as a
+        # plain nn.Linear, which defaults requires_grad=True. Without this,
+        # "standard" mode silently full-fine-tunes all 65,792 of layer2's
+        # parameters on top of layer1's ~2K LoRA params — nearly 8x MORE
+        # trainable parameters than "professional" mode (which LoRA-wraps
+        # both layers), exactly backwards from standard being the lighter,
+        # faster tier. Confirmed via model.parameters() inspection before
+        # this fix: standard=67,840 trainable vs professional=8,448.
+        for p in model.layer2.parameters():
+            p.requires_grad_(False)
 
     model.ph_scale.requires_grad_(mode == "professional")
     return model

@@ -1,15 +1,13 @@
 import { app, BrowserWindow, shell, ipcMain, dialog, crashReporter } from 'electron'
-import { join } from 'path'
+import { join, resolve, sep } from 'path'
 import { existsSync } from 'fs'
 import { promises as fs } from 'fs'
 import { callPythonEngine, callPythonEngineStreaming } from './python-bridge'
-import {
-  getModelKey, getModelKeyHex,
-  encryptModelFile, decryptModelFile,
-} from './model-crypto'
+import { encryptModelFile, decryptModelFile } from './model-crypto'
 import { setupAutoUpdater, downloadUpdate, quitAndInstall } from './auto-updater'
 import { SubscriptionMonitor } from './subscription-monitor'
-import { LICENSE_CONFIG } from './license-config'
+import { LICENSE_CONFIG, usingDefaultSigningSecret } from './license-config'
+import { loadModels, saveModels, type PersistedModel } from './model-registry'
 import log from 'electron-log'
 // Collect native crash dumps locally so a renderer/GPU crash leaves a trace.
 // Never let telemetry setup stop the app from starting.
@@ -69,9 +67,15 @@ function createWindow(): BrowserWindow {
     backgroundColor: '#0f1117',
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
-      sandbox:         false,
-      // Allow the bundled renderer scripts to execute inside the asar on Windows.
-      webSecurity:     app.isPackaged ? false : true,
+      // The preload script only touches contextBridge/ipcRenderer (no direct
+      // Node APIs), so the renderer can run fully sandboxed.
+      sandbox:          true,
+      // webSecurity disables CORS/same-origin enforcement — normally only
+      // acceptable in dev. It's relaxed here ONLY for packaged Windows builds,
+      // where type="module" script resolution from file:// can otherwise fail
+      // inside the asar. macOS/Linux packaged builds, and all dev builds,
+      // keep it on.
+      webSecurity:      !(app.isPackaged && process.platform === 'win32'),
       contextIsolation: true,
     },
   })
@@ -112,28 +116,48 @@ function createWindow(): BrowserWindow {
   return win
 }
 
-async function warmUpEngine(): Promise<void> {
-  const started = Date.now()
-  try {
-    const result = await callPythonEngine('test_inference', [], 5_000) as {
-      passed?: boolean
-      ep?: string
-      elapsed_ms?: number
-      degraded?: boolean
-    }
-    if (result.passed) {
-      log.info('[warmup] success', {
-        provider: result.ep ?? 'CPU',
-        inferenceMs: result.elapsed_ms ?? null,
-        totalMs: Date.now() - started,
-        degraded: result.degraded ?? false,
-      })
-      return
-    }
-    log.warn('[warmup] completed with degraded result', result)
-  } catch (error) {
-    log.warn('[warmup] unavailable; continuing with degraded local mode', error)
+interface WarmupResult {
+  passed:      boolean
+  ep?:         string
+  elapsedMs?:  number
+  degraded?:   boolean
+  error?:      string
+}
+
+// Cached so the main-process startup probe and the renderer's warm-up screen
+// (App.tsx) share one Python invocation instead of each spawning their own
+// test_inference process at launch. `app:warmup-result` below serves this
+// same promise to the renderer; `app:warmup-retry` clears it to force a
+// fresh run when the user clicks Retry.
+let warmupPromise: Promise<WarmupResult> | null = null
+
+function warmUpEngine(): Promise<WarmupResult> {
+  if (!warmupPromise) {
+    warmupPromise = (async () => {
+      const started = Date.now()
+      try {
+        const result = await callPythonEngine('test_inference', [], 5_000) as {
+          passed?: boolean
+          ep?: string
+          elapsed_ms?: number
+          degraded?: boolean
+        }
+        const out: WarmupResult = {
+          passed:    Boolean(result.passed),
+          ep:        result.ep,
+          elapsedMs: result.elapsed_ms ?? Date.now() - started,
+          degraded:  result.degraded ?? false,
+        }
+        if (out.passed) log.info('[warmup] success', out)
+        else             log.warn('[warmup] completed with degraded result', out)
+        return out
+      } catch (error) {
+        log.warn('[warmup] unavailable; continuing with degraded local mode', error)
+        return { passed: false, error: String(error) }
+      }
+    })()
   }
+  return warmupPromise
 }
 
 // Same "never let startup work block the window forever" pattern as the
@@ -161,6 +185,19 @@ async function initializeMonitorWithTimeout(ms: number): Promise<void> {
   }
 }
 
+// A packaged build still running with the source-shipped default secret
+// means anyone can read that string from this repo and forge a valid
+// license token offline. This should never be true for a real release —
+// surface it loudly instead of failing silently.
+if (app.isPackaged && usingDefaultSigningSecret) {
+  log.error(
+    '[license] SECURITY: LICENSE_SIGNING_SECRET is not set — this packaged ' +
+    'build is using the public template default from license-config.ts. ' +
+    'License tokens can be forged offline. Set LICENSE_SIGNING_SECRET (and ' +
+    'redeploy the serverless function with the same value) before shipping.',
+  )
+}
+
 app.whenReady().then(async () => {
   await initializeMonitorWithTimeout(3_000)   // load local license before showing window
 
@@ -171,6 +208,10 @@ app.whenReady().then(async () => {
   // Pass first-launch flag to renderer via IPC
   ipcMain.handle('app:is-first-launch', () => isFirstLaunch())
   ipcMain.handle('app:mark-initialized', () => markInitialized())
+
+  // Renderer's warm-up screen reuses this run instead of spawning its own.
+  ipcMain.handle('app:warmup-result', () => warmUpEngine())
+  ipcMain.handle('app:warmup-retry', () => { warmupPromise = null; return warmUpEngine() })
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
@@ -280,6 +321,24 @@ ipcMain.handle(
   },
 )
 
+// Let the user pick a save location for a cover export (Cover Creation →
+// Export panel). Unlike fs:save-recording above, the file itself is written
+// afterward by the Python engine's export_audio (it does the WAV/FLAC/OGG
+// encoding), so this only resolves the path — no bytes handled here.
+ipcMain.handle(
+  'fs:choose-export-path',
+  async (_event, defaultName: string, extension: string) => {
+    const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
+    const { canceled, filePath } = await dialog.showSaveDialog(win ?? undefined as never, {
+      title: 'Export Cover',
+      defaultPath: join(app.getPath('music') || app.getPath('documents'), defaultName),
+      filters: [{ name: `${extension.toUpperCase()} Audio`, extensions: [extension] }],
+    })
+    if (canceled || !filePath) return null
+    return filePath
+  },
+)
+
 // ── Model encryption IPC ──────────────────────────────────────────────────────
 
 ipcMain.handle('model:encrypt', async (_event, modelPath: string) => {
@@ -297,10 +356,27 @@ ipcMain.handle('model:decrypt-verify', async (_event, encPath: string) => {
   }
 })
 
-/** Return the machine-bound key as a hex string for passing to Python encrypt/decrypt. */
-ipcMain.handle('model:get-key-hex', async () => {
-  const key = await getModelKey()
-  return getModelKeyHex(key)
+// ── Trained-model library persistence ─────────────────────────────────────────
+// See model-registry.ts for why this exists: the renderer's model list was
+// in-memory only and lost on every restart.
+
+ipcMain.handle('models:load', () => loadModels())
+ipcMain.handle('models:save', (_event, models: PersistedModel[]) => saveModels(models))
+
+// Best-effort cleanup when a model card is deleted. Scoped to the engine's
+// own scratch directory so a compromised/buggy renderer can't use this to
+// delete arbitrary files elsewhere on disk — it silently no-ops for anything
+// outside it (e.g. a model file the user manually relocated).
+ipcMain.handle('fs:delete-in-data-dir', async (_event, filePath: string) => {
+  const dataDir  = join(app.getPath('userData'), 'engine-data')
+  const resolved = resolve(filePath)
+  if (resolved !== dataDir && !resolved.startsWith(dataDir + sep)) return false
+  try {
+    await fs.unlink(resolved)
+    return true
+  } catch {
+    return false
+  }
 })
 
 // ── Auto-updater IPC ──────────────────────────────────────────────────────────

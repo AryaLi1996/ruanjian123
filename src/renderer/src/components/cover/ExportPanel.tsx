@@ -20,6 +20,15 @@ export function ExportPanel({ renderMix, sampleRate = 44_100 }: Props): JSX.Elem
     if (!renderMix) return
     setExporting(true); setResult(null); setError(null)
     try {
+      // Ask where to save *before* rendering — every export used to land at
+      // the same fixed temp path (e.g. /tmp/cover_export.wav), so exporting
+      // a second cover silently overwrote the first with no warning and no
+      // way to choose a name or location.
+      const outputPath = await window.engine.chooseExportPath(
+        `cover_export_${Date.now()}.${format}`, format,
+      )
+      if (!outputPath) { setExporting(false); return }   // user cancelled
+
       const pcm  = await renderMix()
       const res  = await window.engine.call('export_audio', {
         audio:       Array.from(pcm),
@@ -27,7 +36,7 @@ export function ExportPanel({ renderMix, sampleRate = 44_100 }: Props): JSX.Elem
         channels:    2,
         format,
         bitrate,
-        output_path: `${window.navigator.userAgent.includes('Mac') ? '/tmp' : 'C:/Temp'}/cover_export.${format}`,
+        output_path: outputPath,
       }) as { output_path: string; size_bytes: number; duration_sec: number }
 
       setResult(

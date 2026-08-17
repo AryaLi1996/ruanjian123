@@ -15,10 +15,9 @@
 6. [Model Training](#6-model-training)
 7. [Cover Creation](#7-cover-creation)
 8. [Audio Tools — Batch Separation](#8-audio-tools--batch-separation)
-9. [Cloud Acceleration](#9-cloud-acceleration)
-10. [Settings & Security](#10-settings--security)
-11. [Troubleshooting](#11-troubleshooting)
-12. [Frequently Asked Questions](#12-frequently-asked-questions)
+9. [Settings & Security](#9-settings--security)
+10. [Troubleshooting](#10-troubleshooting)
+11. [Frequently Asked Questions](#11-frequently-asked-questions)
 
 ---
 
@@ -31,9 +30,8 @@
 | **Model Training** | Fine-tune an AI singer from your own dry vocal recordings (5–15 minutes of audio) |
 | **Cover Creation** | Make the AI sing a song in the target singer's style, aligned to a reference vocal |
 | **Audio Separation** | Split a mixed song into stems: vocals, lead, harmony, and accompaniment |
-| **Cloud Acceleration** | Offload GPU-heavy training to a serverless cloud backend when local hardware is weak |
 
-All AI processing runs **locally on your device** — your audio and models never leave your machine unless you explicitly choose Cloud Acceleration.
+All AI processing runs **locally on your device** — your audio and models never leave your machine. There is no cloud backend; training and inference always run on this computer's CPU or GPU.
 
 ---
 
@@ -104,7 +102,7 @@ The app automatically detects your GPU and acceleration framework:
 | `CoreML` | Apple Silicon GPU — all features run fast locally |
 | `CUDA` | NVIDIA GPU — fastest performance |
 | `DirectML` | Windows GPU (AMD/Intel/NVIDIA) — good performance |
-| `CPU` | No GPU detected — features work but training is slow; consider Cloud Acceleration |
+| `CPU` | No GPU detected — features work but training is slower |
 
 Click **Continue →** to proceed.
 
@@ -310,38 +308,7 @@ After processing:
 
 ---
 
-## 9. Cloud Acceleration
-
-### When to Use
-Cloud Acceleration is recommended when:
-- The app detects **CPU-only** hardware (no GPU)
-- You want **Professional mode training** in under 10 minutes
-- You are on a laptop with limited battery
-
-### How to Activate
-1. On the **Model Training** page, if CPU-only is detected, a blue **Cloud Acceleration** banner appears.
-2. Click the banner to expand it.
-3. Review the **cost estimate**:
-   - Standard mode: ~$0.07
-   - Professional mode: ~$3.60
-4. Check **"I accept the estimated cost"** and click **☁️ Start Cloud Training**.
-
-### What Happens
-1. **Encrypt**: Your audio is encrypted with AES-256-GCM on your device before leaving.
-2. **Upload**: Encrypted chunks upload to the cloud (progress shown).
-3. **Train**: The cloud GPU trains the model (status: Preprocessing → Training → Exporting).
-4. **Download**: The encrypted trained model is downloaded.
-5. **Decrypt**: The model is decrypted locally — the encryption key never leaves your device.
-6. **Done**: The model appears in Your Models list.
-
-### Privacy Guarantee
-- The encryption key is generated on your device and never transmitted to the server.
-- The cloud provider never has access to unencrypted audio or models.
-- Cloud job logs contain only hashed identifiers.
-
----
-
-## 10. Settings & Security
+## 9. Settings & Security
 
 ### License File Location
 | Platform | Path |
@@ -366,14 +333,14 @@ Ruanjian automatically checks for updates in the background. When an update is a
 You can continue using the app during the download. The update installs on the next restart.
 
 ### Data Privacy
-- **Audio files**: processed locally; never sent to any server unless you use Cloud Acceleration.
+- **Audio files**: processed entirely locally; never sent to any server.
 - **Models**: stored encrypted on your device.
 - **License token**: contains your user ID and expiry date only — no audio data.
 - **Telemetry**: none collected in this version.
 
 ---
 
-## 11. Troubleshooting
+## 10. Troubleshooting
 
 ### App Won't Start
 
@@ -472,8 +439,7 @@ You can continue using the app during the download. The update installs on the n
 
 **Solutions**:
 1. Check hardware detection — CPU-only mode is expected to be slower.
-2. Enable Cloud Acceleration for batch processing on CPU-only hardware.
-3. Use **Standard** separation mode (faster than Enhanced).
+2. Use **Standard** separation mode (faster than Enhanced).
 
 ---
 
@@ -488,13 +454,13 @@ You can safely delete the `training/` subdirectory after your models are trained
 
 ---
 
-## 12. Frequently Asked Questions
+## 11. Frequently Asked Questions
 
 **Q: Does Ruanjian work offline?**  
 A: Yes, after initial license activation. All AI processing is local. An internet connection is only needed to activate or renew your subscription.
 
 **Q: Can I run Ruanjian on a machine without a GPU?**  
-A: Yes. All features work in CPU mode. Training will take longer (20–360 min depending on mode). Use Cloud Acceleration for Professional training without a GPU.
+A: Yes. All features work in CPU mode. Training will take longer (20–360 min depending on mode) — there is no cloud training option, so a faster local GPU is the only way to speed this up.
 
 **Q: How long does training take with my Apple M1?**  
 A: The M1 uses CoreML acceleration. Standard training typically completes in 2–5 minutes; Professional in 20–45 minutes.
@@ -514,8 +480,8 @@ A: There is no hard limit. Each model is 200–600 KB encrypted. The app keeps a
 **Q: Can I use the app on multiple computers?**  
 A: Yes, one subscription activates one device at a time. To switch devices, deactivate the license on the old device first (Subscription page → Deactivate), then activate on the new one.
 
-**Q: Is my vocal data safe in the cloud during Cloud Acceleration?**  
-A: Your audio is AES-256-GCM encrypted on your device before any data is uploaded. The cloud server processes only ciphertext and never has access to your original audio. The decryption key never leaves your device.
+**Q: Is my vocal data ever sent anywhere?**  
+A: No. There is no cloud backend for training or inference — all AI processing happens on your device, and your audio never leaves it.
 
 **Q: What is the "RUANJIAN-DEMO-2026" key?**  
 A: It's a free trial key that creates a local 30-day license without requiring payment. It works without an internet connection and is intended for evaluation. It will stop working after the trial period.

@@ -24,6 +24,10 @@ contextBridge.exposeInMainWorld('engine', {
   saveRecording: (buffer: ArrayBuffer, defaultName: string): Promise<string | null> =>
     ipcRenderer.invoke('fs:save-recording', buffer, defaultName),
 
+  // Pick a save location for a cover export via a native dialog (Cover Creation → Export panel)
+  chooseExportPath: (defaultName: string, extension: string): Promise<string | null> =>
+    ipcRenderer.invoke('fs:choose-export-path', defaultName, extension),
+
   // Online lyrics search (Playback/Monitor page, lrclib.org)
   searchLyrics: (query: { track: string; artist?: string }): Promise<unknown[]> =>
     ipcRenderer.invoke('lyrics:search', query),
@@ -37,12 +41,23 @@ contextBridge.exposeInMainWorld('engine', {
     ipcRenderer.invoke('model:encrypt', modelPath),
   decryptVerify:    (encPath: string): Promise<{ decrypted: boolean; error?: string }> =>
     ipcRenderer.invoke('model:decrypt-verify', encPath),
-  getModelKeyHex:   (): Promise<string> =>
-    ipcRenderer.invoke('model:get-key-hex'),
+
+  // Trained-model library persistence (survives app restart)
+  loadModels: (): Promise<unknown[]> => ipcRenderer.invoke('models:load'),
+  saveModels: (models: unknown[]): Promise<void> => ipcRenderer.invoke('models:save', models),
+  // Best-effort delete, scoped to the engine's own data dir — see index.ts
+  deleteDataFile: (filePath: string): Promise<boolean> =>
+    ipcRenderer.invoke('fs:delete-in-data-dir', filePath),
 
   // First-launch detection
   isFirstLaunch:   (): Promise<boolean> => ipcRenderer.invoke('app:is-first-launch'),
   markInitialized: (): Promise<void>    => ipcRenderer.invoke('app:mark-initialized'),
+
+  // Engine warm-up (shared with main's own startup probe — see index.ts)
+  getWarmupResult: (): Promise<{ passed: boolean; ep?: string; elapsedMs?: number; degraded?: boolean; error?: string }> =>
+    ipcRenderer.invoke('app:warmup-result'),
+  retryWarmup: (): Promise<{ passed: boolean; ep?: string; elapsedMs?: number; degraded?: boolean; error?: string }> =>
+    ipcRenderer.invoke('app:warmup-retry'),
 
   // Auto-updater controls
   updaterDownload:    (): Promise<void> => ipcRenderer.invoke('updater:download'),

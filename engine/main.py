@@ -272,6 +272,7 @@ def train_model(args):
     Acceptance: standard ≤ 20 min CPU; professional ≤ 90 min CPU.
     Uses synthetic dataset when data_dir is empty or omitted.
     """
+    import re  # noqa: PLC0415
     from trainer import train as _train  # noqa: PLC0415
 
     params     = args[0] if args and isinstance(args[0], dict) else {}
@@ -281,8 +282,20 @@ def train_model(args):
     lr         = float(params.get("lr",    1e-4))
     data_dir   = Path(params.get("data_dir",
                                  str(_writable_dir() / "_test_data")))
+
+    # Callers (the Training view) pass a client-generated model_id so each
+    # trained model gets its own file. Without it, every "standard" run would
+    # land on the same model_standard.onnx and silently clobber the previous
+    # model — any UI card still pointing at that path would then load the
+    # wrong voice with no error. Sanitised since it flows from the untrusted
+    # IPC boundary into a filesystem path; falls back to the old fixed name
+    # for direct engine callers (CLI/tests) that don't pass one.
+    model_id   = params.get("model_id")
+    if model_id:
+        model_id = re.sub(r"[^A-Za-z0-9_-]", "", str(model_id))[:64]
+    suffix     = f"_{model_id}" if model_id else ""
     output     = Path(params.get("output",
-                                 str(_writable_dir() / f"model_{mode}.onnx")))
+                                 str(_writable_dir() / f"model_{mode}{suffix}.onnx")))
     data_dir.mkdir(parents=True, exist_ok=True)
     output.parent.mkdir(parents=True, exist_ok=True)
 

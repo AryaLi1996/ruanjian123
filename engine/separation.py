@@ -206,12 +206,16 @@ SeparationMode = Literal["standard", "enhanced"]
 
 
 class SeparationResult(TypedDict):
-    mode:         str
-    stems:        dict[str, str]   # stem_name → absolute file path
-    elapsed_sec:  float
-    sample_rate:  int
-    duration_sec: float
-    rt_ratio:     float            # elapsed / audio_duration
+    mode:            str
+    stems:           dict[str, str]   # stem_name → absolute file path
+    elapsed_sec:     float
+    model_load_sec:  float           # portion of elapsed_sec spent creating ONNX
+                                      # sessions — a one-time cost that does NOT
+                                      # scale with audio duration, unlike the rest
+                                      # of elapsed_sec. See _test_suite.py's T04/T05.
+    sample_rate:     int
+    duration_sec:    float
+    rt_ratio:        float            # elapsed / audio_duration
 
 
 def separate(
@@ -248,13 +252,25 @@ def separate(
     providers = ordered_providers_for_ep(device["provider"])
     engine    = Path(__file__).parent
 
+    # Session creation (ONNX Runtime provider negotiation + CoreML/etc. graph
+    # compilation) is a one-time cost, not something that scales with audio
+    # duration — a 4-minute song pays it exactly once, same as a 5-second
+    # clip. Tracked separately from elapsed_sec so callers that need to
+    # estimate throughput on a different clip length (e.g. the benchmark
+    # suite) can scale only the part that actually scales.
+    model_load_sec = 0.0
+
     def _session(filename: str, stub_fn) -> ort.InferenceSession:
+        nonlocal model_load_sec
         from paths import ensure_model  # noqa: PLC0415
         p = ensure_model(engine / filename, lambda dst: dst.write_bytes(stub_fn()))
         opts = ort.SessionOptions()
         opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
         opts.intra_op_num_threads = 4
-        return ort.InferenceSession(str(p), sess_options=opts, providers=providers)
+        ts0 = time.perf_counter()
+        sess = ort.InferenceSession(str(p), sess_options=opts, providers=providers)
+        model_load_sec += time.perf_counter() - ts0
+        return sess
 
     t0: float = time.perf_counter()
     stems: dict[str, np.ndarray] = {}
@@ -320,6 +336,7 @@ def separate(
         mode=mode,
         stems=stem_paths,
         elapsed_sec=round(elapsed, 3),
+        model_load_sec=round(model_load_sec, 3),
         sample_rate=SAMPLE_RATE,
         duration_sec=round(duration_sec, 3),
         rt_ratio=round(elapsed / duration_sec, 4) if duration_sec > 0 else 0.0,

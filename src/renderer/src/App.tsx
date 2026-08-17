@@ -3,8 +3,11 @@ import { Layout }          from './components/Layout'
 import { ErrorBoundary }   from './components/ErrorBoundary'
 import { OnboardingFlow, ONBOARDING_DISMISSED_KEY }  from './components/onboarding/OnboardingFlow'
 import { WarmupScreen }    from './components/onboarding/WarmupScreen'
+import { useModelLibrary } from './hooks/useModelLibrary'
 
 function App(): JSX.Element {
+  useModelLibrary()
+
   const [startup, setStartup] = useState<'warmup' | 'tutorial' | 'ready'>('warmup')
   const [warmupLoading, setWarmupLoading] = useState(true)
   const [warmupSuccess, setWarmupSuccess] = useState<boolean | null>(null)
@@ -12,25 +15,20 @@ function App(): JSX.Element {
 
   useEffect(() => {
     let active = true
-    const warmup = async () => {
-      try {
-        const result = await Promise.race([
-          window.engine.call('test_inference'),
-          new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Warm-up timed out')), 5_000)),
-        ]) as { passed?: boolean }
-        if (active) setWarmupSuccess(Boolean(result.passed))
-      } catch (error) {
-        if (active) {
-          setWarmupSuccess(false)
-          setWarmupError(String(error))
-        }
-      } finally {
-        // Wait for the user to click Continue/Skip rather than auto-advancing —
-        // otherwise the screen can flash and disappear before it's readable.
-        if (active) setWarmupLoading(false)
-      }
-    }
-    void warmup()
+    // Reuses the probe main/index.ts already ran at startup instead of
+    // spawning a second Python engine process for the same check; main's own
+    // 5s budget on the underlying call bounds this.
+    window.engine.getWarmupResult().then((result) => {
+      if (!active) return
+      setWarmupSuccess(result.passed)
+      if (!result.passed && result.error) setWarmupError(result.error)
+    }).catch((error) => {
+      if (active) { setWarmupSuccess(false); setWarmupError(String(error)) }
+    }).finally(() => {
+      // Wait for the user to click Continue/Skip rather than auto-advancing —
+      // otherwise the screen can flash and disappear before it's readable.
+      if (active) setWarmupLoading(false)
+    })
     return () => { active = false }
   }, [])
 
@@ -62,8 +60,9 @@ function App(): JSX.Element {
             setWarmupLoading(true)
             setWarmupError(null)
             setWarmupSuccess(null)
-            void window.engine.call('test_inference').then((result) => {
-              setWarmupSuccess(Boolean((result as { passed?: boolean }).passed))
+            void window.engine.retryWarmup().then((result) => {
+              setWarmupSuccess(result.passed)
+              if (!result.passed && result.error) setWarmupError(result.error)
             }).catch((error) => {
               setWarmupSuccess(false)
               setWarmupError(String(error))

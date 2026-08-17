@@ -92,11 +92,20 @@ export function callPythonEngine(method: string, args: unknown[], timeoutMs = 30
   })
 }
 
-/** Like callPythonEngine but calls onData for each JSON line during execution. */
+/**
+ * Like callPythonEngine but calls onData for each JSON line during execution.
+ *
+ * Unlike callPythonEngine, a single overall timeout doesn't fit here — a
+ * training run can legitimately take much longer than any fixed budget. So
+ * instead this uses a *stall* timeout: it resets every time the process
+ * produces any output (progress line or stderr chatter) and only fires when
+ * the engine goes completely silent, which means it's hung rather than busy.
+ */
 export function callPythonEngineStreaming(
   method: string,
   args: unknown[],
   onData: (data: unknown) => void,
+  stallTimeoutMs = 5 * 60_000,
 ): Promise<unknown> {
   return new Promise((resolve, reject) => {
     const payload    = JSON.stringify({ method, args })
@@ -109,8 +118,24 @@ export function callPythonEngineStreaming(
     let stderr   = ''
     let lastData: unknown = null
     let partial  = ''
+    let settled  = false
+
+    let stallTimer: ReturnType<typeof setTimeout>
+    const resetStallTimer = (): void => {
+      clearTimeout(stallTimer)
+      stallTimer = setTimeout(() => {
+        if (settled) return
+        settled = true
+        proc.kill()
+        reject(new Error(
+          `Python engine produced no output for ${stallTimeoutMs} ms and was killed (likely hung)`,
+        ))
+      }, stallTimeoutMs)
+    }
+    resetStallTimer()
 
     proc.stdout.on('data', (chunk: Buffer) => {
+      resetStallTimer()
       partial += chunk.toString()
       const lines = partial.split('\n')
       partial = lines.pop() ?? ''
@@ -124,9 +149,12 @@ export function callPythonEngineStreaming(
       }
     })
 
-    proc.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString() })
+    proc.stderr.on('data', (chunk: Buffer) => { resetStallTimer(); stderr += chunk.toString() })
 
     proc.on('close', (code) => {
+      if (settled) return
+      settled = true
+      clearTimeout(stallTimer)
       if (partial.trim()) {
         try { const d = JSON.parse(partial); lastData = d; onData(d) } catch { /* ignore */ }
       }
@@ -137,6 +165,11 @@ export function callPythonEngineStreaming(
       resolve(lastData)
     })
 
-    proc.on('error', reject)
+    proc.on('error', (error) => {
+      if (settled) return
+      settled = true
+      clearTimeout(stallTimer)
+      reject(error)
+    })
   })
 }

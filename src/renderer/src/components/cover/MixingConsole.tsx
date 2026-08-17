@@ -44,6 +44,7 @@ async function loadBuffer(ctx: BaseAudioContext, path: string): Promise<AudioBuf
 function buildGraph(
   ctx:     BaseAudioContext,
   buffers: AudioBuffer[],
+  tracks:  MixTrack[],
   settings: MixSettings,
 ): {
   gains:    GainNode[]
@@ -54,9 +55,16 @@ function buildGraph(
   eqMid:    BiquadFilterNode
   eqHigh:   BiquadFilterNode
 } {
+  // Looked up by tracks[i].key, not by position in settings.volumes — the
+  // two arrays only happen to agree on ordering by coincidence (volumes is
+  // seeded once from tracks on mount and JS objects iterate insertion
+  // order), and nothing enforces that stays true if tracks is ever
+  // reordered or filtered differently after mount. buffers[i] always
+  // corresponds to tracks[i] (both built by mapping over the same tracks
+  // array), so that's the correct join key.
   const gains   = buffers.map((_, i) => {
     const g = ctx.createGain()
-    g.gain.value = settings.volumes[Object.keys(settings.volumes)[i] ?? ''] ?? 0.8
+    g.gain.value = settings.volumes[tracks[i]?.key ?? ''] ?? 0.8
     return g
   })
 
@@ -110,7 +118,7 @@ export function MixingConsole({ tracks, onSettingsChange, onExportRequest }: Pro
       const bufs = await Promise.all(tracks.map((t) => loadBuffer(ctx, t.path)))
       if (!alive) { ctx.close(); return }
       buffersRef.current = bufs
-      graphRef.current   = buildGraph(ctx, bufs, settings)
+      graphRef.current   = buildGraph(ctx, bufs, tracks, settings)
       setLoading(false)
     }
     init()
@@ -157,7 +165,7 @@ export function MixingConsole({ tracks, onSettingsChange, onExportRequest }: Pro
     }
 
     // Rebuild graph each time to reset positions
-    graphRef.current = buildGraph(ctx, bufs, settings)
+    graphRef.current = buildGraph(ctx, bufs, tracks, settings)
     const g = graphRef.current
     const now = ctx.currentTime
     startRef.current = now
@@ -184,7 +192,7 @@ export function MixingConsole({ tracks, onSettingsChange, onExportRequest }: Pro
     const bufs = buffersRef.current
     const maxLen = Math.max(...bufs.map((b) => b.length))
     const offline = new OfflineAudioContext(2, maxLen, 44_100)
-    const g = buildGraph(offline, bufs, settings)
+    const g = buildGraph(offline, bufs, tracks, settings)
     bufs.forEach((buf, i) => {
       const src = offline.createBufferSource()
       src.buffer = buf

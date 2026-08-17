@@ -3,23 +3,27 @@ import { create } from 'zustand'
 export type ActiveView = 'training' | 'cover' | 'audio-tools' | 'playback' | 'subscription'
 
 export interface TrainedModel {
-  id:           string
-  name:         string
-  coverDataUrl: string | null
-  mode:         'standard' | 'professional'
-  trainedAt:    number
-  onnxPath:     string
-  demoAudioUrl: string | null   // object URL of a WAV blob
-  epochs:       number
-  bestLoss:     number
+  id:            string
+  name:          string
+  coverDataUrl:  string | null
+  mode:          'standard' | 'professional'
+  trainedAt:     number
+  onnxPath:      string
+  demoAudioUrl:  string | null   // object URL of a WAV blob — session-only, never persisted
+  demoAudioPath: string | null   // durable file path the blob URL above was created from; used to
+                                 // regenerate demoAudioUrl on demand after a restart
+  epochs:        number
+  bestLoss:      number
 }
 
 interface AppState {
-  activeView:    ActiveView
-  selectedModel: string | null
-  engineBusy:    boolean
-  engineStatus:  string
-  trainedModels: TrainedModel[]
+  activeView:      ActiveView
+  selectedModel:   string | null
+  engineBusy:      boolean
+  engineStatus:    string
+  trainedModels:   TrainedModel[]
+  modelsHydrated:  boolean   // true once the persisted library has been loaded — gates autosave
+                              // so an early empty render can't overwrite the saved file with []
 
   setActiveView:    (view: ActiveView) => void
   setSelectedModel: (path: string | null) => void
@@ -28,14 +32,16 @@ interface AppState {
   addModel:         (m: TrainedModel) => void
   removeModel:      (id: string) => void
   updateModelDemo:  (id: string, demoAudioUrl: string) => void
+  hydrateModels:    (models: TrainedModel[]) => void
 }
 
 export const useAppStore = create<AppState>((set) => ({
-  activeView:    'training',
-  selectedModel: null,
-  engineBusy:    false,
-  engineStatus:  'idle',
-  trainedModels: [],
+  activeView:     'training',
+  selectedModel:  null,
+  engineBusy:     false,
+  engineStatus:   'idle',
+  trainedModels:  [],
+  modelsHydrated: false,
 
   setActiveView:    (view)  => set({ activeView: view }),
   setSelectedModel: (path)  => set({ selectedModel: path }),
@@ -47,4 +53,5 @@ export const useAppStore = create<AppState>((set) => ({
     set((s) => ({
       trainedModels: s.trainedModels.map((m) => m.id === id ? { ...m, demoAudioUrl: url } : m),
     })),
+  hydrateModels:    (models) => set({ trainedModels: models, modelsHydrated: true }),
 }))

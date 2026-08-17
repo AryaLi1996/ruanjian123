@@ -81,8 +81,6 @@ ruanjian/
 │           │   ├── Layout.tsx        # Shell: Sidebar + SubscriptionGate + view router
 │           │   ├── Sidebar.tsx       # Navigation + update banner + engine status
 │           │   ├── SubscriptionGate.tsx  # Feature lock wrapper
-│           │   ├── cloud/
-│           │   │   └── CloudPanel.tsx    # Cloud acceleration UI + simulation
 │           │   ├── cover/
 │           │   │   ├── StepWizard.tsx
 │           │   │   ├── StemPlayer.tsx
@@ -97,8 +95,7 @@ ruanjian/
 │           │       ├── AudioPlayer.tsx
 │           │       └── ModelCard.tsx
 │           ├── hooks/
-│           │   ├── useEngine.ts          # IPC call wrapper with busy/status state
-│           │   └── useCloudAcceleration.ts  # Cloud training state machine
+│           │   └── useEngine.ts          # IPC call wrapper with busy/status state
 │           ├── store/
 │           │   ├── useAppStore.ts        # Active view, engine status, trained models
 │           │   └── useSubscriptionStore.ts  # License state (mirrors main process)
