@@ -320,6 +320,13 @@ export function PlaybackMonitorView(): JSX.Element {
     updateLyricIndex(playhead)
   }
 
+  function applySearchedLyrics(parsed: LyricLine[]): void {
+    if (!activeSong) return
+    patchSong(activeSong.id, (s) => ({ ...s, lyrics: parsed }))
+    lyricsRef.current = parsed
+    updateLyricIndex(playhead)
+  }
+
   async function loadCover(file: File): Promise<void> {
     if (!activeSong) return
     const ctx = ensurePlayCtx()
@@ -750,6 +757,8 @@ export function PlaybackMonitorView(): JSX.Element {
             onToggleCollapse={() => setLyricsCollapsed((c) => !c)}
             onSeek={seek}
             onImportFile={(file) => void importLyricsFile(file)}
+            onImportLyrics={(parsed) => applySearchedLyrics(parsed)}
+            songTitle={activeSong?.name ?? ''}
             onlineSearchAllowed={onlineSearchAllowed}
           />
         </aside>

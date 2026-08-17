@@ -1228,3 +1228,52 @@ html, body, #root {
 .pbm-lyrics.theme-light { background: #f4f5f8; color: #1a1d27; }
 .pbm-lyrics.theme-light .pbm-lyrics-line { color: #64748b; }
 .pbm-lyrics.theme-light .pbm-lyrics-line.active { color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+
+/* ── Lyrics online-search modal ──────────────────────────── */
+.pbm-lyrics-search-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(8, 10, 16, 0.74);
+}
+.pbm-lyrics-search-card {
+  width: min(480px, 100%);
+  max-height: min(560px, 90vh);
+  display: flex;
+  flex-direction: column;
+  padding: 18px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.45);
+}
+.pbm-lyrics-search-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+.pbm-lyrics-search-results {
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.pbm-lyrics-search-result {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+}
+.pbm-lyrics-search-result-info { min-width: 0; }
+.pbm-lyrics-search-result-title { font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pbm-lyrics-search-result-meta { font-size: 11px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pbm-lyrics-search-tag { color: var(--accent); }

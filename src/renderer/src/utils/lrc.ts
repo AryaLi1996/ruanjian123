@@ -56,7 +56,8 @@ function wrapPlainText(text: string): LyricLine[] {
   return text.split(/\r?\n/).filter((l) => l.trim()).map((t, i) => ({ time: i, text: t.trim() }))
 }
 
-function textFromLyricsBlob(raw: string): LyricLine[] {
+/** Parses LRC-tagged text if present, otherwise falls back to untimed sequential lines. */
+export function textFromLyricsBlob(raw: string): LyricLine[] {
   const parsed = parseLRC(raw)
   return parsed.length ? parsed : wrapPlainText(raw)
 }

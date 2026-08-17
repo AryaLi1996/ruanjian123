@@ -7,6 +7,16 @@ declare global {
       saveTrainingFiles: (files: Array<{ name: string; buffer: ArrayBuffer }>) => Promise<string>
       readFile:          (filePath: string) => Promise<ArrayBuffer>
       saveRecording:     (buffer: ArrayBuffer, defaultName: string) => Promise<string | null>
+      searchLyrics:      (query: { track: string; artist?: string }) => Promise<Array<{
+        id: number
+        trackName: string
+        artistName: string
+        albumName: string
+        duration: number | null
+        instrumental: boolean
+        syncedLyrics: string | null
+        plainLyrics: string | null
+      }>>
       logRendererError:  (payload: unknown) => Promise<void>
       encryptModel:      (modelPath: string) => Promise<{ encPath: string; sizeBytes: number }>
       decryptVerify:     (encPath: string) => Promise<{ decrypted: boolean; error?: string }>

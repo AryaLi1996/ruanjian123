@@ -216,6 +216,54 @@ ipcMain.handle('log:renderer-error', (_event, payload: unknown) => {
   log.error('[renderer] uncaught error', payload)
 })
 
+// Online lyrics search (Playback/Monitor page) — proxied through main so the
+// renderer's CSP (connect-src 'self') doesn't have to allow third-party hosts.
+interface LyricsSearchResult {
+  id:            number
+  trackName:     string
+  artistName:    string
+  albumName:     string
+  duration:      number | null
+  instrumental:  boolean
+  syncedLyrics:  string | null
+  plainLyrics:   string | null
+}
+
+ipcMain.handle(
+  'lyrics:search',
+  async (_event, query: { track: string; artist?: string }): Promise<LyricsSearchResult[]> => {
+    const track = (query?.track ?? '').trim()
+    if (!track) return []
+
+    const params = new URLSearchParams({ track_name: track })
+    if (query.artist?.trim()) params.set('artist_name', query.artist.trim())
+
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 10_000)
+    try {
+      const res = await fetch(`https://lrclib.org/api/search?${params.toString()}`, {
+        signal: controller.signal,
+        headers: { 'User-Agent': `Ruanjian/${app.getVersion()} (Playback-Monitor lyrics search)` },
+      })
+      if (!res.ok) throw new Error(`lrclib responded ${res.status}`)
+      const data = await res.json()
+      if (!Array.isArray(data)) return []
+      return data.slice(0, 20).map((r: Record<string, unknown>) => ({
+        id:           Number(r.id),
+        trackName:    String(r.trackName ?? ''),
+        artistName:   String(r.artistName ?? ''),
+        albumName:    String(r.albumName ?? ''),
+        duration:     typeof r.duration === 'number' ? r.duration : null,
+        instrumental: Boolean(r.instrumental),
+        syncedLyrics: typeof r.syncedLyrics === 'string' ? r.syncedLyrics : null,
+        plainLyrics:  typeof r.plainLyrics === 'string' ? r.plainLyrics : null,
+      }))
+    } finally {
+      clearTimeout(timeout)
+    }
+  },
+)
+
 // Save a recorded WAV clip to a user-selected location (Playback/Monitor page).
 ipcMain.handle(
   'fs:save-recording',
