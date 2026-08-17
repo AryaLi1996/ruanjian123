@@ -271,6 +271,62 @@ Set the returned URL in `src/main/license-config.ts`:
 verificationUrl: 'https://XXXX.lambda-url.us-east-1.on.aws/verify'
 ```
 
+#### Enabling real Stripe payment verification
+
+By default `PAYMENT_PROVIDER=custom` accepts any sufficiently long license key —
+fine for local dev, not a real payment check. To verify actual Stripe
+subscriptions:
+
+1. Redeploy (or `update-function-configuration`) with:
+   ```
+   PAYMENT_PROVIDER=stripe
+   STRIPE_API_KEY=sk_live_...
+   STRIPE_WEBHOOK_SECRET=whsec_...   # from the webhook you create in step 2
+   ```
+2. In the Stripe Dashboard → Developers → Webhooks, add an endpoint pointing
+   at `<your-function-url>/stripe-webhook`, listening for
+   `checkout.session.completed`. Copy its signing secret into
+   `STRIPE_WEBHOOK_SECRET` above.
+3. That's it — the same Lambda now handles both routes by path:
+   - `POST <function-url>/` (or `/verify`) → license verification, checks the
+     key against Stripe via the Search API
+   - `POST <function-url>/stripe-webhook` → on checkout completion, generates
+     a license key and writes it to the new subscription's `metadata.license_key`
+
+#### Emailing the license key to the customer
+
+The webhook above stores the key in Stripe; it doesn't tell the customer what
+it is. `_send_license_key_email()` in `handler.py` does that via SES, and is
+a no-op — not an error — until you configure it:
+
+1. In the SES console, [verify a sender identity](https://console.aws.amazon.com/ses/home#/verified-identities)
+   (a single email address is fine to start; verifying a whole domain scales
+   better). New AWS accounts start in the **SES sandbox**, which can only send
+   to *other verified addresses* — [request production access](https://console.aws.amazon.com/ses/home#/account)
+   before relying on this for real customers.
+2. Redeploy with `SES_SENDER_EMAIL=you@yourdomain.com` added to the
+   environment variables from the previous section. The Lambda's IAM role
+   (`serverless/verify-license/template.yaml`, if using SAM — see below) is
+   already scoped to allow `ses:SendEmail` **only** `From` that exact
+   address, so it doesn't need a separate policy update — the address you set
+   here is the identity the role trusts.
+3. Trigger a test checkout; check CloudWatch Logs for the `LicenseVerifier`
+   function if the email doesn't arrive — `_send_license_key_email()`
+   swallows SES errors (bad/unverified sender, sandbox restrictions, etc.) so
+   the webhook always still returns 200 and the key is never lost even if the
+   email fails, but nothing surfaces the failure reason outside the logs.
+
+If you'd rather not use SES, swap the body of `_send_license_key_email()` for
+another provider (Postmark, SendGrid, ...) — same shape as swapping payment
+providers in `_check_payment_provider()`.
+
+#### SAM deployment reference
+
+`serverless/verify-license/template.yaml` is the source of truth for every
+parameter/env var mentioned above (`PaymentProvider`, `StripeApiKey`,
+`StripeWebhookSecret`, `SesSenderEmail`, ...) if you deploy via
+`sam deploy` / §2.7 instead of raw `aws lambda` commands.
+
 ### 2.5 Deploy to Alibaba Cloud Function Compute
 
 ```bash
@@ -324,8 +380,8 @@ curl -s -X POST "$ENDPOINT" \
 
 The deployable template is [serverless/verify-license/template.yaml](serverless/verify-license/template.yaml). It creates:
 
-- `LicenseVerifier`: Python 3.11 ARM64 Lambda
-- `LicenseVerifierRole`: least-privilege role with CloudWatch Logs permissions only
+- `LicenseVerifier`: Python 3.11 ARM64 Lambda serving both `/` (license verification) and `/stripe-webhook`
+- `LicenseVerifierRole`: least-privilege role — CloudWatch Logs, plus `ses:SendEmail` conditioned to only the configured `SesSenderEmail`
 - A public Lambda Function URL for the verifier; this is the sole HTTP entry point
 - CORS support for `POST`; Lambda Function URLs handle preflight `OPTIONS` requests automatically
 
@@ -340,6 +396,11 @@ export AWS_REGION=us-east-1
 export LICENSE_SIGNING_SECRET="$(openssl rand -hex 32)"
 export PAYMENT_PROVIDER=custom
 export MOCK_MODE=false
+# To enable real Stripe verification + license-key email (see §2.4 above), also set:
+# export PAYMENT_PROVIDER=stripe
+# export STRIPE_API_KEY=sk_live_...
+# export STRIPE_WEBHOOK_SECRET=whsec_...
+# export SES_SENDER_EMAIL=you@yourdomain.com
 
 chmod +x scripts/deploy-license.sh
 scripts/deploy-license.sh

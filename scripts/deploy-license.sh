@@ -59,7 +59,11 @@ if ! sam deploy \
     "LicenseSigningSecret=$LICENSE_SIGNING_SECRET" \
     "PaymentProvider=${PAYMENT_PROVIDER:-custom}" \
     "MockMode=${MOCK_MODE:-false}" \
-    "ExpiryDays=${EXPIRY_DAYS:-30}"; then
+    "ExpiryDays=${EXPIRY_DAYS:-30}" \
+    "StripeApiKey=${STRIPE_API_KEY:-}" \
+    "StripeWebhookSecret=${STRIPE_WEBHOOK_SECRET:-}" \
+    "LemonApiKey=${LEMON_API_KEY:-}" \
+    "SesSenderEmail=${SES_SENDER_EMAIL:-}"; then
   echo "Deployment failed. Recent CloudFormation events:" >&2
   aws cloudformation describe-stack-events \
     --stack-name "$STACK_NAME" \

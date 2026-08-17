@@ -484,11 +484,18 @@ expired    → (refresh/reactivate) → active
 ```
 
 ### Serverless Function
-`serverless/verify-license/handler.py` handles POST requests:
+`serverless/verify-license/handler.py` serves two routes on one Function URL, dispatched by path:
 
+**`POST /`** — license verification  
 **Request**: `{ licenseKey: string, appVersion: string }`  
 **Response (success)**: `{ valid: true, token: string, expiresIn: number }`  
 **Response (failure)**: `{ valid: false, error: string }`
+
+**`POST /stripe-webhook`** — Stripe webhook (only relevant when `PAYMENT_PROVIDER=stripe`).
+On `checkout.session.completed`, generates a license key and writes it to the new
+subscription's `metadata.license_key`, which is what `/` looks up via Stripe's Search
+API. Requires `STRIPE_WEBHOOK_SECRET` (from Stripe Dashboard → Webhooks) — see
+[DEV_GUIDE.md](DEV_GUIDE.md#24-deploy-to-aws-lambda) for setup.
 
 To switch payment providers, update only the `_check_payment_provider()` function body.
 

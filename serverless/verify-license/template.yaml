@@ -20,10 +20,25 @@ Parameters:
     Type: String
     Default: ''
     NoEcho: true
+  StripeWebhookSecret:
+    Type: String
+    Default: ''
+    NoEcho: true
+    Description: >-
+      Stripe webhook signing secret ("whsec_...") from Dashboard → Developers → Webhooks.
+      Required to accept POST <FunctionUrl>/stripe-webhook (checkout.session.completed →
+      issues a license key onto the new subscription's metadata).
   LemonApiKey:
     Type: String
     Default: ''
     NoEcho: true
+  SesSenderEmail:
+    Type: String
+    Default: ''
+    Description: >-
+      Verified SES sender address used to email newly-issued license keys after
+      checkout. Leave blank to disable email delivery (the key still lands in
+      Stripe metadata either way — see _handle_checkout_completed in handler.py).
   MockMode:
     Type: String
     Default: 'false'
@@ -46,7 +61,9 @@ Globals:
         LICENSE_SIGNING_SECRET: !Ref LicenseSigningSecret
         PAYMENT_PROVIDER: !Ref PaymentProvider
         STRIPE_API_KEY: !Ref StripeApiKey
+        STRIPE_WEBHOOK_SECRET: !Ref StripeWebhookSecret
         LEMON_API_KEY: !Ref LemonApiKey
+        SES_SENDER_EMAIL: !Ref SesSenderEmail
         MOCK_MODE: !Ref MockMode
         EXPIRY_DAYS: !Ref ExpiryDays
 
@@ -73,6 +90,19 @@ Resources:
                   - logs:CreateLogStream
                   - logs:PutLogEvents
                 Resource: !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${AWS::StackName}-LicenseVerifier:*
+        - PolicyName: SendLicenseKeyEmail
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              # Scoped by condition, not just action, so the role can only send
+              # From the one address configured in SesSenderEmail — no-op (denied)
+              # while that parameter is left blank.
+              - Effect: Allow
+                Action: ses:SendEmail
+                Resource: '*'
+                Condition:
+                  StringEquals:
+                    ses:FromAddress: !Ref SesSenderEmail
 
   LicenseVerifier:
     Type: AWS::Serverless::Function
@@ -98,5 +128,9 @@ Outputs:
     Description: Least-privilege Lambda execution role ARN
     Value: !GetAtt LicenseVerifierRole.Arn
   LicenseVerifierUrl:
-    Description: Public HTTPS endpoint for POST /verify
+    Description: >-
+      Public HTTPS endpoint. POST here directly for license verification;
+      POST <this-url>/stripe-webhook for the Stripe webhook listener
+      (set as the endpoint URL in the Stripe Dashboard, listening for
+      checkout.session.completed).
     Value: !GetAtt LicenseVerifierUrl.FunctionUrl
