@@ -63,6 +63,20 @@ if [ "$IS_WINDOWS" = 1 ]; then
   ENGINE_EXE_NAME="ruanjian-engine.exe"
 fi
 
+# `shasum` (a Perl script) ships with macOS and most Linux distros, but not
+# with Git for Windows' bash — that only has `sha256sum` (GNU coreutils).
+# Both print "<hash>  <filename>" (or "<hash>  -" reading stdin) and are used
+# identically below; an array (not a shell function) is needed since these
+# get spliced into `find -exec ... \;`, which needs a literal command.
+if command -v shasum >/dev/null 2>&1; then
+  SHA_CMD=(shasum -a 256)
+elif command -v sha256sum >/dev/null 2>&1; then
+  SHA_CMD=(sha256sum)
+else
+  echo "[package-engine] Neither shasum nor sha256sum found on PATH." >&2
+  exit 1
+fi
+
 # Skip the (multi-minute) PyInstaller rebuild when nothing the bundle depends
 # on has actually changed since the last successful build. Pass --force (or
 # set FORCE_ENGINE_REBUILD=1) to bypass this and rebuild unconditionally.
@@ -72,7 +86,7 @@ FORCE_REBUILD="${FORCE_ENGINE_REBUILD:-0}"
 if [ "$FORCE_REBUILD" != 1 ] && [ -x "$DIST_DIR/$ENGINE_EXE_NAME" ] && [ -f "$STAMP" ]; then
   CURRENT_HASH="$(
     find "$ENGINE_DIR" \( -name '*.py' -o -name '*.onnx' -o -name 'requirements.txt' \) -type f \
-      -exec shasum -a 256 {} \; | sort | shasum -a 256 | awk '{print $1}'
+      -exec "${SHA_CMD[@]}" {} \; | sort | "${SHA_CMD[@]}" | awk '{print $1}'
   )"
   if [ "$CURRENT_HASH" = "$(cat "$STAMP")" ]; then
     echo "[package-engine] No changes in engine/ since last build — skipping PyInstaller (use --force to override)."
@@ -223,7 +237,7 @@ done
   --log-level     WARN
 
 find "$ENGINE_DIR" \( -name '*.py' -o -name '*.onnx' -o -name 'requirements.txt' \) -type f \
-  -exec shasum -a 256 {} \; | sort | shasum -a 256 | awk '{print $1}' > "$STAMP"
+  -exec "${SHA_CMD[@]}" {} \; | sort | "${SHA_CMD[@]}" | awk '{print $1}' > "$STAMP"
 
 SIZE=$(du -sh "$DIST_DIR" | cut -f1)
 echo "[package-engine] Done. Bundle: $DIST_DIR/$ENGINE_EXE_NAME ($SIZE)"
