@@ -47,4 +47,9 @@ jobs:
           name: ruanjian-windows-portable
           path: dist/*.exe
           retention-days: 14
-# retrigger workflow indexing 1786967595
+          # Default is "warn" — a step whose glob matches nothing still
+          # reports success, which is exactly what silently happened on the
+          # first run of this workflow (the engine bundle came out broken
+          # upstream, electron-builder produced no .exe, and this step
+          # cheerfully "succeeded" with an empty artifact). Fail loud instead.
+          if-no-files-found: error

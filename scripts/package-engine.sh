@@ -203,6 +203,21 @@ if [ -n "$ENGINE_ARCH" ]; then
   "${PY[@]}" -m pip install --quiet --only-binary=:all: -c "$CONSTRAINTS_FILE" -r "$ENGINE_DIR/requirements.txt" \
     pyinstaller "$TORCH_PIN" "$CRYPTOGRAPHY_PIN" "$ONNXRUNTIME_PIN" "$SETUPTOOLS_PIN"
   rm -f "$CONSTRAINTS_FILE"
+else
+  # Windows/Linux/plain single-arch macOS path. No cross-arch file-tree
+  # matching to worry about here (that's what the pinning above exists for),
+  # so just install whatever requirements.txt resolves to. This was
+  # previously missing entirely on this branch — the engine's actual
+  # dependencies (torch, numpy, onnxruntime, cryptography, soundfile) were
+  # never installed, so PyInstaller had nothing to bundle: it silently
+  # produced a ~20MB stub instead of erroring, since --hidden-import on an
+  # absent package is a warning, not a hard failure. --only-binary=:all:
+  # for the same reason as the arch-pinned path: fail fast on a missing
+  # wheel instead of quietly attempting (and likely failing) a from-source
+  # build with no guaranteed compiler toolchain in the environment.
+  echo "[package-engine] Installing engine dependencies..."
+  "${PY[@]}" -m pip install --quiet --upgrade pip
+  "${PY[@]}" -m pip install --quiet --only-binary=:all: -r "$ENGINE_DIR/requirements.txt"
 fi
 
 echo "[package-engine] Checking PyInstaller..."
