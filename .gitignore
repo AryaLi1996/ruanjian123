@@ -6,6 +6,8 @@ __pycache__/
 .env
 engine/.venv/
 engine/venv/
+.build-venv-engine-arm64/
+.build-venv-engine-x64/
 
 # Project exclude paths
 /src/preload/index.d.ts
