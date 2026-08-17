@@ -47,3 +47,4 @@ jobs:
           name: ruanjian-windows-portable
           path: dist/*.exe
           retention-days: 14
+# retrigger workflow indexing 1786967595
