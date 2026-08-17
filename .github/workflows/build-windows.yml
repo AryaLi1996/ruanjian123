@@ -48,12 +48,19 @@ jobs:
       # — a known class of npx-on-Windows path-resolution flakiness.
       # Bypass npx and the node_modules/.bin shim entirely by invoking
       # electron-builder's actual CLI entry point with `node` directly.
+      #
+      # --publish never: electron-builder.js has a `publish: [{ provider:
+      # github, ... }]` block (for the real auto-updater), so even a plain
+      # build tries to prep GitHub-release/update-feed metadata unless told
+      # not to — the actual portable .exe built fine here, but that prep
+      # step then failed the whole run on a missing GH_TOKEN. This workflow
+      # only needs the built artifact, not a publish attempt.
       - name: Package Windows portable .exe
         shell: bash
         env:
           DEBUG: electron-builder
         run: |
-          node node_modules/electron-builder/out/cli/cli.js --win portable --x64
+          node node_modules/electron-builder/out/cli/cli.js --win portable --x64 --publish never
           echo "--- dist/ contents after packaging ---"
           find dist -maxdepth 2 2>&1 || echo "(dist/ does not exist)"
 
