@@ -9,5 +9,13 @@ engine/venv/
 .build-venv-engine-arm64/
 .build-venv-engine-x64/
 
+# Prebuilt PyInstaller engine bundles. GitHub hard-rejects individual blobs
+# over 100MB (torch/lib/libtorch_cpu.dylib alone is 150-430MB depending on
+# arch) — building these locally via scripts/package-engine.sh, or via CI
+# (.github/workflows/build-windows.yml), is the only viable path.
+resources/engine-dist/
+resources/engine-dist-arm64/
+resources/engine-dist-x64/
+
 # Project exclude paths
 /src/preload/index.d.ts
