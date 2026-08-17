@@ -1,3 +1,23 @@
+export interface PersistedModel {
+  id:            string
+  name:          string
+  coverDataUrl:  string | null
+  mode:          'standard' | 'professional'
+  trainedAt:     number
+  onnxPath:      string
+  demoAudioPath: string | null
+  epochs:        number
+  bestLoss:      number
+}
+
+interface WarmupResult {
+  passed:     boolean
+  ep?:        string
+  elapsedMs?: number
+  degraded?:  boolean
+  error?:     string
+}
+
 declare global {
   interface Window {
     engine: {
@@ -7,6 +27,7 @@ declare global {
       saveTrainingFiles: (files: Array<{ name: string; buffer: ArrayBuffer }>) => Promise<string>
       readFile:          (filePath: string) => Promise<ArrayBuffer>
       saveRecording:     (buffer: ArrayBuffer, defaultName: string) => Promise<string | null>
+      chooseExportPath:  (defaultName: string, extension: string) => Promise<string | null>
       searchLyrics:      (query: { track: string; artist?: string }) => Promise<Array<{
         id: number
         trackName: string
@@ -20,9 +41,13 @@ declare global {
       logRendererError:  (payload: unknown) => Promise<void>
       encryptModel:      (modelPath: string) => Promise<{ encPath: string; sizeBytes: number }>
       decryptVerify:     (encPath: string) => Promise<{ decrypted: boolean; error?: string }>
-      getModelKeyHex:    () => Promise<string>
+      loadModels:        () => Promise<PersistedModel[]>
+      saveModels:        (models: PersistedModel[]) => Promise<void>
+      deleteDataFile:    (filePath: string) => Promise<boolean>
       isFirstLaunch:     () => Promise<boolean>
       markInitialized:   () => Promise<void>
+      getWarmupResult:   () => Promise<WarmupResult>
+      retryWarmup:       () => Promise<WarmupResult>
       updaterDownload:    () => Promise<void>
       updaterQuitInstall: () => Promise<void>
       onUpdaterEvent:    (cb: (event: string, data: unknown) => void) => () => void

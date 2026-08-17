@@ -29,7 +29,10 @@ export function OnboardingFlow({ onClose }: Props): JSX.Element {
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  })
+    // close() isn't memoized, so depend on the values it actually closes
+    // over instead of re-subscribing this listener on every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dontShowAgain, onClose])
 
   const steps = [
     { icon: '🎤', title: t('onboarding.welcome'), description: t('onboarding.welcomeDesc') },

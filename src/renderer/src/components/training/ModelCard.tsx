@@ -42,8 +42,8 @@ export function ModelCard({ model, onDelete, onRetrain, onPlay }: Props): JSX.El
           className="btn btn-primary"
           style={{ flex: 1, fontSize: 12, padding: '6px 0' }}
           onClick={onPlay}
-          disabled={!model.demoAudioUrl}
-          title={model.demoAudioUrl ? t('training.play') : t('training.noDemo')}
+          disabled={!model.demoAudioUrl && !model.demoAudioPath}
+          title={model.demoAudioUrl || model.demoAudioPath ? t('training.play') : t('training.noDemo')}
         >
           ▶ Demo
         </button>

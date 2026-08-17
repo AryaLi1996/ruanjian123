@@ -6,7 +6,6 @@ import { ModeSelector, type TrainingMode } from '../components/training/ModeSele
 import { TrainingProgress, type ProgressData } from '../components/training/TrainingProgress'
 import { AudioPlayer } from '../components/training/AudioPlayer'
 import { ModelCard } from '../components/training/ModelCard'
-import { CloudPanel } from '../components/cloud/CloudPanel'
 
 type Phase = 'idle' | 'training' | 'finalizing' | 'done'
 
@@ -33,8 +32,9 @@ export function TrainingView(): JSX.Element {
   const [mode,        setMode]        = useState<TrainingMode>('standard')
   const [epochs,      setEpochs]      = useState(10)
 
-  // ── Cloud acceleration ───────────────────────────────────
-  // Detect if local hardware is CPU-only; show cloud banner if so
+  // ── Hardware detection ────────────────────────────────────
+  // Detect if local hardware is CPU-only so we can warn that training (which
+  // always runs locally — there is no cloud backend) will be slower.
   const [deviceEp, setDeviceEp] = useState<string | null>(null)
   useEffect(() => {
     window.engine.call('detect_device')
@@ -54,7 +54,6 @@ export function TrainingView(): JSX.Element {
   const [playingModelId, setPlayingModelId] = useState<string | null>(null)
 
   const trainedModels  = useAppStore((s) => s.trainedModels)
-  const setSelectedModel = useAppStore((s) => s.setSelectedModel)
   const addModel       = useAppStore((s) => s.addModel)
   const removeModel    = useAppStore((s) => s.removeModel)
   const updateModelDemo = useAppStore((s) => s.updateModelDemo)
@@ -87,7 +86,7 @@ export function TrainingView(): JSX.Element {
   }
 
   // ── generate demo audio from newly trained model ─────────
-  const generateDemo = useCallback(async (onnxPath: string): Promise<string | null> => {
+  const generateDemo = useCallback(async (onnxPath: string): Promise<{ path: string; url: string } | null> => {
     try {
       // The engine writes a WAV and returns its path — sending raw PCM over IPC
       // serialises tens of thousands of numbers and can take down the renderer.
@@ -100,7 +99,8 @@ export function TrainingView(): JSX.Element {
       }) as { audio_path?: string }
       if (!res.audio_path) return null
       const buf = await window.engine.readFile(res.audio_path)
-      return URL.createObjectURL(new Blob([buf], { type: 'audio/wav' }))
+      const url = URL.createObjectURL(new Blob([buf], { type: 'audio/wav' }))
+      return { path: res.audio_path, url }
     } catch {
       return null
     }
@@ -118,9 +118,16 @@ export function TrainingView(): JSX.Element {
     setEngineBusy(true)
     setEngineStatus(t('status.training', { mode: t(`training.${mode}`) }))
 
+    // Generated up front (not after training) and passed through as model_id
+    // so the engine writes this run's weights to a file of its own — without
+    // it, every "standard" (or "professional") run lands on the same fixed
+    // model_<mode>.onnx and silently overwrites whatever the last one wrote,
+    // while older model cards in the library keep pointing at that same path.
+    const id = crypto.randomUUID()
+
     try {
       const res = await window.engine.stream('train_model', {
-        mode, epochs, batch: 16,
+        mode, epochs, batch: 16, model_id: id,
       }) as TrainingResult
 
       // Leave the training view before doing post-processing so the progress
@@ -130,19 +137,19 @@ export function TrainingView(): JSX.Element {
       setResult(res)
 
       const demo = await generateDemo(res.output_path)
-      setDemoUrl(demo)
+      setDemoUrl(demo?.url ?? null)
 
-      const id = crypto.randomUUID()
       addModel({
         id,
-        name:         modelName.trim() || `Model ${id.slice(0, 6)}`,
-        coverDataUrl: coverUrl,
+        name:          modelName.trim() || `Model ${id.slice(0, 6)}`,
+        coverDataUrl:  coverUrl,
         mode,
-        trainedAt:    Date.now(),
-        onnxPath:     res.output_path,
-        demoAudioUrl: demo,
-        epochs:       res.epochs,
-        bestLoss:     res.best_loss,
+        trainedAt:     Date.now(),
+        onnxPath:      res.output_path,
+        demoAudioUrl:  demo?.url ?? null,
+        demoAudioPath: demo?.path ?? null,
+        epochs:        res.epochs,
+        bestLoss:      res.best_loss,
       })
 
       setPhase('done')
@@ -153,6 +160,38 @@ export function TrainingView(): JSX.Element {
       setEngineBusy(false)
       setEngineStatus(t('status.idle'))
     }
+  }
+
+  // ── play a model's demo audio ─────────────────────────────
+  // After a restart demoAudioUrl is null (blob URLs don't survive reload —
+  // see useModelLibrary), but demoAudioPath is durable. Regenerate the blob
+  // URL lazily, only when the user actually presses Play.
+  async function handlePlay(m: typeof trainedModels[0]): Promise<void> {
+    if (playingModelId === m.id) { setPlayingModelId(null); return }
+    if (!m.demoAudioUrl && m.demoAudioPath) {
+      try {
+        const buf = await window.engine.readFile(m.demoAudioPath)
+        const url = URL.createObjectURL(new Blob([buf], { type: 'audio/wav' }))
+        updateModelDemo(m.id, url)
+      } catch {
+        // Demo file may have been moved/deleted outside the app; ModelCard's
+        // disabled state already reflects demoAudioPath being unusable next render.
+      }
+    }
+    setPlayingModelId(m.id)
+  }
+
+  // ── delete a model card ───────────────────────────────────
+  function handleDelete(m: typeof trainedModels[0]): void {
+    if (playingModelId === m.id) setPlayingModelId(null)
+    if (m.demoAudioUrl) URL.revokeObjectURL(m.demoAudioUrl)
+    removeModel(m.id)
+    // Best-effort; scoped server-side to the app's own data dir, so this is a
+    // no-op (not an error) for anything outside it. Each model now has its
+    // own onnxPath/demoAudioPath (see engine/main.py's model_id), so this
+    // can't delete a file another model card still relies on.
+    void window.engine.deleteDataFile(m.onnxPath)
+    if (m.demoAudioPath) void window.engine.deleteDataFile(m.demoAudioPath)
   }
 
   // ── retrain from a model card ─────────────────────────────
@@ -249,30 +288,14 @@ export function TrainingView(): JSX.Element {
 
           {error && <div className="error-banner">{error}</div>}
 
-          {/* Cloud acceleration — shown when local hardware is CPU-only */}
+          {/* All training runs locally — there is no cloud backend. This is
+              just a heads-up so a CPU-only user isn't surprised by the time,
+              which the mode cards above already spell out (cpuTime). */}
           {deviceEp === 'CPU' && phase === 'idle' && (
-            <CloudPanel
-              mode={mode}
-              epochs={epochs}
-              audioFiles={audioFiles}
-              localModelPath={`engine/model_${mode}.onnx`}
-              onModelReady={(path) => {
-                setSelectedModel(path)
-                // Surface the cloud-trained model into the Zustand store
-                const id = crypto.randomUUID()
-                addModel({
-                  id,
-                  name:         `${modelName.trim() || 'Cloud'} (cloud)`,
-                  coverDataUrl: coverUrl,
-                  mode,
-                  trainedAt:    Date.now(),
-                  onnxPath:     path,
-                  demoAudioUrl: null,
-                  epochs,
-                  bestLoss:     0,
-                })
-              }}
-            />
+            <div className="cpu-notice">
+              ⚠ No GPU detected — training will run on this machine's CPU and take
+              noticeably longer (see the estimated times above).
+            </div>
           )}
 
           <button className="btn btn-primary" style={{ width: '100%', padding: 12 }} onClick={handleTrain}>
@@ -329,9 +352,9 @@ export function TrainingView(): JSX.Element {
               <div key={m.id}>
                 <ModelCard
                   model={m}
-                  onDelete={() => removeModel(m.id)}
+                  onDelete={() => handleDelete(m)}
                   onRetrain={() => handleRetrain(m)}
-                  onPlay={() => setPlayingModelId(playingModelId === m.id ? null : m.id)}
+                  onPlay={() => void handlePlay(m)}
                 />
                 {playingModelId === m.id && m.demoAudioUrl && (
                   <div style={{ marginTop: 8 }}>

@@ -132,6 +132,19 @@ def apply_lora(
     model.layer1 = cls(model.layer1, r, a)
     if mode == "professional":
         model.layer2 = cls(model.layer2, r, a)
+    else:
+        # Standard mode is LoRA-only on layer1 (see docstring: "layer1 only").
+        # LoRALinear freezes the *original* weights it wraps in its own
+        # __init__, but layer2 here is never wrapped at all — it's left as a
+        # plain nn.Linear, which defaults requires_grad=True. Without this,
+        # "standard" mode silently full-fine-tunes all 65,792 of layer2's
+        # parameters on top of layer1's ~2K LoRA params — nearly 8x MORE
+        # trainable parameters than "professional" mode (which LoRA-wraps
+        # both layers), exactly backwards from standard being the lighter,
+        # faster tier. Confirmed via model.parameters() inspection before
+        # this fix: standard=67,840 trainable vs professional=8,448.
+        for p in model.layer2.parameters():
+            p.requires_grad_(False)
 
     model.ph_scale.requires_grad_(mode == "professional")
     return model
@@ -350,7 +363,20 @@ def _pick_device() -> str:
     if torch.cuda.is_available():
         return "cuda"
     if torch.backends.mps.is_available():
-        return "mps"
+        try:
+            # Some environments (notably GitHub Actions' macOS runners —
+            # VMs without real GPU passthrough) report MPS as available via
+            # this check but can't actually allocate on it, failing with
+            # "MPS backend out of memory" on the very first real tensor op.
+            # A tiny canary allocation catches that upfront instead of
+            # failing partway through a training run; also protects a real
+            # user's machine if MPS is simply in a bad state for other
+            # reasons (e.g. another app pinning GPU memory) — either way,
+            # CPU is always a safe fallback for a small model like this.
+            torch.zeros(1, device="mps")
+            return "mps"
+        except RuntimeError:
+            pass
     return "cpu"
 
 

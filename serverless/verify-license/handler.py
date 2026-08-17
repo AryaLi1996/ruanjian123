@@ -38,15 +38,32 @@ import hmac
 import json
 import os
 import re
+import sys
 import time
 from typing import Any
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 
-SIGNING_SECRET  = os.environ.get("LICENSE_SIGNING_SECRET", "ruanjian-dev-signing-secret-v1-change-in-production")
+_DEFAULT_SIGNING_SECRET = "ruanjian-dev-signing-secret-v1-change-in-production"
+
+SIGNING_SECRET  = os.environ.get("LICENSE_SIGNING_SECRET", _DEFAULT_SIGNING_SECRET)
 MOCK_MODE       = os.environ.get("MOCK_MODE", "false").lower() == "true"
 PROVIDER        = os.environ.get("PAYMENT_PROVIDER", "custom")
 EXPIRY_DAYS     = int(os.environ.get("EXPIRY_DAYS", "30"))
+
+# This string is public (it ships in the Electron app's source at
+# src/main/license-config.ts), so a real deployment still using it means
+# anyone can forge a valid license token offline. MOCK_MODE is exempt since
+# it's explicitly CI/demo-only and doesn't gate real payments.
+if SIGNING_SECRET == _DEFAULT_SIGNING_SECRET and not MOCK_MODE:
+    print(
+        "SECURITY WARNING: LICENSE_SIGNING_SECRET is not set — this function "
+        "is signing tokens with the public template default from handler.py. "
+        "License tokens can be forged offline. Set LICENSE_SIGNING_SECRET to "
+        "a private value (and update the Electron app's LICENSE_SIGNING_SECRET "
+        "to match) before accepting real payments.",
+        file=sys.stderr,
+    )
 ALLOWED_FEATURES = ["training", "synthesis", "separation", "cover"]
 
 

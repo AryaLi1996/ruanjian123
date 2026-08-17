@@ -95,6 +95,13 @@ function UnlicensedScreen(): JSX.Element {
 
 function ExpiredScreen(): JSX.Element {
   const { t } = useTranslation()
+  const [checkoutReady, setCheckoutReady] = useState(false)
+  useEffect(() => {
+    window.engine.getLicenseConfig()
+      .then(({ checkoutUrl }) => setCheckoutReady(Boolean(checkoutUrl)))
+      .catch(() => setCheckoutReady(false))
+  }, [])
+
   return (
     <div className="lock-screen">
       <div className="lock-card">
@@ -104,8 +111,9 @@ function ExpiredScreen(): JSX.Element {
         <button
           className="btn btn-primary lock-btn"
           onClick={openCheckout}
+          disabled={!checkoutReady}
         >
-          {t('subscription.renew')}
+          {checkoutReady ? t('subscription.renew') : t('common.paymentUnavailable')}
         </button>
         <p className="lock-hint">
           {t('subscription.haveKey')}

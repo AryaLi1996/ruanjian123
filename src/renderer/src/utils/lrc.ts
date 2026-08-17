@@ -74,6 +74,27 @@ function decodeId3Text(bytes: Uint8Array, encoding: number): string {
   return new TextDecoder(encoding === 3 ? 'utf-8' : 'latin1').decode(bytes)
 }
 
+/**
+ * Finds the end of a NUL-terminated ID3 string starting at `start`.
+ * UTF-16 encodings (1: UTF-16 w/ BOM, 2: UTF-16BE) terminate with a 2-byte
+ * NUL (0x00 0x00) — a lone 0x00 is routinely just one half of a valid
+ * UTF-16 code unit (every other byte of any BMP character whose code point
+ * is < 256, which includes all of ASCII), so scanning for a single zero
+ * byte finds a false terminator mid-character and misaligns everything
+ * decoded after it by one byte, corrupting the rest of the string.
+ * Returns the offset of the terminator's first byte (== end if none found).
+ */
+function id3StringEnd(bytes: Uint8Array, start: number, end: number, encoding: number): number {
+  const isUtf16 = encoding === 1 || encoding === 2
+  let p = start
+  if (isUtf16) {
+    while (p + 1 < end && !(bytes[p] === 0 && bytes[p + 1] === 0)) p += 2
+  } else {
+    while (p < end && bytes[p] !== 0) p++
+  }
+  return p
+}
+
 /** Extracts lyrics from ID3v2 USLT (unsynced) or SYLT (synced) frames. */
 function extractID3Lyrics(buf: ArrayBuffer): LyricLine[] | null {
   const dv = new DataView(buf)
@@ -93,28 +114,28 @@ function extractID3Lyrics(buf: ArrayBuffer): LyricLine[] | null {
     if (frameSize <= 0 || frameStart + frameSize > end) break
 
     if (frameId === 'USLT') {
-      const encoding = bytes[frameStart]
-      let p = frameStart + 4   // encoding(1) + language(3)
-      while (p < frameStart + frameSize && bytes[p] !== 0) p++   // skip content descriptor
-      const textStart = p + 1
+      const encoding  = bytes[frameStart]
+      const descStart = frameStart + 4   // encoding(1) + language(3)
+      const descEnd   = id3StringEnd(bytes, descStart, frameStart + frameSize, encoding)
+      const textStart = descEnd + (encoding === 1 || encoding === 2 ? 2 : 1)
       const text = decodeId3Text(bytes.slice(textStart, frameStart + frameSize), encoding)
       if (text.trim()) return textFromLyricsBlob(text)
     }
 
     if (frameId === 'SYLT') {
-      const encoding = bytes[frameStart]
-      let p = frameStart + 5   // encoding(1) + language(3) + timestampFormat(1)
-      p += 1                   // contentType(1)
-      while (p < frameStart + frameSize && bytes[p] !== 0) p++   // skip content descriptor
-      p += 1
+      const encoding  = bytes[frameStart]
+      const termLen   = encoding === 1 || encoding === 2 ? 2 : 1
+      const descStart = frameStart + 5 + 1   // encoding(1) + language(3) + timestampFormat(1) + contentType(1)
+      const descEnd   = id3StringEnd(bytes, descStart, frameStart + frameSize, encoding)
+      let p = descEnd + termLen
       const lines: LyricLine[] = []
       while (p < frameStart + frameSize) {
-        const textEnd = bytes.indexOf(0, p)
-        if (textEnd === -1 || textEnd + 4 > frameStart + frameSize) break
+        const textEnd = id3StringEnd(bytes, p, frameStart + frameSize, encoding)
+        if (textEnd + termLen + 4 > frameStart + frameSize) break
         const text = decodeId3Text(bytes.slice(p, textEnd), encoding)
-        const timestampMs = dv.getUint32(textEnd + 1)
+        const timestampMs = dv.getUint32(textEnd + termLen)
         lines.push({ time: timestampMs / 1000, text })
-        p = textEnd + 5
+        p = textEnd + termLen + 4
       }
       if (lines.length) return lines.sort((a, b) => a.time - b.time)
     }

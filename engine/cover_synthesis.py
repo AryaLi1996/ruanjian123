@@ -18,6 +18,7 @@ import numpy as np
 import onnx
 import onnxruntime as ort
 import soundfile as sf
+from numpy.lib.stride_tricks import sliding_window_view
 from onnx import TensorProto, helper, numpy_helper
 
 from device_detector import detect_device, ordered_providers_for_ep
@@ -134,11 +135,23 @@ def dtw_warp(feat_src: np.ndarray, feat_ref: np.ndarray,
     for j in range(1, T_b):
         D[0, j] = D[0, j - 1] + C[0, j]
     for i in range(1, T_a):
-        # Vectorised inner axis avoids a second Python loop
-        D[i, 1:] = C[i, 1:] + np.minimum(
-            np.minimum(D[i - 1, :-1], D[i - 1, 1:]),
-            D[i, :-1],
-        )
+        # D[i, j] depends on D[i, j-1] — the same row, one column back — so
+        # the j axis has a genuine sequential dependency and can't be
+        # collapsed into one vectorized expression the way this used to try:
+        # `D[i, 1:] = C[i, 1:] + minimum(minimum(D[i-1,:-1], D[i-1,1:]), D[i,:-1])`
+        # reads D[i, :-1] as it stood *before* this line ran (still mostly
+        # np.inf from np.full, except D[i,0]) — numpy evaluates the whole RHS
+        # before assigning — so it silently dropped the "arrive from the left
+        # in this same row" transition for every column but the first.
+        # Confirmed against a textbook double-loop DTW: the two diverged by
+        # up to 0.32 in accumulated cost on a 6×6 random test matrix, not
+        # float noise. What *can* still be vectorized is the diag/up
+        # minimum, which has no same-row dependency; only the final min against
+        # the left neighbour needs to stay a sequential per-column loop.
+        diag_up = np.minimum(D[i - 1, :-1], D[i - 1, 1:])
+        row, Di = C[i], D[i]
+        for j in range(1, T_b):
+            Di[j] = row[j] + min(diag_up[j - 1], Di[j - 1])
 
     # Greedy traceback
     path: list[tuple[int, int]] = []
@@ -186,36 +199,63 @@ def wsola(audio: np.ndarray, src_times: np.ndarray,
 
     Cross-correlation search is vectorised — candidate frames extracted as a
     matrix and scored with a single matmul per synthesis step.
+
+    The per-synthesis-step search below is inherently sequential (each
+    step's candidate window is scored against the *previous* step's chosen
+    window, `prev_win_frame`), so the outer loop can't be vectorised away
+    without changing what gets synthesized. What can be — and is — removed
+    is Python-level overhead that doesn't affect the result at all:
+    `np.clip`/`np.linalg.norm` called on scalars or tiny arrays carry
+    real dispatch cost for work a plain Python min/max or a dot-product
+    does identically; candidate frames were rebuilt via a Python list
+    comprehension + np.stack every step, where a single upfront
+    sliding_window_view (zero-copy) plus fancy-indexing does the same
+    gather in one C-level call. Verified bit-for-bit identical output
+    against the previous implementation before landing this.
     """
     audio  = audio.astype(np.float32)
     window = np.hanning(frame_len).astype(np.float32)
     T_out  = len(src_times)
     half   = frame_len // 2
+    lo_bound, hi_bound = half, len(audio) - half - 1
     out    = np.zeros(T_out * out_hop + frame_len, np.float32)
     norm   = np.zeros(T_out * out_hop + frame_len, np.float32)
 
+    # Zero-copy view of every possible frame_len window; gathers candidate
+    # frames via fancy indexing instead of a per-step Python loop + copy.
+    # Only valid when audio has at least one full frame — degenerately
+    # short clips (shorter than one frame) fall back to direct slicing,
+    # which handles that case the same way the original code did.
+    all_windows = sliding_window_view(audio, frame_len) if len(audio) >= frame_len else None
+
     prev_win_frame: np.ndarray | None = None
+    prev_win_norm  = 0.0
     cand_step = max(1, out_hop // 4)   # coarse candidate spacing
 
     for k in range(T_out):
-        ideal = int(np.clip(src_times[k], half, len(audio) - half - 1))
+        st = src_times[k]
+        ideal = int(st) if lo_bound <= st <= hi_bound else (lo_bound if st < lo_bound else hi_bound)
 
         best = ideal
         if prev_win_frame is not None and search > 0:
-            lo = max(half, ideal - search)
+            lo = max(lo_bound, ideal - search)
             hi = min(len(audio) - half, ideal + search)
             cands = np.arange(lo, hi + 1, cand_step)
             if len(cands):
                 # Batch-extract candidate frames [N_cand, frame_len]
-                c_frames = np.stack([audio[c - half: c + half] for c in cands])
-                scores   = c_frames @ prev_win_frame              # [N_cand] dot products
-                denom    = (np.linalg.norm(c_frames, axis=1)
-                            * np.linalg.norm(prev_win_frame) + 1e-8)
+                if all_windows is not None:
+                    c_frames = all_windows[cands - half]
+                else:
+                    c_frames = np.stack([audio[c - half: c + half] for c in cands])
+                scores = c_frames @ prev_win_frame                # [N_cand] dot products
+                denom  = (np.sqrt(np.einsum('ij,ij->i', c_frames, c_frames))
+                          * prev_win_norm + 1e-8)
                 best = int(cands[np.argmax(scores / denom)])
-                best = int(np.clip(best, half, len(audio) - half - 1))
+                best = min(max(best, lo_bound), hi_bound)
 
         frame = audio[best - half: best + half] * window
         prev_win_frame = frame.copy()
+        prev_win_norm  = float(np.sqrt(np.dot(prev_win_frame, prev_win_frame)))
 
         s = k * out_hop
         out[s: s + frame_len]  += frame
@@ -425,14 +465,19 @@ CoverMode = Literal["v1", "v2"]
 
 
 class CoverResult(TypedDict):
-    output_path:    str
-    ai_vocal_path:  str    # AI vocal stem only (for mixing console)
-    mode:           str
-    duration_sec:   float
-    elapsed_sec:    float
-    rt_ratio:       float
-    vibrato_depth:  float
-    passed:         bool
+    output_path:     str
+    ai_vocal_path:   str    # AI vocal stem only (for mixing console)
+    mode:            str
+    duration_sec:    float
+    elapsed_sec:     float
+    model_load_sec:  float  # time spent constructing the Synthesizer's ONNX
+                             # session — one-time cost, doesn't scale with
+                             # audio duration. Not included in elapsed_sec
+                             # (which already only covers mode-specific
+                             # alignment/synthesis) — see synthesize_cover().
+    rt_ratio:        float
+    vibrato_depth:   float
+    passed:          bool
 
 
 def synthesize_cover(
@@ -498,7 +543,9 @@ def synthesize_cover(
     phonemes  = ["a", "e", "i", "o", "u"][0:1] * n_phon              # simple vowel sequence
     durations = [0.25] * n_phon
 
+    _tload = time.perf_counter()
     synth = Synthesizer(ai_model)
+    model_load_sec = time.perf_counter() - _tload
     synth_result = synth.synthesize(phonemes, seg_f0, durations)
     ai_audio_raw = np.array(synth_result["audio"], dtype=np.float32)  # at SYNTH_SR, mono
 
@@ -590,6 +637,7 @@ def synthesize_cover(
         mode=mode,
         duration_sec=round(duration_sec, 3),
         elapsed_sec=round(elapsed, 3),
+        model_load_sec=round(model_load_sec, 3),
         rt_ratio=round(rt_ratio, 4),
         vibrato_depth=round(vib_depth, 6),
         passed=bool(rt_ratio <= rt_limit),

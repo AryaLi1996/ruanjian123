@@ -723,143 +723,17 @@ html, body, #root {
 .qi-remove:hover:not(:disabled) { color: var(--danger); }
 .qi-remove:disabled { opacity: 0.25; cursor: default; }
 
-/* ── Cloud acceleration panel ────────────────────────────── */
-
-/* Collapsed teaser banner */
-.cloud-teaser {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  background: color-mix(in srgb, #6366f1 8%, var(--bg-panel));
-  border: 1px solid color-mix(in srgb, #6366f1 30%, var(--border));
-  border-radius: var(--radius);
-  padding: 14px 16px;
-  cursor: pointer;
-  margin-bottom: 16px;
-  transition: background 0.15s;
-}
-.cloud-teaser:hover            { background: color-mix(in srgb, #6366f1 14%, var(--bg-panel)); }
-.cloud-teaser-icon             { font-size: 22px; flex-shrink: 0; }
-.cloud-teaser-title            { font-weight: 600; font-size: 14px; }
-.cloud-teaser-sub              { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
-.cloud-teaser-arrow            { margin-left: auto; color: var(--text-muted); font-size: 18px; }
-
-/* Expanded panel */
-.cloud-panel {
-  background: var(--bg-panel);
-  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border));
-  border-radius: var(--radius);
-  padding: 20px;
-  margin-bottom: 20px;
-}
-
-.cloud-panel-header {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin-bottom: 16px;
-}
-.cloud-panel-title { font-weight: 700; font-size: 15px; }
-.cloud-panel-sub   { font-size: 11px; color: var(--text-muted); }
-
-/* Cost estimate card */
-.cost-card {
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 16px;
-}
-.cost-row {
-  display: flex;
-  justify-content: space-between;
-  font-size: 13px;
-  color: var(--text-muted);
-  margin-bottom: 6px;
-}
-.cost-row strong { color: var(--text); }
-.cost-total      { border-top: 1px solid var(--border); padding-top: 8px; margin-top: 8px; font-weight: 600; }
-.cost-amount     { color: var(--accent); font-size: 15px; }
-
-.cost-disclaimer {
-  font-size: 11px;
-  color: var(--text-muted);
-  margin: 12px 0 8px;
-  line-height: 1.5;
-}
-
-.cost-confirm-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 13px;
-  cursor: pointer;
-  user-select: none;
-}
-
-/* Progress section */
-.cloud-progress-section { margin-top: 4px; }
-
-.cloud-status-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 8px;
-}
-.cloud-badge { font-size: 12px; font-weight: 600; }
-.cloud-badge.phase-queued,
-.cloud-badge.phase-preprocessing { color: var(--text-muted); }
-.cloud-badge.phase-training       { color: var(--accent); }
-.cloud-badge.phase-exporting      { color: #f59e0b; }
-.cloud-badge.phase-downloading,
-.cloud-badge.phase-decrypting     { color: #22d3ee; }
-.cloud-badge.phase-done           { color: var(--success); }
-
-.cloud-elapsed {
+/* ── CPU-only training notice ────────────────────────────── */
+.cpu-notice {
   font-size: 12px;
+  line-height: 1.5;
   color: var(--text-muted);
-  font-variant-numeric: tabular-nums;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  margin-bottom: 16px;
 }
-
-.cloud-sub-progress {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 11px;
-  color: var(--text-muted);
-  margin: 6px 0;
-}
-.mini-track {
-  flex: 1;
-  height: 4px;
-  background: var(--bg-hover);
-  border-radius: 2px;
-  overflow: hidden;
-}
-.mini-fill {
-  height: 100%;
-  background: var(--accent);
-  border-radius: 2px;
-  transition: width 0.3s;
-}
-
-.cloud-task-id {
-  font-size: 10px;
-  color: var(--text-muted);
-  font-family: monospace;
-  margin-top: 6px;
-}
-
-/* Result */
-.cloud-result {
-  background: color-mix(in srgb, var(--success) 10%, transparent);
-  border: 1px solid color-mix(in srgb, var(--success) 30%, transparent);
-  border-radius: 6px;
-  padding: 14px 16px;
-  margin-top: 12px;
-}
-.cloud-result-title { font-weight: 600; color: var(--success); margin-bottom: 4px; }
-.cloud-result-sub   { font-size: 12px; color: var(--text); }
-.cloud-result-note  { font-size: 11px; color: var(--text-muted); margin-top: 8px; line-height: 1.5; }
 
 /* ── Subscription view ───────────────────────────────────── */
 .sub-status-grid { display: flex; flex-direction: column; gap: 8px; }

@@ -6,6 +6,12 @@
  *
  * Supported providers: 'stripe' | 'lemonsqueezy' | 'paddle' | 'custom'
  */
+// Ships in source control as a template default — never a real secret. Must
+// match the fallback in serverless/verify-license/handler.py's SIGNING_SECRET.
+// Anyone can read this string, so a packaged build still running with it
+// active can have its license tokens forged offline; see the warning below.
+const DEFAULT_SIGNING_SECRET = 'ruanjian-dev-signing-secret-v1-change-in-production'
+
 export const LICENSE_CONFIG = {
   // ── Serverless verification endpoint ───────────────────────────────────────
   // Replace with your actual deployed URL.
@@ -16,8 +22,7 @@ export const LICENSE_CONFIG = {
   // ── HMAC signing secret (shared with serverless function) ──────────────────
   // In production: use RSA – server signs with private key, app verifies with
   // public key embedded here.  For HMAC (this template): rotate via app update.
-  signingSecret: process.env['LICENSE_SIGNING_SECRET'] ??
-    'ruanjian-dev-signing-secret-v1-change-in-production',
+  signingSecret: process.env['LICENSE_SIGNING_SECRET'] ?? DEFAULT_SIGNING_SECRET,
 
   // ── Payment checkout URL ────────────────────────────────────────────────────
   checkoutUrl: process.env['CHECKOUT_URL'] ?? '',
@@ -35,3 +40,6 @@ export const LICENSE_CONFIG = {
   // hitting the server — safe for automated tests and first-launch demos.
   demoKey: 'RUANJIAN-DEMO-2026',
 } as const
+
+/** True when no LICENSE_SIGNING_SECRET override was supplied — see the warning this drives in index.ts. */
+export const usingDefaultSigningSecret = LICENSE_CONFIG.signingSecret === DEFAULT_SIGNING_SECRET

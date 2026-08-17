@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { getAudioInfo, formatDuration } from '../../utils/audio'
 
 interface AudioFileEntry {
+  id:          string
   file:        File
   duration:    number | null
   waveformUrl: string | null
@@ -32,7 +33,7 @@ export function AudioDropzone({ onFilesChange }: Props): JSX.Element {
 
     // Add placeholder entries immediately so the UI feels responsive
     const placeholders: AudioFileEntry[] = valid.map((f) => ({
-      file: f, duration: null, waveformUrl: null, loading: true,
+      id: crypto.randomUUID(), file: f, duration: null, waveformUrl: null, loading: true,
     }))
 
     setEntries((prev) => {
@@ -41,15 +42,15 @@ export function AudioDropzone({ onFilesChange }: Props): JSX.Element {
       return next
     })
 
-    // Load waveform + duration asynchronously per file
-    for (let i = 0; i < valid.length; i++) {
-      const info = await getAudioInfo(valid[i])
-      setEntries((prev) => {
-        const next = [...prev]
-        const idx  = prev.length - valid.length + i
-        if (next[idx]) next[idx] = { ...next[idx], ...info, loading: false }
-        return next
-      })
+    // Load waveform + duration asynchronously per file, writing each result
+    // back by stable id — not position — so a second drop or a removal that
+    // lands while these are still resolving can't attach the wrong file's
+    // waveform/duration to this entry.
+    for (const placeholder of placeholders) {
+      const info = await getAudioInfo(placeholder.file)
+      setEntries((prev) => prev.map((e) =>
+        e.id === placeholder.id ? { ...e, ...info, loading: false } : e
+      ))
     }
   }, [onFilesChange])
 
@@ -58,9 +59,9 @@ export function AudioDropzone({ onFilesChange }: Props): JSX.Element {
     addFiles(Array.from(e.dataTransfer.files))
   }
 
-  function handleRemove(idx: number): void {
+  function handleRemove(id: string): void {
     setEntries((prev) => {
-      const next = prev.filter((_, i) => i !== idx)
+      const next = prev.filter((e) => e.id !== id)
       onFilesChange(next.map((e) => e.file))
       return next
     })
@@ -111,8 +112,8 @@ export function AudioDropzone({ onFilesChange }: Props): JSX.Element {
           </div>
 
           <div className="audio-file-list">
-            {entries.map((entry, idx) => (
-              <div key={idx} className="audio-file-item">
+            {entries.map((entry) => (
+              <div key={entry.id} className="audio-file-item">
                 <div className="audio-file-meta">
                   <span className="audio-file-name">{entry.file.name}</span>
                   <span className="audio-file-dur">
@@ -120,7 +121,7 @@ export function AudioDropzone({ onFilesChange }: Props): JSX.Element {
                   </span>
                   <button
                     className="audio-file-remove"
-                    onClick={(e) => { e.stopPropagation(); handleRemove(idx) }}
+                    onClick={(e) => { e.stopPropagation(); handleRemove(entry.id) }}
                     aria-label={t('training.removeFile')}
                   >
                     ×

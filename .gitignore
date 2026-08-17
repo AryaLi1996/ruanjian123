@@ -19,3 +19,7 @@ resources/engine-dist-x64/
 
 # Project exclude paths
 /src/preload/index.d.ts
+tmp-test-audio/
+
+# macOS Finder noise
+.DS_Store

@@ -8,11 +8,15 @@ from pathlib import Path
 
 # ── Test 1: Watermark round-trip ──────────────────────────
 print("=== Test 1: Watermark round-trip ===")
-from watermark import Watermarker, THRESHOLD
+from watermark import Watermarker, THRESHOLD, _CALIBRATION_CLIP_SEC
 
 uid, ts = "user_42", int(time.time())
 wm      = Watermarker(Path(__file__).parent / "watermark_embed.onnx")
-audio   = np.sin(2 * 3.14159 * 440 * np.arange(22050) / 22050).astype("float32")
+# A couple of seconds isn't enough audio for a ≥40 dB-SNR spread-spectrum
+# watermark to accumulate a confident signal — see watermark.py's module
+# docstring / _calibrate(). Match the clip length EPSILON/THRESHOLD assume.
+_sr = 22050
+audio = np.sin(2 * 3.14159 * 440 * np.arange(int(_CALIBRATION_CLIP_SEC * _sr)) / _sr).astype("float32")
 
 marked  = wm.embed(audio, uid, ts)
 snr_db  = 20 * float(np.log10(
