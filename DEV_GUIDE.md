@@ -1,4 +1,4 @@
-# Ruanjian — Testing & Developer Operations Guide
+# SootheVoice — Testing & Developer Operations Guide
 
 > Exact commands for running locally, testing every layer, deploying the serverless function, and producing signed installers.
 
@@ -600,8 +600,8 @@ npm run build:unpack
 Output:
 ```
 dist/
-├── mac-universal/Ruanjian.app     (unpacked, --dir mode)
-└── Ruanjian-0.1.0-mac.dmg        (full build)
+├── mac-universal/SootheVoice.app     (unpacked, --dir mode)
+└── SootheVoice-0.1.0-mac.dmg        (full build)
 ```
 
 ### 4.2 Full Production Build (includes Python bundle)
@@ -638,7 +638,7 @@ npm run build:mac-x64
 Each command runs `electron-vite build` before `electron-builder`. Do not run
 `npx electron-builder` by itself unless `out/main/index.js` already exists.
 
-Output: `dist/Ruanjian-0.1.0-mac-universal.dmg` (~120 MB)
+Output: `dist/SootheVoice-0.1.0-mac-universal.dmg` (~120 MB)
 
 ### 4.4 Building Only for Windows (EXE)
 
@@ -657,7 +657,7 @@ npx electron-vite build
 
 # Build portable exe (works on macOS / Linux / Windows)
 npm run build:win-portable
-# output: dist/Ruanjian-0.1.0-win-x64.exe
+# output: dist/SootheVoice-0.1.0-win-x64.exe
 ```
 
 #### Option B — NSIS Installer (must build on Windows or with Wine)
@@ -670,7 +670,7 @@ when run on Windows.
 # On a real Windows machine (PowerShell)
 npx electron-vite build
 npm run build:win-nsis
-# output: dist/Ruanjian-0.1.0-win-x64-setup.exe
+# output: dist/SootheVoice-0.1.0-win-x64-setup.exe
 
 # From macOS — install Wine first, then build
 brew install --cask wine-stable
@@ -711,8 +711,8 @@ npx electron-builder --linux AppImage deb --x64
 
 Output:
 ```
-dist/Ruanjian-0.1.0-linux-x86_64.AppImage
-dist/Ruanjian-0.1.0-linux-amd64.deb
+dist/SootheVoice-0.1.0-linux-x86_64.AppImage
+dist/SootheVoice-0.1.0-linux-amd64.deb
 ```
 
 ### 4.6 Setting Up Code Signing
@@ -744,13 +744,13 @@ npx electron-builder --win nsis --x64
 #### Verify the Signed Build
 ```bash
 # macOS
-spctl --assess --verbose dist/mac-universal/Ruanjian.app
+spctl --assess --verbose dist/mac-universal/SootheVoice.app
 
 # macOS DMG
-spctl --assess --verbose dist/Ruanjian-0.1.0-mac-universal.dmg
+spctl --assess --verbose dist/SootheVoice-0.1.0-mac-universal.dmg
 
 # Windows (run in PowerShell)
-Get-AuthenticodeSignature "dist\Ruanjian-0.1.0-win-x64-setup.exe" | Select-Object Status
+Get-AuthenticodeSignature "dist\SootheVoice-0.1.0-win-x64-setup.exe" | Select-Object Status
 ```
 
 ### 4.7 Auto-Update Artifacts
@@ -772,11 +772,11 @@ git push origin v0.1.0
 
 # Or upload manually via GitHub CLI
 gh release create v0.1.0 \
-  dist/Ruanjian-0.1.0-mac-universal.dmg \
-  dist/Ruanjian-0.1.0-win-x64-setup.exe \
+  dist/SootheVoice-0.1.0-mac-universal.dmg \
+  dist/SootheVoice-0.1.0-win-x64-setup.exe \
   dist/latest-mac.yml \
   dist/latest.yml \
-  --title "Ruanjian v0.1.0" \
+  --title "SootheVoice v0.1.0" \
   --notes "Initial release"
 ```
 
@@ -823,8 +823,8 @@ git tag v0.2.0
 bash scripts/build.sh
 
 # 5. Test the installer locally
-open dist/Ruanjian-0.2.0-mac-universal.dmg   # macOS
-# or: dist/Ruanjian-0.2.0-win-x64-setup.exe  # Windows
+open dist/SootheVoice-0.2.0-mac-universal.dmg   # macOS
+# or: dist/SootheVoice-0.2.0-win-x64-setup.exe  # Windows
 
 # 6. Publish release
 git push origin main --tags
@@ -989,16 +989,16 @@ grep -c "disableHardwareAcceleration\|swiftshader" out/main/index.js
 # Must be > 0
 
 # 2. Check the Electron log inside the VM
-# Windows: %AppData%\Ruanjian\logs\main.log
+# Windows: %AppData%\ruanjian\logs\main.log
 # Look for: "GPU process" or "crashed" lines
 
 # 3. Run from the command line to see stderr
-"C:\Program Files\Ruanjian\Ruanjian.exe" 2>&1 | more
+"C:\Program Files\SootheVoice\SootheVoice.exe" 2>&1 | more
 # Look for: "DXGI", "d3d", "swiftshader" messages
 
 # 4. Force software rendering via env var as a last resort
 set LIBGL_ALWAYS_SOFTWARE=1
-"C:\Program Files\Ruanjian\Ruanjian.exe"
+"C:\Program Files\SootheVoice\SootheVoice.exe"
 ```
 
 **VM-specific notes:**

@@ -1,4 +1,4 @@
-import { type ReactNode } from 'react'
+import { type ReactNode, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useSubscriptionStore } from '../store/useSubscriptionStore'
 import { useAppStore } from '../store/useAppStore'
@@ -7,10 +7,13 @@ interface Props { children: ReactNode }
 
 /**
  * Wraps all gated content.
- * - active / grace_period: renders children (with optional warning banner)
- * - expired / invalid:     shows the full lock screen
- * - unlicensed:            shows the subscribe-to-unlock screen
- * - loading:               shows nothing (brief flash, main process is fast)
+ * - active / grace_period:        renders children (with optional warning banner)
+ * - trial active (Ticket 33):     renders children with a dismissible trial banner
+ * - expired / invalid, no trial:  shows the full lock screen
+ * - unlicensed, trial expired:    shows the trial-expired lock screen
+ * - unlicensed, no trial yet:     shows the subscribe-to-unlock screen (trial
+ *                                 activation failed or hasn't resolved — rare)
+ * - loading:                      shows nothing (brief flash, main process is fast)
  *
  * All CTAs here route to the Subscription page rather than opening a
  * checkout URL directly — that page hosts the full plan + payment method
@@ -18,17 +21,19 @@ interface Props { children: ReactNode }
  */
 export function SubscriptionGate({ children }: Props): JSX.Element {
   const { t } = useTranslation()
-  const { status, graceDaysLeft, expiresAt } = useSubscriptionStore()
+  const { status, graceDaysLeft, expiresAt, trial } = useSubscriptionStore()
   const setActiveView = useAppStore((s) => s.setActiveView)
   const goToSubscription = (): void => setActiveView('subscription')
 
   if (status === 'loading') return <></>
 
-  if (status === 'expired' || status === 'invalid') {
-    return <ExpiredScreen onGoToSubscription={goToSubscription} />
+  const licensed = status === 'active' || status === 'grace_period'
+
+  if (!licensed && (status === 'expired' || status === 'invalid' || trial.expired)) {
+    return <ExpiredScreen onGoToSubscription={goToSubscription} trialExpired={!licensed && trial.expired} />
   }
 
-  if (status === 'unlicensed') {
+  if (!licensed && status === 'unlicensed' && !trial.active) {
     return <UnlicensedScreen onGoToSubscription={goToSubscription} />
   }
 
@@ -46,8 +51,44 @@ export function SubscriptionGate({ children }: Props): JSX.Element {
           </button>
         </div>
       )}
+      {!licensed && trial.active && (
+        <TrialBanner daysRemaining={trial.daysRemaining} hoursRemaining={trial.hoursRemaining} onSubscribe={goToSubscription} />
+      )}
       {children}
     </>
+  )
+}
+
+function TrialBanner({
+  daysRemaining, hoursRemaining, onSubscribe,
+}: { daysRemaining: number; hoursRemaining: number; onSubscribe: () => void }): JSX.Element | null {
+  const { t } = useTranslation()
+  // Component-local, not persisted: resets every app session/restart so the
+  // countdown reliably reappears instead of being silenced forever after
+  // one dismissal.
+  const [dismissed, setDismissed] = useState(false)
+  if (dismissed) return null
+
+  const label = daysRemaining >= 1
+    ? t('trial.banner.remaining', { days: daysRemaining })
+    : t('trial.banner.remainingHours', { hours: hoursRemaining })
+
+  return (
+    <div className="trial-banner" role="status">
+      <span>⏳ {label}</span>
+      <div className="trial-banner-actions">
+        <button className="btn btn-primary trial-banner-btn" onClick={onSubscribe}>
+          {t('trial.banner.subscribe')}
+        </button>
+        <button
+          className="trial-banner-dismiss"
+          aria-label={t('common.cancel')}
+          onClick={() => setDismissed(true)}
+        >
+          ✕
+        </button>
+      </div>
+    </div>
   )
 }
 
@@ -67,16 +108,22 @@ function UnlicensedScreen({ onGoToSubscription }: { onGoToSubscription: () => vo
   )
 }
 
-function ExpiredScreen({ onGoToSubscription }: { onGoToSubscription: () => void }): JSX.Element {
+function ExpiredScreen(
+  { onGoToSubscription, trialExpired }: { onGoToSubscription: () => void; trialExpired: boolean },
+): JSX.Element {
   const { t } = useTranslation()
   return (
     <div className="lock-screen">
       <div className="lock-card">
         <div className="lock-icon">🔒</div>
-        <h2 className="lock-title">{t('subscription.expiredTitle')}</h2>
-        <p className="lock-desc">{t('subscription.expiredLockDesc')}</p>
+        <h2 className="lock-title">
+          {trialExpired ? t('trial.expiredTitle') : t('subscription.expiredTitle')}
+        </h2>
+        <p className="lock-desc">
+          {trialExpired ? t('trial.subscription.expired') : t('subscription.expiredLockDesc')}
+        </p>
         <button className="btn btn-primary lock-btn" onClick={onGoToSubscription}>
-          {t('subscription.renew')}
+          {trialExpired ? t('subscription.subscribeNow') : t('subscription.renew')}
         </button>
       </div>
     </div>

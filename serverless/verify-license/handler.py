@@ -28,6 +28,10 @@ dispatched by request path — no API Gateway needed:
                           configured AND not force-disabled) — the client
                           must never be offered a method that would just
                           fail at checkout. See _available_payment_methods().
+  POST /trial/activate    Ticket 33: idempotently create (or fetch) the
+                          7-day free trial for a device. Never resets an
+                          existing trial's start/end.
+  GET  /trial/status      Ticket 33: look up a device's trial record.
 
 Environment variables
 ---------------------
@@ -75,6 +79,10 @@ DISABLED_PAYMENT_METHODS
                         credentials are configured — e.g. "douyin_pay" while
                         the Douyin merchant business-verification is still
                         pending. Example: "douyin_pay,card".
+TRIALS_TABLE            Ticket 33: DynamoDB table name for 7-day free trial
+                        records, keyed by deviceId. /trial/activate and
+                        /trial/status 501 until this is set.
+TRIAL_DAYS              Ticket 33: trial length in days. Defaults to 7.
 
 Swap provider logic in _check_payment_provider() to change monetisation
 without touching any other code.
@@ -98,6 +106,7 @@ SIGNING_SECRET  = os.environ.get("LICENSE_SIGNING_SECRET", _DEFAULT_SIGNING_SECR
 MOCK_MODE       = os.environ.get("MOCK_MODE", "false").lower() == "true"
 PROVIDER        = os.environ.get("PAYMENT_PROVIDER", "custom")
 EXPIRY_DAYS     = int(os.environ.get("EXPIRY_DAYS", "30"))
+TRIAL_DAYS      = int(os.environ.get("TRIAL_DAYS", "7"))  # Ticket 33
 
 # This string is public (it ships in the Electron app's source at
 # src/main/license-config.ts), so a real deployment still using it means
@@ -217,6 +226,17 @@ _LICENSE_KEY_RE = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
 
 def _valid_license_key_format(license_key: str) -> bool:
     return bool(_LICENSE_KEY_RE.match(license_key))
+
+
+# Ticket 33: device ids are either a SHA-256 hex digest (64 chars) or a
+# fallback UUID (36 chars, hyphenated) generated client-side — see
+# src/main/device-id.ts. Same untrusted-input reasoning as license keys
+# above: this reaches DynamoDB key operations, so validate before use.
+_DEVICE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{16,128}$")
+
+
+def _valid_device_id_format(device_id: str) -> bool:
+    return bool(_DEVICE_ID_RE.match(device_id))
 
 
 def _escape_search_value(value: str) -> str:
@@ -472,6 +492,116 @@ def _issue_or_extend_license(user_id: str, plan_id: str) -> tuple[str, int]:
             "licenseKey": license_key, "expiresAt": expires_at, "updatedAt": now,
         })
     return token, expires_at
+
+
+# ── Trial store (Ticket 33) ─────────────────────────────────────────────────
+# Deliberately separate from _orders_table()/_licenses_table() above: a trial
+# has no payment and no signed license token, and its idempotency contract is
+# simpler — "first activation wins, every later call just reads it back" —
+# so it gets its own tiny table and its own conditional-put guard rather than
+# reusing _mark_order_paid's pending→paid transition.
+
+def _trials_table():  # noqa: ANN201
+    return _ddb_table(os.environ.get("TRIALS_TABLE", ""))
+
+
+def _get_trial(device_id: str) -> dict[str, Any] | None:
+    table = _trials_table()
+    if table is None:
+        return None
+    resp = table.get_item(Key={"deviceId": device_id})
+    return _from_decimal(resp.get("Item"))
+
+
+def _create_trial_if_absent(device_id: str) -> dict[str, Any]:
+    """Idempotent activation: the first caller for a deviceId creates the
+    trial record; every later call (including a legitimate re-sync from the
+    client, or an uninstall/reinstall recomputing the same hardware-derived
+    id — see src/main/device-id.ts) sees the ConditionalCheckFailed branch
+    and gets back the *original* trialStart/trialEnd unchanged, matching
+    Ticket 33 §2's "do not reset the trial" requirement and §5's abuse
+    prevention. Raises if TRIALS_TABLE isn't configured — callers must check
+    _trials_table() first, same convention as _mark_order_paid/_orders_table."""
+    table = _trials_table()
+    now        = int(time.time())
+    trial_end  = now + TRIAL_DAYS * 86400
+    item = {
+        "deviceId": device_id, "trialStart": now, "trialEnd": trial_end,
+        "createdAt": now, "lastSeen": now,
+    }
+    try:
+        table.put_item(Item=item, ConditionExpression="attribute_not_exists(deviceId)")
+        return item
+    except Exception as exc:  # noqa: BLE001
+        # Same botocore quirk as _mark_order_paid: ConditionalCheckFailedException
+        # only shows up in str(exc), not the exception class.
+        if "ConditionalCheckFailed" in str(exc):
+            existing = _get_trial(device_id)
+            if existing:
+                return existing
+        raise
+
+
+def _touch_trial_last_seen(device_id: str) -> None:
+    """Best-effort bookkeeping only — never lets a write hiccup fail /trial/status."""
+    table = _trials_table()
+    if table is None:
+        return
+    try:
+        table.update_item(
+            Key={"deviceId": device_id},
+            UpdateExpression="SET lastSeen = :now",
+            ExpressionAttributeValues={":now": int(time.time())},
+        )
+    except Exception:  # noqa: BLE001
+        pass
+
+
+# ── /trial/activate, /trial/status handlers (Ticket 33) ────────────────────
+
+def _handle_trial_activate(event: dict) -> dict:
+    if _trials_table() is None:
+        return _not_configured("TRIALS_TABLE")
+    try:
+        body      = json.loads(event.get("body") or "{}")
+        device_id = str(body.get("deviceId", "")).strip()
+    except json.JSONDecodeError:
+        return {"statusCode": 400, "headers": _cors_headers(), "body": json.dumps({"error": "invalid body"})}
+
+    if not device_id or not _valid_device_id_format(device_id):
+        return {"statusCode": 400, "headers": _cors_headers(), "body": json.dumps({"error": "deviceId required"})}
+
+    trial = _create_trial_if_absent(device_id)
+    return {
+        "statusCode": 200, "headers": _cors_headers(),
+        "body": json.dumps({
+            "success": True, "trialStart": trial["trialStart"], "trialEnd": trial["trialEnd"],
+        }),
+    }
+
+
+def _handle_trial_status(event: dict) -> dict:
+    if _trials_table() is None:
+        return _not_configured("TRIALS_TABLE")
+    device_id = _query_params(event).get("deviceId", "").strip()
+    if not device_id or not _valid_device_id_format(device_id):
+        return {"statusCode": 400, "headers": _cors_headers(), "body": json.dumps({"error": "deviceId required"})}
+
+    trial = _get_trial(device_id)
+    if not trial:
+        return {
+            "statusCode": 200, "headers": _cors_headers(),
+            "body": json.dumps({"trialUsed": False, "trialStart": None, "trialEnd": None, "expired": False}),
+        }
+
+    _touch_trial_last_seen(device_id)
+    return {
+        "statusCode": 200, "headers": _cors_headers(),
+        "body": json.dumps({
+            "trialUsed": True, "trialStart": trial["trialStart"], "trialEnd": trial["trialEnd"],
+            "expired": int(time.time()) > trial["trialEnd"],
+        }),
+    }
 
 
 # ── Order creation: routes each method to its payment provider ─────────────────
@@ -956,6 +1086,10 @@ def handler(event: dict, context: object) -> dict:
         return _handle_payment_history(event)
     if path.endswith("/payment-methods"):
         return _handle_payment_methods(event)
+    if path.endswith("/trial/activate"):
+        return _handle_trial_activate(event)
+    if path.endswith("/trial/status"):
+        return _handle_trial_status(event)
 
     try:
         raw_body    = event.get("body") or "{}"

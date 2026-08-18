@@ -95,6 +95,7 @@ Globals:
         EXPIRY_DAYS: !Ref ExpiryDays
         ORDERS_TABLE: !Ref OrdersTable
         LICENSES_TABLE: !Ref LicensesTable
+        TRIALS_TABLE: !Ref TrialsTable
         PAYMENT_SUCCESS_URL: !Ref PaymentSuccessUrl
         PAYMENT_CANCEL_URL: !Ref PaymentCancelUrl
         DOUYIN_APP_ID: !Ref DouyinAppId
@@ -137,6 +138,18 @@ Resources:
           AttributeType: S
       KeySchema:
         - AttributeName: userId
+          KeyType: HASH
+
+  # ── Ticket 33: 7-day free trial ─────────────────────────────────────────────
+  TrialsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: deviceId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: deviceId
           KeyType: HASH
 
   LicenseVerifierRole:
@@ -188,6 +201,7 @@ Resources:
                   - !GetAtt OrdersTable.Arn
                   - !Sub '${OrdersTable.Arn}/index/*'
                   - !GetAtt LicensesTable.Arn
+                  - !GetAtt TrialsTable.Arn
 
   LicenseVerifier:
     Type: AWS::Serverless::Function
@@ -221,8 +235,11 @@ Outputs:
       checkout.session.completed). Ticket 28 adds: POST <this-url>/create-order,
       GET <this-url>/order-status, GET <this-url>/payment-history, and
       POST <this-url>/douyin-webhook (set as the Douyin Pay merchant callback URL).
+      Ticket 33 adds: POST <this-url>/trial/activate, GET <this-url>/trial/status.
     Value: !GetAtt LicenseVerifier.FunctionUrl
   OrdersTableName:
     Value: !Ref OrdersTable
   LicensesTableName:
     Value: !Ref LicensesTable
+  TrialsTableName:
+    Value: !Ref TrialsTable

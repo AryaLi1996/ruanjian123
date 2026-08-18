@@ -57,6 +57,9 @@ contextBridge.exposeInMainWorld('engine', {
   isFirstLaunch:   (): Promise<boolean> => ipcRenderer.invoke('app:is-first-launch'),
   markInitialized: (): Promise<void>    => ipcRenderer.invoke('app:mark-initialized'),
 
+  // App version (About page — Ticket 32)
+  getAppVersion: (): Promise<string> => ipcRenderer.invoke('app:get-version'),
+
   // Syncs the native window's paint colour with the renderer's appearance setting
   setBackgroundColor: (hex: string): Promise<void> =>
     ipcRenderer.invoke('window:set-background-color', hex),

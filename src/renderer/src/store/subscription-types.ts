@@ -15,12 +15,24 @@ export interface LicensePayload {
   features: string[]
 }
 
+// ── Free trial (Ticket 33) ────────────────────────────────────────────────────
+export interface TrialState {
+  active: boolean
+  expired: boolean
+  trialStart: number | null // Unix seconds
+  trialEnd: number | null   // Unix seconds
+  daysRemaining: number     // ceil, for the banner; 0 when < 1 day left
+  hoursRemaining: number    // ceil, used instead of daysRemaining when < 24h left
+  source: 'none' | 'local' | 'server'
+}
+
 export interface SubscriptionState {
   status: LicenseStatus
   payload: LicensePayload | null
   expiresAt: string | null
   graceDaysLeft: number
   daysRemaining: number
+  trial: TrialState
 }
 
 export interface ActivationResult {

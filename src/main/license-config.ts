@@ -71,6 +71,14 @@ export const LICENSE_CONFIG = {
   // How often the client polls /order-status while a payment is pending.
   orderPollIntervalMs: 3_000,
   orderPollTimeoutMs:  10 * 60_000,
+
+  // ── Free trial (Ticket 33) ──────────────────────────────────────────────────
+  trial: {
+    durationDays: 7,
+    // How often the background timer retries syncing an unsynced/local-only
+    // trial with the backend (e.g. after a fully-offline first launch).
+    syncIntervalHours: 6,
+  },
 } as const
 
 /** True when no LICENSE_SIGNING_SECRET override was supplied — see the warning this drives in index.ts. */

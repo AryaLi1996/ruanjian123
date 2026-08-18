@@ -13,6 +13,7 @@ import { EventEmitter }                  from 'events'
 import { app }                           from 'electron'
 import { LICENSE_CONFIG, PAYMENT_METHODS, type PaymentMethod, type PlanId } from './license-config'
 import { encryptModelBytes, decryptModelBytes } from './model-crypto'
+import { getDeviceId } from './device-id'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -39,6 +40,44 @@ export interface SubscriptionState {
   expiresAt:    string | null          // ISO date string for UI
   graceDaysLeft: number
   daysRemaining: number
+  trial:        TrialState
+}
+
+// ── Free trial (Ticket 33) ──────────────────────────────────────────────────
+// Layered on top of the license-token model above rather than merged into
+// it: a trial has no payment and no signed token, so it's tracked
+// separately and combined with license status only at the gating layer
+// (SubscriptionGate.tsx: unlocked = license active/grace_period OR trial active).
+export interface TrialState {
+  active:        boolean
+  expired:       boolean
+  trialStart:    number | null   // Unix seconds
+  trialEnd:      number | null   // Unix seconds
+  daysRemaining: number          // ceil; 0 when not active
+  hoursRemaining: number         // ceil; used instead of daysRemaining when < 24h left
+  source:        'none' | 'local' | 'server'
+}
+
+interface LocalTrialRecord { trialStart: number; trialEnd: number }
+
+interface TrialStatusResponse {
+  trialUsed:  boolean
+  trialStart: number | null
+  trialEnd:   number | null
+  expired:    boolean
+  error?:     string
+}
+
+interface TrialActivateResponse {
+  success:    boolean
+  trialStart: number
+  trialEnd:   number
+  error?:     string
+}
+
+const NO_TRIAL: TrialState = {
+  active: false, expired: false, trialStart: null, trialEnd: null,
+  daysRemaining: 0, hoursRemaining: 0, source: 'none',
 }
 
 export interface ActivationResult {
@@ -132,9 +171,10 @@ export class SubscriptionMonitor extends EventEmitter {
   private static _instance: SubscriptionMonitor | null = null
   private _state: SubscriptionState = {
     status: 'loading', payload: null, expiresAt: null,
-    graceDaysLeft: 0, daysRemaining: 0,
+    graceDaysLeft: 0, daysRemaining: 0, trial: NO_TRIAL,
   }
   private _timer: ReturnType<typeof setInterval> | null = null
+  private _trialTimer: ReturnType<typeof setInterval> | null = null
 
   static getInstance(): SubscriptionMonitor {
     if (!this._instance) this._instance = new SubscriptionMonitor()
@@ -145,6 +185,7 @@ export class SubscriptionMonitor extends EventEmitter {
   private get _tokenPath(): string { return join(app.getPath('userData'), 'license.enc') }
   private get _tsPath():    string { return join(app.getPath('userData'), '.license_ts') }
   private get _anonIdPath(): string { return join(app.getPath('userData'), '.anon_id') }
+  private get _trialPath(): string { return join(app.getPath('userData'), 'trial.enc') }
 
   // ── Anonymous user ID ───────────────────────────────────────────────────────
   // No account system: payments/licenses are tied to a random ID generated on
@@ -199,8 +240,13 @@ export class SubscriptionMonitor extends EventEmitter {
   }
 
   // ── State helpers ───────────────────────────────────────────────────────────
+  // Note: `trial` always carries forward the last-computed trial state
+  // (this._state.trial) — this method only ever describes the *license*
+  // side of SubscriptionState; trial state is updated independently by
+  // _syncTrial() via _setState().
   private _buildState(status: LicenseStatus, payload: LicensePayload | null, now = 0): SubscriptionState {
-    if (!payload) return { status, payload: null, expiresAt: null, graceDaysLeft: 0, daysRemaining: 0 }
+    const trial = this._state.trial
+    if (!payload) return { status, payload: null, expiresAt: null, graceDaysLeft: 0, daysRemaining: 0, trial }
     const graceEnds   = payload.expiresAt + LICENSE_CONFIG.gracePeriodDays * 86400
     const graceDaysLeft = status === 'grace_period'
       ? Math.max(0, Math.ceil((graceEnds - now) / 86400))
@@ -214,6 +260,7 @@ export class SubscriptionMonitor extends EventEmitter {
       expiresAt:    new Date(payload.expiresAt * 1000).toISOString(),
       graceDaysLeft,
       daysRemaining,
+      trial,
     }
   }
 
@@ -234,6 +281,11 @@ export class SubscriptionMonitor extends EventEmitter {
   getState(): SubscriptionState { return this._state }
 
   async initialize(): Promise<void> {
+    // Independent of license status: runs (and starts its own background
+    // sync timer) whether or not this device ever had/has a paid license.
+    await this._syncTrial()
+    this._startTrialSyncTimer()
+
     const token = await this._loadToken()
     if (!token) { this._setState({ ...this._buildState('unlicensed', null) }); return }
 
@@ -293,6 +345,11 @@ export class SubscriptionMonitor extends EventEmitter {
   }
 
   async refresh(): Promise<void> {
+    // Always re-synced, unlike the license refresh below which needs a
+    // token — this is what the "Refresh" button and the periodic license
+    // timer already call, so it doubles as the trial's retry path too.
+    await this._syncTrial()
+
     const token = await this._loadToken()
     if (!token) return
     const payload = verifyToken(token)
@@ -344,6 +401,117 @@ export class SubscriptionMonitor extends EventEmitter {
       { token?: string; valid?: boolean; error?: string }
     if (d.token && d.valid) return d.token
     throw new Error(d.error ?? 'Verification failed')
+  }
+
+  // ── Free trial (Ticket 33) ──────────────────────────────────────────────────
+  // Local record is plaintext JSON encrypted the same way as license.enc
+  // (machine-bound AES-256-GCM, see model-crypto.ts) — not because the dates
+  // are secret, but so a casual edit of the file on disk can't silently
+  // extend the trial.
+  private async _loadLocalTrial(): Promise<LocalTrialRecord | null> {
+    if (!existsSync(this._trialPath)) return null
+    try {
+      const enc   = await fs.readFile(this._trialPath)
+      const plain = await decryptModelBytes(enc)
+      const rec   = JSON.parse(plain.toString('utf8')) as Partial<LocalTrialRecord>
+      if (typeof rec.trialStart === 'number' && typeof rec.trialEnd === 'number') {
+        return { trialStart: rec.trialStart, trialEnd: rec.trialEnd }
+      }
+      return null
+    } catch { return null }
+  }
+
+  private async _saveLocalTrial(rec: LocalTrialRecord): Promise<void> {
+    try {
+      const enc = await encryptModelBytes(Buffer.from(JSON.stringify(rec), 'utf8'))
+      await fs.writeFile(this._trialPath, enc, { mode: 0o600 })
+    } catch { /* best-effort — trial still works this session from memory */ }
+  }
+
+  /**
+   * Reconciles local + backend trial state and returns the resolved
+   * TrialState, per Ticket 33 §3:
+   *   1. Backend reachable, device already has a trial there → backend's
+   *      trialStart/trialEnd always wins (covers "local looked active but
+   *      the backend already knows it's expired/used" — e.g. the record was
+   *      created from a different install on the same hardware).
+   *   2. Backend reachable, device has no trial there yet → activate it
+   *      (idempotent: creates fresh on a true first launch; if a local-only
+   *      trial already existed, this call is what syncs/validates it, and
+   *      whatever the server returns — new or an existing record it turns
+   *      out to already have — is authoritative).
+   *   3. Backend unreachable → fall back to the local record, or create one
+   *      if this is the very first launch and it's offline (Ticket 33 §1).
+   */
+  private async _resolveTrial(): Promise<{ rec: LocalTrialRecord | null; source: TrialState['source'] }> {
+    const local    = await this._loadLocalTrial()
+    const deviceId = await getDeviceId()
+
+    try {
+      const status = await this._request<TrialStatusResponse>(
+        'GET', `trial/status?deviceId=${encodeURIComponent(deviceId)}`,
+      )
+      if (status.error) throw new Error(status.error)
+
+      if (status.trialUsed && status.trialStart != null && status.trialEnd != null) {
+        const rec = { trialStart: status.trialStart, trialEnd: status.trialEnd }
+        await this._saveLocalTrial(rec)
+        return { rec, source: 'server' }
+      }
+
+      const activation = await this._request<TrialActivateResponse>('POST', 'trial/activate', { deviceId })
+      if (activation.error) throw new Error(activation.error)
+      const rec = { trialStart: activation.trialStart, trialEnd: activation.trialEnd }
+      await this._saveLocalTrial(rec)
+      return { rec, source: 'server' }
+    } catch {
+      // Offline, or the backend isn't configured for trials yet — use
+      // whatever's local, or start a fresh local-only trial.
+      if (local) return { rec: local, source: 'local' }
+      const now = Math.floor(Date.now() / 1000)
+      const rec = { trialStart: now, trialEnd: now + LICENSE_CONFIG.trial.durationDays * 86400 }
+      await this._saveLocalTrial(rec)
+      return { rec, source: 'local' }
+    }
+  }
+
+  private async _computeTrialState(rec: LocalTrialRecord | null, source: TrialState['source']): Promise<TrialState> {
+    if (!rec) return NO_TRIAL
+
+    const now = Math.floor(Date.now() / 1000)
+    // Reuses the same anti-rollback clock as the license flow (a rolled-back
+    // system clock must not be able to keep extending a trial indefinitely).
+    const tampered = await this._clockTampered(now)
+    await this._saveMaxSeenTs(now)
+
+    const expired      = tampered || now >= rec.trialEnd
+    const remainingSec = Math.max(0, rec.trialEnd - now)
+    return {
+      active:         !expired,
+      expired,
+      trialStart:     rec.trialStart,
+      trialEnd:       rec.trialEnd,
+      daysRemaining:  expired ? 0 : Math.ceil(remainingSec / 86400),
+      hoursRemaining: expired ? 0 : Math.ceil(remainingSec / 3600),
+      source,
+    }
+  }
+
+  private async _syncTrial(): Promise<void> {
+    const { rec, source } = await this._resolveTrial()
+    const trial = await this._computeTrialState(rec, source)
+    this._setState({ ...this._state, trial })
+  }
+
+  // ── Background trial sync timer ─────────────────────────────────────────────
+  private _startTrialSyncTimer(): void {
+    this._stopTrialSyncTimer()
+    const ms = LICENSE_CONFIG.trial.syncIntervalHours * 3_600_000
+    this._trialTimer = setInterval(() => { void this._syncTrial() }, ms)
+  }
+
+  private _stopTrialSyncTimer(): void {
+    if (this._trialTimer) { clearInterval(this._trialTimer); this._trialTimer = null }
   }
 
   // ── Payment orders (Ticket 28) ──────────────────────────────────────────────

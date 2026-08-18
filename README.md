@@ -1,4 +1,4 @@
-# Ruanjian — Developer README
+# SootheVoice — Developer README
 
 > **Stack**: Electron 31 · Vite 5 · React 18 · TypeScript 5.6 · Python 3.11 · ONNX Runtime 1.28  
 > **Repo created**: 2026-08-12
@@ -216,7 +216,7 @@ This runs `electron-vite dev` which:
 ### Subscription in Dev Mode
 The subscription system is **active in dev mode**. To bypass it for UI development:
 1. Enter `RUANJIAN-DEMO-2026` on the Subscription page — this creates a local 30-day token without hitting any server.
-2. Or: delete `~/.../Application Support/Ruanjian/license.enc` to reset to unlicensed state for testing.
+2. Or: delete `~/.../Application Support/ruanjian/license.enc` to reset to unlicensed state for testing.
 
 ---
 
@@ -242,9 +242,9 @@ This runs 4 steps:
 ### Output Files
 ```
 dist/
-├── Ruanjian-0.1.0.dmg                    # macOS installer
-├── Ruanjian-0.1.0-win-x64-setup.exe      # Windows NSIS installer
-├── Ruanjian-0.1.0-linux-x86_64.AppImage  # Linux AppImage
+├── SootheVoice-0.1.0.dmg                    # macOS installer
+├── SootheVoice-0.1.0-win-x64-setup.exe      # Windows NSIS installer
+├── SootheVoice-0.1.0-linux-x86_64.AppImage  # Linux AppImage
 └── latest.yml / latest-mac.yml           # electron-updater manifest
 ```
 
@@ -799,4 +799,4 @@ test: add T11 cover synthesis quality check
 
 ---
 
-*Internal repository. All rights reserved © 2026 Ruanjian.*
+*Internal repository. All rights reserved © 2026 SootheVoice.*
