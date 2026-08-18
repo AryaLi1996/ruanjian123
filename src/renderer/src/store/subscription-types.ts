@@ -72,3 +72,18 @@ export interface LicenseConfig {
   pollIntervalMs: number
   pollTimeoutMs: number
 }
+
+// ── Dynamic payment-method availability (Ticket 31) ───────────────────────────
+// Distinct from LicenseConfig.paymentMethods above, which is the static list
+// of methods this build *knows how to render* (a fallback badge/i18n label
+// exists for them, used for historical orders — see SubscriptionView.tsx).
+// PaymentMethodInfo is the live, server-computed subset that's actually
+// usable right now, complete with its own localized display metadata — see
+// /payment-methods in serverless/verify-license/handler.py.
+export interface PaymentMethodInfo {
+  id: PaymentMethod
+  enabled: boolean
+  name: string
+  icon: string
+  color: string | null // null → render with the app's current theme accent
+}

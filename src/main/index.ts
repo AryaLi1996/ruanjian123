@@ -437,6 +437,8 @@ ipcMain.handle('payment:create-order', (_, planId: string, method: string) =>
   monitor.createOrder(planId as never, method as never))
 ipcMain.handle('payment:order-status', (_, orderId: string) => monitor.getOrderStatus(orderId))
 ipcMain.handle('payment:history',      ()                   => monitor.getPaymentHistory())
+// Ticket 31: live, server-computed availability — see getPaymentMethods() doc.
+ipcMain.handle('payment:get-methods',  (_, lang: string)    => monitor.getPaymentMethods(lang))
 
 // Hosted checkout pages for methods whose QR code is rendered by the
 // provider/aggregator's own page (WeChat Pay, Douyin Pay) are shown in a

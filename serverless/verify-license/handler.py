@@ -23,6 +23,11 @@ dispatched by request path — no API Gateway needed:
                           restarting.
   GET  /payment-history   Ticket 28: list an anonymous user's past orders.
   POST /douyin-webhook    Ticket 28: Douyin Pay payment-result callback.
+  GET  /payment-methods   Ticket 31: list only the payment methods that are
+                          actually usable right now (provider credentials
+                          configured AND not force-disabled) — the client
+                          must never be offered a method that would just
+                          fail at checkout. See _available_payment_methods().
 
 Environment variables
 ---------------------
@@ -64,6 +69,12 @@ DOUYIN_APP_SECRET       Douyin Pay signing secret — used for both request
                         merchant type before going live; this template
                         implements the widely-documented ecpay-style scheme.
 DOUYIN_NOTIFY_URL       Overrides the auto-derived Douyin callback URL.
+DISABLED_PAYMENT_METHODS
+                        Ticket 31: comma-separated method ids to force-hide
+                        from /payment-methods even if their provider
+                        credentials are configured — e.g. "douyin_pay" while
+                        the Douyin merchant business-verification is still
+                        pending. Example: "douyin_pay,card".
 
 Swap provider logic in _check_payment_provider() to change monetisation
 without touching any other code.
@@ -109,6 +120,63 @@ PLANS: dict[str, dict[str, Any]] = {
     "annual":  {"durationDays": 365, "amount": 29900, "currency": "cny"},
 }
 PAYMENT_METHODS = {"wechat_pay", "alipay", "douyin_pay", "card"}
+
+# Ticket 31: methods force-hidden regardless of provider config — see the
+# DISABLED_PAYMENT_METHODS env var doc above.
+_DISABLED_PAYMENT_METHODS = {
+    m.strip() for m in os.environ.get("DISABLED_PAYMENT_METHODS", "").split(",") if m.strip()
+}
+
+
+def _available_payment_methods() -> list[str]:
+    """Payment method ids that are actually usable right now, so the client
+    never has to render (or the user never has to hit) a method that would
+    just fail at checkout. A method is available only when its provider
+    credentials are configured AND it isn't force-disabled.
+
+    card / wechat_pay / alipay all go through Stripe Checkout (see
+    _create_stripe_order) so they share one credential — STRIPE_API_KEY —
+    but note that doesn't guarantee WeChat Pay / Alipay are individually
+    enabled on the Stripe account; if a specific one isn't, disable it via
+    DISABLED_PAYMENT_METHODS until it's turned on in the Stripe Dashboard.
+    douyin_pay needs its own three Douyin credentials (Ticket 28 background:
+    Douyin Pay may require additional business verification)."""
+    methods: list[str] = []
+    if os.environ.get("STRIPE_API_KEY"):
+        methods.extend(["card", "wechat_pay", "alipay"])
+    if os.environ.get("DOUYIN_APP_ID") and os.environ.get("DOUYIN_MERCHANT_ID") and os.environ.get("DOUYIN_APP_SECRET"):
+        methods.append("douyin_pay")
+    return [m for m in methods if m in PAYMENT_METHODS and m not in _DISABLED_PAYMENT_METHODS]
+
+
+# Ticket 31: display metadata for /payment-methods, owned here instead of
+# duplicated in the Electron client's i18n/badge maps (src/renderer/src/
+# i18n.ts's subscription.method.*, SubscriptionView.tsx's METHOD_BADGE) —
+# this is now the source of truth for the *picker*. The client keeps its own
+# copies too, but only as a display fallback and for rendering historical
+# orders whose method may no longer be in the currently-available set (a
+# past Douyin order must still show a readable label after Douyin gets
+# disabled). "color" is omitted for card on purpose — the client renders
+# that one in the app's current theme accent color instead of a fixed hex.
+_METHOD_META: dict[str, dict[str, Any]] = {
+    "wechat_pay": {"name": {"zh-CN": "微信支付", "en-US": "WeChat Pay"}, "icon": "微", "color": "#07c160"},
+    "alipay":     {"name": {"zh-CN": "支付宝",   "en-US": "Alipay"},     "icon": "支", "color": "#1677ff"},
+    "douyin_pay": {"name": {"zh-CN": "抖音支付", "en-US": "Douyin Pay"}, "icon": "抖", "color": "#000000"},
+    "card":       {"name": {"zh-CN": "银行卡",   "en-US": "Bank Card"},  "icon": "💳"},
+}
+_DEFAULT_LANG = "zh-CN"
+
+
+def _localized_method(method_id: str, lang: str) -> dict[str, Any]:
+    meta  = _METHOD_META.get(method_id, {})
+    names = meta.get("name", {})
+    return {
+        "id":      method_id,
+        "enabled": True,
+        "name":    names.get(lang) or names.get(_DEFAULT_LANG) or method_id,
+        "icon":    meta.get("icon", ""),
+        "color":   meta.get("color"),  # absent (None) → client falls back to var(--accent)
+    }
 
 
 # ── Token helpers ─────────────────────────────────────────────────────────────
@@ -521,6 +589,19 @@ def _self_url(path: str) -> str:
     return f"{base}/{path}" if base else path
 
 
+# ── /payment-methods handler (Ticket 31) ────────────────────────────────────
+
+def _handle_payment_methods(event: dict) -> dict:
+    """Returns only enabled methods, each carrying its own localized name +
+    icon/color, so the client never has to receive one that isn't actually
+    usable (nothing to grey out) and doesn't need a hardcoded id → label/icon
+    map to render the picker. `lang` should match the app's current i18n
+    language (e.g. 'zh-CN' | 'en-US'); defaults to _DEFAULT_LANG."""
+    lang    = _query_params(event).get("lang", _DEFAULT_LANG)
+    methods = [_localized_method(m, lang) for m in _available_payment_methods()]
+    return {"statusCode": 200, "headers": _cors_headers(), "body": json.dumps({"methods": methods})}
+
+
 # ── /create-order, /order-status, /payment-history handlers ────────────────────
 
 def _handle_create_order(event: dict) -> dict:
@@ -538,6 +619,12 @@ def _handle_create_order(event: dict) -> dict:
         return {"statusCode": 400, "headers": _cors_headers(), "body": json.dumps({"error": "unknown planId"})}
     if method not in PAYMENT_METHODS:
         return {"statusCode": 400, "headers": _cors_headers(), "body": json.dumps({"error": "unknown method"})}
+    # Ticket 31: reject up front (clean 400) rather than letting a disabled/
+    # unconfigured method fall through to _create_stripe_order/_create_douyin_order
+    # and surface as an opaque 502 provider error — /payment-methods should
+    # already have kept the client from offering this method at all.
+    if method not in _available_payment_methods():
+        return {"statusCode": 400, "headers": _cors_headers(), "body": json.dumps({"error": "payment method not available"})}
     if not user_id or len(user_id) > 128:
         return {"statusCode": 400, "headers": _cors_headers(), "body": json.dumps({"error": "userId required"})}
 
@@ -867,6 +954,8 @@ def handler(event: dict, context: object) -> dict:
         return _handle_order_status(event)
     if path.endswith("/payment-history"):
         return _handle_payment_history(event)
+    if path.endswith("/payment-methods"):
+        return _handle_payment_methods(event)
 
     try:
         raw_body    = event.get("body") or "{}"

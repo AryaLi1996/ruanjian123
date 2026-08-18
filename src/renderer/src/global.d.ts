@@ -2,6 +2,7 @@ import type {
   LicenseConfig,
   PaymentOrder,
   PaymentHistoryEntry,
+  PaymentMethodInfo,
 } from './store/subscription-types'
 
 export interface PersistedModel {
@@ -88,6 +89,7 @@ declare global {
       createPaymentOrder: (planId: string, method: string) => Promise<PaymentOrder & { error?: string }>
       getOrderStatus:     (orderId: string) => Promise<{ status: string; order?: PaymentOrder; licensed?: boolean; error?: string }>
       getPaymentHistory:  () => Promise<PaymentHistoryEntry[]>
+      getPaymentMethods:  (lang: string) => Promise<PaymentMethodInfo[]>
       openEmbeddedPayment:  (url: string) => Promise<void>
       closeEmbeddedPayment: () => Promise<void>
       onPaymentWindowClosed: (cb: () => void) => () => void
