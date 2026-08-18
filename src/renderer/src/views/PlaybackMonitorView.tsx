@@ -5,7 +5,10 @@ import { useSubscriptionStore } from '../store/useSubscriptionStore'
 import { formatDuration, pcmToWavBlob } from '../utils/audio'
 import { computePeaks, drawWaveform, crossCorrelateOffset } from '../utils/waveform'
 import { parseLRC, findLyricIndex, extractEmbeddedLyrics, type LyricLine } from '../utils/lrc'
+import { extractEmbeddedMetadata } from '../utils/metadata'
 import { LyricsPanel } from '../components/playback/LyricsPanel'
+import { SongList } from '../components/playback/SongList'
+import { NowPlayingCard } from '../components/playback/NowPlayingCard'
 
 type TrackKind = 'original' | 'stem' | 'cover' | 'recording'
 type SepMode = 'standard' | 'enhanced'
@@ -26,10 +29,14 @@ interface Track {
 interface Song {
   id:           string
   name:         string
+  artist:       string | null
   duration:     number
   tracks:       Track[]
   lyrics:       LyricLine[]
   originalPath: string | null
+  coverArtUrl:  string | null
+  liked:        boolean
+  addedAt:      number
 }
 
 const TRACK_COLORS = ['#6366f1', '#22d3ee', '#f59e0b', '#ec4899', '#34d399', '#a855f7']
@@ -48,6 +55,19 @@ function makeTrack(kind: TrackKind, label: string, buffer: AudioBuffer): Track {
     id: crypto.randomUUID(), kind, label, color: nextColor(),
     buffer, peaks: computePeaks(buffer, PEAK_BUCKETS),
     volume: 0.85, muted: false, solo: false, offsetSec: 0,
+  }
+}
+
+// Kinds with a fixed, translatable name are re-localized on every render instead of
+// trusting the label baked in at creation time (which would stay stuck in whatever
+// language was active when the track was added). 'stem' keeps its stored label since
+// it carries the specific stem name (vocals/drums/...), not a generic kind name.
+function trackLabel(tr: Track, t: (key: string) => string): string {
+  switch (tr.kind) {
+    case 'original':  return t('playback.original')
+    case 'cover':     return t('playback.cover')
+    case 'recording': return t('playback.recordedClip')
+    default:          return tr.label
   }
 }
 
@@ -70,8 +90,9 @@ export function PlaybackMonitorView(): JSX.Element {
   const [activeSongId, setActiveSongId] = useState<string | null>(null)
   const [songListOpen, setSongListOpen] = useState(true)
   const [tracksOpen, setTracksOpen] = useState(true)
+  const [nowPlayingHeight, setNowPlayingHeight] = useState(360)
+  const resizingRef = useRef(false)
   const [loadingSong, setLoadingSong] = useState(false)
-  const [songDragging, setSongDragging] = useState(false)
 
   const [playing, setPlaying] = useState(false)
   const [playhead, setPlayhead] = useState(0)
@@ -115,6 +136,8 @@ export function PlaybackMonitorView(): JSX.Element {
   const rafRef         = useRef<number | null>(null)
   const tracksRef      = useRef<Track[]>([])
   useEffect(() => { tracksRef.current = tracks }, [tracks])
+  const songsRef        = useRef<Song[]>([])
+  useEffect(() => { songsRef.current = songs }, [songs])
 
   const waveCanvasRef = useRef<HTMLCanvasElement | null>(null)
 
@@ -253,11 +276,23 @@ export function PlaybackMonitorView(): JSX.Element {
   }
 
   function removeSong(id: string): void {
-    setSongs((prev) => prev.filter((s) => s.id !== id))
+    setSongs((prev) => {
+      const song = prev.find((s) => s.id === id)
+      if (song?.coverArtUrl) URL.revokeObjectURL(song.coverArtUrl)
+      return prev.filter((s) => s.id !== id)
+    })
     if (id === activeSongId) {
       resetPlaybackState()
       setActiveSongId(null)
     }
+  }
+
+  function toggleLike(id: string): void {
+    patchSong(id, (s) => ({ ...s, liked: !s.liked }))
+  }
+
+  async function showInFolder(path: string): Promise<void> {
+    await window.engine.showInFolder(path)
   }
 
   function removeTrack(id: string): void {
@@ -290,18 +325,25 @@ export function PlaybackMonitorView(): JSX.Element {
       const ctx = ensurePlayCtx()
       const buffer = await decodeFile(file, ctx)
       const track = makeTrack('original', t('playback.original'), buffer)
-      const embedded = await extractEmbeddedLyrics(file)
+      const [embedded, meta] = await Promise.all([
+        extractEmbeddedLyrics(file),
+        extractEmbeddedMetadata(file),
+      ])
 
       const buf = await file.arrayBuffer()
       const dir = await window.engine.saveTrainingFiles([{ name: file.name, buffer: buf }])
 
       const song: Song = {
         id: crypto.randomUUID(),
-        name: file.name.replace(/\.[^.]+$/, ''),
+        name: meta.title ?? file.name.replace(/\.[^.]+$/, ''),
+        artist: meta.artist,
         duration: buffer.duration,
         tracks: [track],
         lyrics: embedded ?? [],
         originalPath: `${dir}/${file.name}`,
+        coverArtUrl: meta.coverArtUrl,
+        liked: false,
+        addedAt: Date.now(),
       }
       setSongs((prev) => [...prev, song])
       resetPlaybackState()
@@ -497,6 +539,7 @@ export function PlaybackMonitorView(): JSX.Element {
       stopSources()
       playCtxRef.current?.close()
       cleanupRecording()
+      for (const s of songsRef.current) if (s.coverArtUrl) URL.revokeObjectURL(s.coverArtUrl)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -530,12 +573,29 @@ export function PlaybackMonitorView(): JSX.Element {
     })
   }, [tracks, canvasWidth, canvasHeight, pxPerSec])
 
+  function startResize(e: React.MouseEvent): void {
+    e.preventDefault()
+    resizingRef.current = true
+    const startY = e.clientY
+    const startHeight = nowPlayingHeight
+    const onMove = (ev: MouseEvent): void => {
+      if (!resizingRef.current) return
+      setNowPlayingHeight(Math.max(220, Math.min(620, startHeight + (ev.clientY - startY))))
+    }
+    const onUp = (): void => {
+      resizingRef.current = false
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+  }
+
   function handleWaveClick(e: React.MouseEvent<HTMLCanvasElement>): void {
     const rect = (e.target as HTMLCanvasElement).getBoundingClientRect()
     seek((e.clientX - rect.left) / pxPerSec)
   }
 
-  const songInputRef  = useRef<HTMLInputElement>(null)
   const coverInputRef = useRef<HTMLInputElement>(null)
 
   function handleSongFiles(files: FileList | null): void {
@@ -560,49 +620,47 @@ export function PlaybackMonitorView(): JSX.Element {
       <div className={`pbm-grid${songListOpen ? '' : ' no-songs'}`}>
         {/* ── Left: song list ─────────────────────────────── */}
         {songListOpen && (
-          <aside
-            className={`card pbm-songlist${songDragging ? ' drag-over' : ''}`}
-            onDragEnter={(e) => { e.preventDefault(); setSongDragging(true) }}
-            onDragOver={(e)  => { e.preventDefault(); setSongDragging(true) }}
-            onDragLeave={()  => setSongDragging(false)}
-            onDrop={(e) => {
-              e.preventDefault(); setSongDragging(false); handleSongFiles(e.dataTransfer.files)
-            }}
-          >
-            <div className="pbm-panel-title">{t('playback.songs')}</div>
-            <button className="btn btn-primary pbm-add-song"
-              onClick={() => songInputRef.current?.click()} disabled={loadingSong}>
-              {loadingSong ? t('common.loading') : `+ ${t('playback.addSong')}`}
-            </button>
-            <input ref={songInputRef} type="file" accept="audio/*" multiple style={{ display: 'none' }}
-              onChange={(e) => handleSongFiles(e.target.files)} />
-
-            {songs.length === 0 ? (
-              <div className="pbm-empty-hint">{t('playback.noSongs')}</div>
-            ) : (
-              <ul className="pbm-song-items">
-                {songs.map((s) => (
-                  <li key={s.id} className="pbm-song-row">
-                    <button
-                      className={`pbm-song-item${s.id === activeSongId ? ' active' : ''}`}
-                      onClick={() => selectSong(s.id)}
-                    >
-                      <span className="pbm-song-name" title={s.name}>{s.name}</span>
-                      <span className="pbm-song-meta">
-                        {formatDuration(s.duration)} · {t('playback.trackCount', { count: s.tracks.length })}
-                      </span>
-                    </button>
-                    <button className="qi-remove pbm-song-remove"
-                      onClick={() => removeSong(s.id)} title={t('playback.remove')}>×</button>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </aside>
+          <SongList
+            songs={songs}
+            activeSongId={activeSongId}
+            playing={playing}
+            loading={loadingSong}
+            onSelect={selectSong}
+            onRemove={removeSong}
+            onShowInFolder={(path) => void showInFolder(path)}
+            onAddFiles={handleSongFiles}
+          />
         )}
 
-        {/* ── Center: waveform + transport + tracks ────────── */}
+        {/* ── Center: now playing/lyrics + waveform + transport + tracks ── */}
         <section className="pbm-center">
+          <div className="pbm-now-lyrics-split" style={{ height: nowPlayingHeight }}>
+            <NowPlayingCard
+              title={activeSong?.name ?? null}
+              artist={activeSong?.artist ?? null}
+              coverArtUrl={activeSong?.coverArtUrl ?? null}
+              liked={activeSong?.liked ?? false}
+              onToggleLike={() => { if (activeSong) toggleLike(activeSong.id) }}
+            />
+            <LyricsPanel
+              lines={lyrics}
+              currentIndex={currentLyricIndex}
+              collapsed={lyricsCollapsed}
+              onToggleCollapse={() => setLyricsCollapsed((c) => !c)}
+              onSeek={seek}
+              onImportFile={(file) => void importLyricsFile(file)}
+              onImportLyrics={(parsed) => applySearchedLyrics(parsed)}
+              songTitle={activeSong?.name ?? ''}
+              onlineSearchAllowed={onlineSearchAllowed}
+              coverArtUrl={activeSong?.coverArtUrl ?? null}
+            />
+          </div>
+
+          <div className="pbm-resizer" onMouseDown={startResize}
+            role="separator" aria-orientation="horizontal" aria-label={t('playback.dragResize')} />
+
+          <div className="pbm-panel-title pbm-monitoring-title">{t('playback.monitoring')}</div>
+
           <div className="card pbm-wave-card">
             <div className="pbm-toolbar-row">
               <span className="pbm-current-song" title={activeSong?.name}>
@@ -660,12 +718,12 @@ export function PlaybackMonitorView(): JSX.Element {
               <select className="select" value={trackAId ?? ''}
                 onChange={(e) => setTrackAId(e.target.value || null)}>
                 <option value="">{t('playback.trackA')}</option>
-                {tracks.map((tr) => <option key={tr.id} value={tr.id}>{tr.label}</option>)}
+                {tracks.map((tr) => <option key={tr.id} value={tr.id}>{trackLabel(tr, t)}</option>)}
               </select>
               <select className="select" value={trackBId ?? ''}
                 onChange={(e) => setTrackBId(e.target.value || null)}>
                 <option value="">{t('playback.trackB')}</option>
-                {tracks.map((tr) => <option key={tr.id} value={tr.id}>{tr.label}</option>)}
+                {tracks.map((tr) => <option key={tr.id} value={tr.id}>{trackLabel(tr, t)}</option>)}
               </select>
               <button className="btn btn-ghost" disabled={!trackAId || !trackBId} onClick={switchAB}>
                 {t('playback.switchAB')} ({activeAB})
@@ -700,7 +758,7 @@ export function PlaybackMonitorView(): JSX.Element {
                       <div key={tr.id} className="pbm-track-item">
                         <div className="pbm-thumb" style={{ background: tr.color }} />
                         <div className="pbm-track-main">
-                          <div className="pbm-track-name">{tr.label}</div>
+                          <div className="pbm-track-name">{trackLabel(tr, t)}</div>
                           <div className="pbm-track-controls">
                             <button className={`btn btn-ghost pbm-mini-btn${tr.muted ? ' active' : ''}`}
                               onClick={() => patchTrack(tr.id, { muted: !tr.muted })}>
@@ -726,7 +784,7 @@ export function PlaybackMonitorView(): JSX.Element {
           </div>
         </section>
 
-        {/* ── Right: recording + lyrics (always visible) ───── */}
+        {/* ── Right: recording panel (always visible) ───────── */}
         <aside className="pbm-right">
           <div className="card pbm-recording">
             <div className="pbm-panel-title">{t('playback.recordingPanel')}</div>
@@ -749,18 +807,6 @@ export function PlaybackMonitorView(): JSX.Element {
               </div>
             )}
           </div>
-
-          <LyricsPanel
-            lines={lyrics}
-            currentIndex={currentLyricIndex}
-            collapsed={lyricsCollapsed}
-            onToggleCollapse={() => setLyricsCollapsed((c) => !c)}
-            onSeek={seek}
-            onImportFile={(file) => void importLyricsFile(file)}
-            onImportLyrics={(parsed) => applySearchedLyrics(parsed)}
-            songTitle={activeSong?.name ?? ''}
-            onlineSearchAllowed={onlineSearchAllowed}
-          />
         </aside>
       </div>
     </>

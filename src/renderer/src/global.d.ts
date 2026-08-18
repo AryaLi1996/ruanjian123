@@ -39,6 +39,7 @@ declare global {
         plainLyrics: string | null
       }>>
       logRendererError:  (payload: unknown) => Promise<void>
+      showInFolder:      (filePath: string) => Promise<void>
       encryptModel:      (modelPath: string) => Promise<{ encPath: string; sizeBytes: number }>
       decryptVerify:     (encPath: string) => Promise<{ decrypted: boolean; error?: string }>
       loadModels:        () => Promise<PersistedModel[]>

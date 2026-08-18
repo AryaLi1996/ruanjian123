@@ -63,13 +63,16 @@ export function textFromLyricsBlob(raw: string): LyricLine[] {
 }
 
 // ── ID3v2 (MP3) ──────────────────────────────────────────────────────────
-function readSyncsafeOrNormal(dv: DataView, off: number, syncsafe: boolean): number {
+// These low-level byte helpers are also reused by utils/metadata.ts (cover
+// art / title / artist extraction) so the tricky binary parsing lives in
+// exactly one place.
+export function readSyncsafeOrNormal(dv: DataView, off: number, syncsafe: boolean): number {
   if (!syncsafe) return dv.getUint32(off)
   return (dv.getUint8(off) << 21) | (dv.getUint8(off + 1) << 14) |
          (dv.getUint8(off + 2) << 7) | dv.getUint8(off + 3)
 }
 
-function decodeId3Text(bytes: Uint8Array, encoding: number): string {
+export function decodeId3Text(bytes: Uint8Array, encoding: number): string {
   if (encoding === 1 || encoding === 2) return new TextDecoder('utf-16').decode(bytes)
   return new TextDecoder(encoding === 3 ? 'utf-8' : 'latin1').decode(bytes)
 }
@@ -84,7 +87,7 @@ function decodeId3Text(bytes: Uint8Array, encoding: number): string {
  * decoded after it by one byte, corrupting the rest of the string.
  * Returns the offset of the terminator's first byte (== end if none found).
  */
-function id3StringEnd(bytes: Uint8Array, start: number, end: number, encoding: number): number {
+export function id3StringEnd(bytes: Uint8Array, start: number, end: number, encoding: number): number {
   const isUtf16 = encoding === 1 || encoding === 2
   let p = start
   if (isUtf16) {
@@ -179,7 +182,7 @@ function extractFLACLyrics(buf: ArrayBuffer): LyricLine[] | null {
 }
 
 // ── M4A / MP4 (©lyr atom) ─────────────────────────────────────────────────
-function findMp4Box(bytes: Uint8Array, dv: DataView, start: number, end: number, path: string[]): [number, number] | null {
+export function findMp4Box(bytes: Uint8Array, dv: DataView, start: number, end: number, path: string[]): [number, number] | null {
   let pos = start
   while (pos + 8 <= end) {
     const size = dv.getUint32(pos)
