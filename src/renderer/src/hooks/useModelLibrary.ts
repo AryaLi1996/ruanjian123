@@ -20,6 +20,15 @@ export function useModelLibrary(): void {
   const modelsHydrated  = useAppStore((s) => s.modelsHydrated)
   const trainedModels   = useAppStore((s) => s.trainedModels)
   const saveTimer       = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // Set when the initial load rejects (IPC hiccup, main not ready yet —
+  // model-registry.ts's own loadModels() never actually throws today, but
+  // nothing guarantees that stays true). hydrateModels([]) below is only a
+  // UI fallback so the app isn't stuck; it must NOT be allowed to trigger
+  // the autosave effect, or that fallback would immediately overwrite a
+  // possibly-intact models.json on disk with an empty array. Cleared after
+  // the first skipped save so any real, user-driven change afterwards
+  // (training/deleting a model) persists normally.
+  const skipNextSave    = useRef(false)
 
   useEffect(() => {
     let active = true
@@ -32,7 +41,10 @@ export function useModelLibrary(): void {
         }))
         hydrateModels(restored)
       })
-      .catch(() => hydrateModels([]))   // treat an unreadable registry as an empty library
+      .catch(() => {
+        skipNextSave.current = true
+        hydrateModels([])   // treat an unreadable registry as an empty library for the UI...
+      })
     return () => { active = false }
     // Runs once on mount; hydrateModels is a stable Zustand action reference.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -40,6 +52,10 @@ export function useModelLibrary(): void {
 
   useEffect(() => {
     if (!modelsHydrated) return   // don't overwrite the saved file before the initial load lands
+    if (skipNextSave.current) {   // ...but never autosave that fallback back over the real file
+      skipNextSave.current = false
+      return
+    }
     if (saveTimer.current) clearTimeout(saveTimer.current)
     saveTimer.current = setTimeout(() => {
       // demoAudioUrl (a blob: URL) is deliberately dropped — it's already dead

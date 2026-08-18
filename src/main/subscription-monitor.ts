@@ -290,6 +290,7 @@ export class SubscriptionMonitor extends EventEmitter {
       const fresh = await this._verifyWithServer(payload.licenseKey)
       await this._saveToken(fresh)
       const now    = Math.floor(Date.now() / 1000)
+      await this._saveMaxSeenTs(now)
       const p2     = verifyToken(fresh)
       if (p2) this._setState(this._buildState(this._resolveStatus(p2, now), p2, now))
     } catch {
@@ -350,7 +351,16 @@ export class SubscriptionMonitor extends EventEmitter {
    * order has just been paid, saves and applies the new/extended license token
    * so the subscription monitor updates without an app restart.
    */
-  async getOrderStatus(orderId: string): Promise<{ status: OrderStatus; order?: PaymentOrder }> {
+  /**
+   * `licensed` tells the caller whether this call actually applied a new
+   * license token, as opposed to the server merely reporting status:'paid'.
+   * Those can diverge — e.g. the webhook marked the order paid but license
+   * issuance failed separately, or the token it sent back doesn't verify —
+   * so callers must not treat status:'paid' alone as "done"; only
+   * status:'paid' *and* licensed:true means the subscription state was
+   * actually updated.
+   */
+  async getOrderStatus(orderId: string): Promise<{ status: OrderStatus; order?: PaymentOrder; licensed: boolean }> {
     const userId = await this._getOrCreateAnonId()
     const d = await this._request(
       'GET',
@@ -358,6 +368,7 @@ export class SubscriptionMonitor extends EventEmitter {
     ) as { status: OrderStatus; order?: PaymentOrder; token?: string; error?: string }
     if (d.error) throw new Error(d.error)
 
+    let licensed = false
     if (d.status === 'paid' && d.token) {
       const payload = verifyToken(d.token)
       if (payload) {
@@ -367,9 +378,10 @@ export class SubscriptionMonitor extends EventEmitter {
         const status = this._resolveStatus(payload, now)
         this._setState(this._buildState(status, payload, now))
         this._startRefreshTimer()
+        licensed = true
       }
     }
-    return { status: d.status, order: d.order }
+    return { status: d.status, order: d.order, licensed }
   }
 
   async getPaymentHistory(): Promise<PaymentHistoryEntry[]> {

@@ -34,6 +34,40 @@ function formatAmount(amount: number, currency: string, locale: string): string 
   }
 }
 
+// ── Pending-order persistence ─────────────────────────────────────────────────
+// SubscriptionView is remounted whenever the user switches views (Layout.tsx
+// renders each view with key={activeView}), which would otherwise reset the
+// in-flight order/orderPhase state to nothing. That matters most for
+// 'external' methods (card/Alipay), where the user leaves the app entirely to
+// pay in the system browser and may well switch views before coming back.
+// Stashing the order in localStorage lets the resume-on-mount effect below
+// pick the poll back up instead of silently losing track of the order.
+const PENDING_ORDER_KEY = 'ruanjian.pendingOrder'
+
+interface StoredPendingOrder { order: PaymentOrder; savedAt: number }
+
+function savePendingOrder(order: PaymentOrder): void {
+  try {
+    const record: StoredPendingOrder = { order, savedAt: Date.now() }
+    localStorage.setItem(PENDING_ORDER_KEY, JSON.stringify(record))
+  } catch { /* localStorage unavailable — payment still works, just won't survive navigation */ }
+}
+
+function loadPendingOrder(): StoredPendingOrder | null {
+  try {
+    const raw = localStorage.getItem(PENDING_ORDER_KEY)
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as Partial<StoredPendingOrder>
+    return parsed?.order?.orderId ? (parsed as StoredPendingOrder) : null
+  } catch {
+    return null
+  }
+}
+
+function clearPendingOrder(): void {
+  try { localStorage.removeItem(PENDING_ORDER_KEY) } catch { /* ignore */ }
+}
+
 export function SubscriptionView(): JSX.Element {
   const { t, i18n } = useTranslation()
   const { status, expiresAt, daysRemaining, graceDaysLeft, payload } =
@@ -49,8 +83,11 @@ export function SubscriptionView(): JSX.Element {
   const [selectedPlan,   setSelectedPlan]   = useState<PlanId>('monthly')
   const [selectedMethod, setSelectedMethod] = useState<PaymentMethod>('wechat_pay')
 
-  const [orderPhase, setOrderPhase] = useState<OrderPhase>('idle')
-  const [order,      setOrder]      = useState<PaymentOrder | null>(null)
+  // Lazily seeded from a pending order stashed before an earlier unmount
+  // (see PENDING_ORDER_KEY above) so the UI shows "waiting for payment"
+  // immediately instead of flashing back to the plan picker.
+  const [orderPhase, setOrderPhase] = useState<OrderPhase>(() => (loadPendingOrder() ? 'pending' : 'idle'))
+  const [order,      setOrder]      = useState<PaymentOrder | null>(() => loadPendingOrder()?.order ?? null)
   const [orderError, setOrderError] = useState<string | null>(null)
 
   const [history,        setHistory]        = useState<PaymentHistoryEntry[]>([])
@@ -86,23 +123,103 @@ export function SubscriptionView(): JSX.Element {
 
   useEffect(() => stopPolling, [stopPolling]) // clear timers on unmount
 
+  // Resolves 'success' only once the server has actually attached a usable
+  // license token (res.licensed) — not just status:'paid' — since a paid
+  // order whose license issuance failed separately must not be shown as a
+  // false success (see getOrderStatus's doc comment in subscription-monitor.ts).
   const checkOrder = useCallback((orderId: string) => {
     window.engine.getOrderStatus(orderId)
       .then((res) => {
         if (res.error) return // transient network hiccup — keep polling
-        if (res.status === 'paid') {
+        if (res.status === 'paid' && res.licensed) {
           stopPolling()
+          clearPendingOrder()
           window.engine.closeEmbeddedPayment().catch(() => {})
           setOrderPhase('success')
           loadHistory()
         } else if (res.status === 'failed' || res.status === 'expired') {
           stopPolling()
+          clearPendingOrder()
           setOrderPhase('error')
           setOrderError(t('subscription.paymentFailed'))
         }
+        // status === 'paid' but not yet licensed: keep polling — the order
+        // is paid but the app hasn't received a usable license token yet.
       })
       .catch(() => { /* transient — next tick will retry */ })
   }, [loadHistory, stopPolling, t])
+
+  // Shared by both a fresh checkout (handleSubscribe) and resuming a pending
+  // order restored from localStorage after a remount. `elapsedMs` shortens
+  // the timeout by however long the order has already been waiting.
+  const startPolling = useCallback((orderId: string, elapsedMs = 0) => {
+    const intervalMs  = config?.pollIntervalMs ?? 3_000
+    const timeoutMs   = config?.pollTimeoutMs  ?? 600_000
+    const remainingMs = Math.max(timeoutMs - elapsedMs, intervalMs)
+    pollTimer.current   = setInterval(() => checkOrder(orderId), intervalMs)
+    pollTimeout.current = setTimeout(() => {
+      stopPolling()
+      clearPendingOrder()
+      setOrderPhase('error')
+      setOrderError(t('subscription.paymentTimeout'))
+    }, remainingMs)
+  }, [config, checkOrder, stopPolling, t])
+
+  // Resume a pending order that survived a remount (e.g. the user switched
+  // views mid-payment). Runs once on mount; `order`/`orderPhase` were
+  // already seeded from the same stored record by the lazy useState above.
+  useEffect(() => {
+    const pending = loadPendingOrder()
+    if (!pending) return
+    const elapsedMs = Date.now() - pending.savedAt
+    const timeoutMs = config?.pollTimeoutMs ?? 600_000
+    if (elapsedMs >= timeoutMs) {
+      clearPendingOrder()
+      setOrderPhase('error')
+      setOrderError(t('subscription.paymentTimeout'))
+      return
+    }
+    checkOrder(pending.order.orderId) // immediate check in case it resolved while we were away
+    startPolling(pending.order.orderId, elapsedMs)
+    // Intentionally mount-only: re-running this on every config/checkOrder
+    // change would restart polling with a fresh timeout each time.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // WeChat Pay / Douyin Pay are shown in an embedded child window (see
+  // main/index.ts payment:open-embedded); if the user closes it manually
+  // without paying, there's no more window to wait on, so do one last check
+  // and stop spinning instead of waiting out the full poll timeout.
+  useEffect(() => {
+    return window.engine.onPaymentWindowClosed(() => {
+      if (orderPhase !== 'pending' || !order) return
+      window.engine.getOrderStatus(order.orderId)
+        .then((res) => {
+          if (res.status === 'paid' && res.licensed) {
+            stopPolling()
+            clearPendingOrder()
+            setOrderPhase('success')
+            loadHistory()
+          } else if (res.status === 'failed' || res.status === 'expired') {
+            stopPolling()
+            clearPendingOrder()
+            setOrderPhase('error')
+            setOrderError(t('subscription.paymentFailed'))
+          } else {
+            stopPolling()
+            clearPendingOrder()
+            setOrderPhase('error')
+            setOrderError(t('subscription.paymentWindowClosed'))
+          }
+        })
+        .catch(() => {
+          stopPolling()
+          clearPendingOrder()
+          setOrderPhase('error')
+          setOrderError(t('subscription.paymentWindowClosed'))
+        })
+    })
+  }, [order, orderPhase, stopPolling, loadHistory, t])
 
   async function handleSubscribe(): Promise<void> {
     setOrderError(null)
@@ -112,6 +229,7 @@ export function SubscriptionView(): JSX.Element {
       if (result.error) throw new Error(result.error)
       setOrder(result)
       setOrderPhase('pending')
+      savePendingOrder(result)
 
       if (result.presentAs === 'embedded' && result.redirectUrl) {
         await window.engine.openEmbeddedPayment(result.redirectUrl)
@@ -119,14 +237,7 @@ export function SubscriptionView(): JSX.Element {
         window.open(result.redirectUrl, '_blank', 'noopener,noreferrer')
       }
 
-      const intervalMs = config?.pollIntervalMs ?? 3_000
-      const timeoutMs  = config?.pollTimeoutMs  ?? 600_000
-      pollTimer.current   = setInterval(() => checkOrder(result.orderId), intervalMs)
-      pollTimeout.current = setTimeout(() => {
-        stopPolling()
-        setOrderPhase('error')
-        setOrderError(t('subscription.paymentTimeout'))
-      }, timeoutMs)
+      startPolling(result.orderId)
     } catch (err) {
       setOrderPhase('error')
       setOrderError(String(err))
@@ -135,6 +246,7 @@ export function SubscriptionView(): JSX.Element {
 
   function handleCancelOrder(): void {
     stopPolling()
+    clearPendingOrder()
     window.engine.closeEmbeddedPayment().catch(() => {})
     setOrderPhase('idle')
     setOrder(null)
@@ -142,6 +254,7 @@ export function SubscriptionView(): JSX.Element {
   }
 
   function handleRetry(): void {
+    clearPendingOrder()
     setOrderPhase('idle')
     setOrder(null)
     setOrderError(null)
