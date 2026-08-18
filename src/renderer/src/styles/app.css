@@ -1,43 +1,135 @@
 :root {
-  --bg:         #0f1117;
-  --bg-panel:   #1a1d27;
-  --bg-hover:   #22263a;
-  --accent:     #6366f1;
-  --accent-dim: #4f52c5;
-  --success:    #22c55e;
-  --danger:     #ef4444;
-  --text:       #e2e8f0;
-  --text-muted: #8892a4;
-  --border:     #2d3148;
-  --radius:     8px;
-  --sidebar-w:  220px;
+  --bg-solid:       #0f1117;
+  --bg-panel-solid: #1a1d27;
+  --bg:             var(--bg-solid);
+  --bg-panel:       var(--bg-panel-solid);
+  --bg-hover:       #22263a;
+  --accent:         #6366f1;
+  --accent-dim:     #4f52c5;
+  --accent-active:  #4144a8;
+  --on-accent:      #ffffff;
+  --success:        #22c55e;
+  --warning:        #f59e0b;
+  --danger:         #ef4444;
+  --text:           #e2e8f0;
+  --text-muted:     #8892a4;
+  --border:         #2d3148;
+  --radius:         8px;
+  --sidebar-w:      220px;
+
+  /* Font settings (Ticket 27) — --font-family/--ui-scale are set inline on
+     <html> by useSettingsStore before first paint. --ui-scale drives the
+     `zoom` rule below rather than font-size directly, since most of this
+     file is written in px: zooming scales text, spacing and icons together
+     instead of only text growing out of its layout. */
+  --font-family: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
+  --ui-scale:    1;
+
+  /* Custom background image (Ticket 27) — url(...) or 'none', set inline by
+     useSettingsStore. */
+  --bg-image:   none;
+  --bg-overlay: rgba(8, 10, 16, 0.52);
+
+  /* Semantic aliases so the app's design tokens read the way Ticket 27
+     names them, without renaming every existing --accent/--bg/--text usage
+     throughout this file — both names always refer to the same values. */
+  --color-primary:          var(--accent);
+  --color-primary-hover:    var(--accent-dim);
+  --color-primary-active:   var(--accent-active);
+  --color-background:       var(--bg);
+  --color-surface:          var(--bg-panel);
+  --color-text-primary:     var(--text);
+  --color-text-secondary:   var(--text-muted);
+  --color-border:           var(--border);
+  --color-success:          var(--success);
+  --color-warning:          var(--warning);
+  --color-error:            var(--danger);
+  --color-scrollbar:        var(--border);
+  --color-player-controls:  var(--accent);
 }
 
 /* Light appearance — toggled by useSettingsStore via document.documentElement's
    data-appearance attribute. --accent/--accent-dim are set inline by that
    same store (theme colour), so they aren't repeated here. */
 :root[data-appearance='light'] {
-  --bg:         #f3f4f8;
-  --bg-panel:   #ffffff;
-  --bg-hover:   #eceef5;
-  --success:    #16a34a;
-  --danger:     #dc2626;
-  --text:       #1a1d27;
-  --text-muted: #64748b;
-  --border:     #dde1ec;
+  --bg-solid:       #f3f4f8;
+  --bg-panel-solid: #ffffff;
+  --bg-hover:       #eceef5;
+  --success:        #16a34a;
+  --warning:        #d97706;
+  --danger:         #dc2626;
+  --text:           #1a1d27;
+  --text-muted:     #64748b;
+  --border:         #dde1ec;
+}
+
+/* Custom background image (Ticket 27) — surfaces go semi-transparent so the
+   blurred backdrop shows through underneath cards/panels, while the app
+   window itself (html/body) turns fully transparent so the fixed
+   .app-bg-layer behind it is what actually shows in the gaps between them. */
+:root[data-has-bg-image='true'] {
+  --bg:       color-mix(in srgb, var(--bg-solid) 90%, transparent);
+  --bg-panel: color-mix(in srgb, var(--bg-panel-solid) 86%, transparent);
 }
 
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html {
+  height: 100%;
+  /* See --ui-scale above: this is how the font-size setting scales the
+     whole UI rather than just text. Falls back to no-op zoom in engines
+     that don't support it (rendered size stays at the CSS px values). */
+  zoom: var(--ui-scale);
+}
 
 html, body, #root {
   height: 100%;
   background: var(--bg);
   color: var(--text);
-  font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
+  font-family: var(--font-family);
   font-size: 14px;
   -webkit-font-smoothing: antialiased;
   transition: background 0.15s, color 0.15s;
 }
+
+:root[data-has-bg-image='true'] body { background: transparent; }
+
+/* ── Custom background image layer ──────────────────────── */
+/* Sits behind .app-layout (which is otherwise transparent over it), holding
+   the pre-blurred image plus a dark overlay for text contrast. Pre-blurring
+   happens once at upload time (see utils/backgroundImage.ts) so this layer
+   is a static image paint, not a live CSS blur recomputed every frame. */
+.app-bg-layer {
+  position: fixed;
+  inset: 0;
+  /* Negative so it paints behind .app-layout and its (all unpositioned)
+     descendants without needing to give every one of them an explicit
+     stacking context / z-index of its own. */
+  z-index: -1;
+  background-image: var(--bg-image);
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  pointer-events: none;
+  transform: translateZ(0);
+  will-change: transform;
+}
+.app-bg-layer::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: var(--bg-overlay);
+}
+
+/* ── Themed scrollbars ───────────────────────────────────── */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-scrollbar) transparent;
+}
+*::-webkit-scrollbar           { width: 10px; height: 10px; }
+*::-webkit-scrollbar-track     { background: transparent; }
+*::-webkit-scrollbar-thumb     { background: var(--color-scrollbar); border-radius: 6px; border: 2px solid transparent; background-clip: padding-box; }
+*::-webkit-scrollbar-thumb:hover { background: var(--text-muted); background-clip: padding-box; }
 
 /* ── Layout ─────────────────────────────────────────────── */
 .app-layout {
@@ -219,10 +311,11 @@ html, body, #root {
 
 .btn-primary {
   background: var(--accent);
-  color: #fff;
+  color: var(--on-accent);
 }
 
-.btn-primary:hover:not(:disabled) { background: var(--accent-dim); }
+.btn-primary:hover:not(:disabled)  { background: var(--accent-dim); }
+.btn-primary:active:not(:disabled) { background: var(--accent-active); }
 .btn-primary:disabled              { opacity: 0.45; cursor: not-allowed; }
 
 .btn-ghost {
@@ -434,9 +527,9 @@ html, body, #root {
 .player-play-btn {
   width: 36px; height: 36px;
   border-radius: 50%;
-  background: var(--accent);
+  background: var(--color-player-controls);
   border: none;
-  color: #fff;
+  color: var(--on-accent);
   font-size: 14px;
   cursor: pointer;
   display: flex; align-items: center; justify-content: center;
@@ -569,7 +662,7 @@ html, body, #root {
   border: 2px solid currentColor;
   transition: background 0.15s;
 }
-.wizard-step.active .step-circle { background: var(--accent); color: #fff; }
+.wizard-step.active .step-circle { background: var(--accent); color: var(--on-accent); }
 .wizard-step.done   .step-circle { background: var(--success); color: #fff; }
 
 .step-label   { font-size: 11px; white-space: nowrap; }
@@ -1392,6 +1485,9 @@ html, body, #root {
 }
 .appearance-icon { font-size: 24px; }
 
+.settings-subhead { font-size: 12px; font-weight: 600; color: var(--text-muted); margin-bottom: 10px; }
+.settings-subhead-spaced { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--border); }
+
 .swatch-grid { display: flex; flex-wrap: wrap; gap: 14px; }
 
 .swatch-btn {
@@ -1432,3 +1528,84 @@ html, body, #root {
 .avatar-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .avatar-hint  { flex-basis: 100%; font-size: 11px; color: var(--text-muted); margin-top: 2px; }
 .avatar-error { flex-basis: 100%; font-size: 11px; color: var(--danger); margin-top: 2px; }
+
+/* ── Appearance: font settings ───────────────────────────── */
+.font-family-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+
+.font-family-option {
+  padding: 12px 8px;
+  border-radius: var(--radius);
+  border: 2px solid var(--border);
+  background: var(--bg);
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 13px;
+  text-align: center;
+  transition: border-color 0.15s, background 0.15s, color 0.15s;
+}
+.font-family-option:hover    { border-color: var(--accent); color: var(--text); }
+.font-family-option.selected {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+.font-family-sample { display: block; font-size: 16px; margin-bottom: 4px; }
+
+.font-size-row { display: flex; align-items: center; gap: 14px; margin-top: 18px; }
+.font-size-row .field-label { font-size: 12px; color: var(--text-muted); flex-shrink: 0; }
+.font-size-slider { flex: 1; accent-color: var(--accent); }
+.font-size-value {
+  flex-shrink: 0;
+  width: 46px;
+  text-align: center;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.font-size-preview {
+  margin-top: 12px;
+  padding: 12px 14px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+}
+.font-size-preview-sub { color: var(--text-muted); font-size: 0.85em; margin-top: 3px; }
+
+/* ── Appearance: custom colour picker ────────────────────── */
+.custom-accent-row { display: flex; align-items: center; gap: 12px; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border); }
+.custom-accent-swatch {
+  width: 36px; height: 36px;
+  border-radius: 50%;
+  border: 2px solid var(--border);
+  padding: 0;
+  cursor: pointer;
+  background: none;
+}
+.custom-accent-label { font-size: 12px; color: var(--text-muted); flex: 1; }
+
+/* ── Appearance: background image ────────────────────────── */
+.bg-upload-row { display: flex; align-items: center; gap: 20px; }
+
+.bg-preview {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 120px;
+  height: 72px;
+  border-radius: var(--radius);
+  border: 1px dashed var(--border);
+  cursor: pointer;
+  overflow: hidden;
+  flex-shrink: 0;
+  transition: border-color 0.15s;
+  background: var(--bg);
+}
+.bg-preview:hover { border-color: var(--accent); }
+.bg-preview img { width: 100%; height: 100%; object-fit: cover; }
+.bg-preview-placeholder { font-size: 22px; opacity: 0.7; }
+
+.bg-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.bg-hint  { flex-basis: 100%; font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+.bg-error { flex-basis: 100%; font-size: 11px; color: var(--danger); margin-top: 2px; }

@@ -47,6 +47,7 @@ function App(): JSX.Element {
 
   return (
     <>
+      <div className="app-bg-layer" aria-hidden="true" />
       <ErrorBoundary label="root">
         <Layout />
       </ErrorBoundary>
