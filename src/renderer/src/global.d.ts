@@ -24,6 +24,24 @@ interface WarmupResult {
   error?:     string
 }
 
+// Mirrors main/background-store.ts (Ticket 27/30).
+export interface BackgroundMeta {
+  overlayOpacity: number
+  blurPx:         number
+  brightWarning:  boolean
+}
+export interface SaveBackgroundPayload {
+  blurredDataUrl: string
+  previewDataUrl: string
+  sourceDataUrl:  string
+  meta:           BackgroundMeta
+}
+export interface LoadedBackground {
+  blurredDataUrl: string
+  previewDataUrl: string
+  meta:           BackgroundMeta
+}
+
 declare global {
   interface Window {
     engine: {
@@ -73,6 +91,12 @@ declare global {
       openEmbeddedPayment:  (url: string) => Promise<void>
       closeEmbeddedPayment: () => Promise<void>
       onPaymentWindowClosed: (cb: () => void) => () => void
+      // Custom background image persistence (Ticket 27/30)
+      saveBackgroundImage:   (payload: SaveBackgroundPayload) => Promise<void>
+      saveBackgroundMeta:    (meta: BackgroundMeta) => Promise<void>
+      loadBackgroundImage:   () => Promise<LoadedBackground | { missing: true } | null>
+      loadBackgroundSource:  () => Promise<string | null>
+      removeBackgroundImage: () => Promise<void>
     }
   }
 }

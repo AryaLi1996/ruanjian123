@@ -3,8 +3,16 @@
 // value — used both for the built-in presets and for the custom colour
 // picker (Ticket 27), so a user-chosen accent gets the same treatment as a
 // hand-picked preset instead of only working with the exact base colour.
+//
+// Ticket 29 adds contrast-correction: rather than trusting that a preset or
+// custom pick already reads clearly against the app's dark (or light)
+// surfaces, `ensureContrast` nudges lightness/saturation until the colour
+// clears WCAG AA, and `deriveAccentShades` applies that correction before
+// deriving hover/active so every accent in the app — default, preset, or
+// custom — is guaranteed to be legible rather than merely "probably fine".
 
 interface Rgb { r: number; g: number; b: number }
+interface Hsl { h: number; s: number; l: number }
 
 function clamp01(n: number): number {
   return Math.min(1, Math.max(0, n))
@@ -26,7 +34,7 @@ export function rgbToHex({ r, g, b }: Rgb): string {
   return `#${h(r)}${h(g)}${h(b)}`
 }
 
-function rgbToHsl({ r, g, b }: Rgb): { h: number; s: number; l: number } {
+function rgbToHsl({ r, g, b }: Rgb): Hsl {
   const rn = r / 255, gn = g / 255, bn = b / 255
   const max = Math.max(rn, gn, bn), min = Math.min(rn, gn, bn)
   const l = (max + min) / 2
@@ -62,9 +70,9 @@ function hslToRgb(h: number, s: number, l: number): Rgb {
   }
 }
 
-// Shifts HSL lightness by `delta` (e.g. -0.1 = 10% darker), used for
-// hover/active shades so any accent — preset or custom-picked — gets
-// consistent, readable state colours.
+// Shifts HSL lightness and (optionally) saturation by the given deltas,
+// clamped to valid ranges. `shiftLightness` alone is kept for callers that
+// only need the old single-axis behaviour.
 export function shiftLightness(hex: string, delta: number): string {
   const rgb = hexToRgb(hex)
   if (!rgb) return hex
@@ -72,14 +80,33 @@ export function shiftLightness(hex: string, delta: number): string {
   return rgbToHex(hslToRgb(h, s, clamp01(l + delta)))
 }
 
-// WCAG relative luminance, used to pick readable text over an accent-coloured
-// surface (e.g. the primary button, the selected accent swatch's checkmark).
+function shiftHsl(hex: string, lightnessDelta: number, saturationDelta: number): string {
+  const rgb = hexToRgb(hex)
+  if (!rgb) return hex
+  const { h, s, l } = rgbToHsl(rgb)
+  return rgbToHex(hslToRgb(h, clamp01(s + saturationDelta), clamp01(l + lightnessDelta)))
+}
+
+// WCAG relative luminance — the basis for both contrast-ratio checks and for
+// picking readable text over an accent-coloured surface.
 function relativeLuminance({ r, g, b }: Rgb): number {
   const lin = (c: number) => {
     const cs = c / 255
     return cs <= 0.03928 ? cs / 12.92 : Math.pow((cs + 0.055) / 1.055, 2.4)
   }
   return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b)
+}
+
+// WCAG 2.x contrast ratio between two colours, 1 (identical) to 21 (black on
+// white). Exported so the Settings page can show a live "meets AA" readout
+// (Ticket 29 requirement: built-in contrast checker) without duplicating the
+// luminance maths.
+export function contrastRatio(hexA: string, hexB: string): number {
+  const rgbA = hexToRgb(hexA), rgbB = hexToRgb(hexB)
+  if (!rgbA || !rgbB) return 1
+  const lA = relativeLuminance(rgbA), lB = relativeLuminance(rgbB)
+  const lighter = Math.max(lA, lB), darker = Math.min(lA, lB)
+  return (lighter + 0.05) / (darker + 0.05)
 }
 
 // Returns near-black or near-white — whichever gives the stronger contrast
@@ -97,21 +124,77 @@ export function isValidHexColor(value: string): boolean {
   return hexToRgb(value) !== null
 }
 
+// Pushes `hex` away from `bgHex`'s lightness (and boosts saturation a touch,
+// since a colour desaturates as it approaches white/black) until it clears
+// `target` contrast against that background, or until lightness hits a
+// sane floor/ceiling. Hue is preserved throughout, so the corrected colour
+// still reads as "the same accent", just legible — this is what lets a
+// low-contrast preset or a poorly-chosen custom colour still meet WCAG AA
+// (Ticket 29 §1/§4) without the user having to pick a better one by hand.
+//
+// A colour that already clears `target` is returned untouched (just
+// hex-normalized) — several brand presets (Spotify's #1DB954, for one)
+// already pass comfortably, and the saturation boost used to apply
+// unconditionally, silently drifting those exact, ticket-specified brand
+// hexes even when no correction was needed.
+export function ensureContrast(hex: string, bgHex: string, target = 4.5): string {
+  const rgb = hexToRgb(hex)
+  const bgRgb = hexToRgb(bgHex)
+  if (!rgb || !bgRgb) return hex
+  const normalized = rgbToHex(rgb)
+  if (contrastRatio(normalized, bgHex) >= target) return normalized
+
+  const bgIsDark = relativeLuminance(bgRgb) < 0.5
+  let { h, s, l } = rgbToHsl(rgb)
+  s = clamp01(s + 0.06)
+  let cur = rgbToHex(hslToRgb(h, s, l))
+  const step = bgIsDark ? 0.005 : -0.005
+  let guard = 0
+  while (contrastRatio(cur, bgHex) < target && l > 0.08 && l < 0.94 && guard < 300) {
+    l += step
+    cur = rgbToHex(hslToRgb(h, s, clamp01(l)))
+    guard++
+  }
+  return cur
+}
+
 export interface DerivedAccent {
   accent:       string
   accentHover:  string
   accentActive: string
   onAccent:     string
+  /** Contrast ratio of `accent` against the surface colour it was corrected for — surfaced for the Settings contrast readout. */
+  contrastOnSurface: number
 }
 
-// Builds the full hover/active/on-accent set from a single base colour.
-export function deriveAccentShades(baseHex: string): DerivedAccent {
+// Builds the full hover/active/on-accent set from a single base colour,
+// contrast-corrected against `surfaceHex` (the panel/card background the
+// accent will most often sit on or near).
+//
+// Hover/active follow the guide's "natural light" rule instead of a flat
+// darken-by-N%: reducing light on a surface makes it look both darker *and*
+// more saturated (a shadowed apple looks deeper red, not just dimmer grey),
+// while a highlight looks lighter *and* slightly washed out. So hover
+// (highlighted, about-to-interact) goes lighter + less saturated, and active
+// (pressed, "light reduced") goes darker + more saturated.
+export function deriveAccentShades(baseHex: string, surfaceHex: string, target = 4.5): DerivedAccent {
   const rgb = hexToRgb(baseHex)
-  const accent = rgb ? rgbToHex(rgb) : baseHex
+  const normalized = rgb ? rgbToHex(rgb) : baseHex
+  const accent = ensureContrast(normalized, surfaceHex, target)
   return {
     accent,
-    accentHover:  shiftLightness(accent, -0.08),
-    accentActive: shiftLightness(accent, -0.16),
+    accentHover:  shiftHsl(accent, +0.08, -0.10),
+    accentActive: shiftHsl(accent, -0.08, +0.12),
     onAccent:     contrastText(accent),
+    contrastOnSurface: contrastRatio(accent, surfaceHex),
   }
 }
+
+// The dark/light panel background the theming system corrects contrast
+// against — kept in sync by hand with app.css's --bg-panel-solid (dark
+// default and the :root[data-appearance='light'] override). These are the
+// "30% surface" tier of the 60-30-10 split, since accent-as-text or
+// accent-as-border most commonly sits on a card/panel rather than directly
+// on the page background.
+export const PANEL_BG_DARK = '#1a1d27'
+export const PANEL_BG_LIGHT = '#ffffff'
