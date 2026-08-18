@@ -1,3 +1,9 @@
+import type {
+  LicenseConfig,
+  PaymentOrder,
+  PaymentHistoryEntry,
+} from './store/subscription-types'
+
 export interface PersistedModel {
   id:            string
   name:          string
@@ -58,8 +64,15 @@ declare global {
       activateLicense:      (key: string) => Promise<unknown>
       deactivateLicense:    () => Promise<void>
       refreshLicense:       () => Promise<void>
-      getLicenseConfig:     () => Promise<{ checkoutUrl: string }>
+      getLicenseConfig:     () => Promise<LicenseConfig>
       onLicenseStateChange: (cb: (state: unknown) => void) => () => void
+      // Multi-channel payment (Ticket 28)
+      createPaymentOrder: (planId: string, method: string) => Promise<PaymentOrder & { error?: string }>
+      getOrderStatus:     (orderId: string) => Promise<{ status: string; order?: PaymentOrder; error?: string }>
+      getPaymentHistory:  () => Promise<PaymentHistoryEntry[]>
+      openEmbeddedPayment:  (url: string) => Promise<void>
+      closeEmbeddedPayment: () => Promise<void>
+      onPaymentWindowClosed: (cb: () => void) => () => void
     }
   }
 }

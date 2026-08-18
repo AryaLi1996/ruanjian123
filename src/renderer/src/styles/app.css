@@ -861,6 +861,58 @@ html, body, #root {
 .sub-demo-hint { font-size: 11px; color: var(--text-muted); margin-top: 8px; }
 .sub-demo-hint code { background: var(--bg-hover); padding: 1px 5px; border-radius: 3px; }
 
+/* ── Multi-channel payment: plan / method picker (Ticket 28) ─── */
+.sub-field-label { display: block; font-size: 12px; color: var(--text-muted); margin-bottom: 8px; }
+.sub-plan-picker, .sub-method-picker { margin-bottom: 16px; }
+
+.sub-option-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 8px; }
+
+.sub-option {
+  display: flex; flex-direction: column; align-items: center; gap: 6px;
+  background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 12px 8px; cursor: pointer; font-size: 13px; color: var(--text);
+  transition: border-color 0.15s, background 0.15s;
+}
+.sub-option:hover { border-color: var(--accent); }
+.sub-option-selected {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, var(--bg));
+}
+.sub-option strong { font-size: 13px; }
+.sub-option span:not(.sub-method-badge) { font-size: 12px; color: var(--text-muted); }
+
+.sub-method-badge {
+  width: 28px; height: 28px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  color: #fff; font-size: 13px; font-weight: 600;
+}
+
+/* ── Order status (creating / pending / success / error) ─────── */
+.sub-order-status {
+  display: flex; flex-direction: column; align-items: center; text-align: center;
+  gap: 6px; padding: 24px 16px; background: var(--bg);
+  border: 1px solid var(--border); border-radius: var(--radius);
+}
+.sub-order-status .error-banner,
+.sub-order-status .sub-success { width: 100%; text-align: left; }
+
+.sub-spinner {
+  width: 28px; height: 28px; border-radius: 50%;
+  border: 3px solid var(--border); border-top-color: var(--accent);
+  animation: sub-spin 0.8s linear infinite; margin-bottom: 4px;
+}
+@keyframes sub-spin { to { transform: rotate(360deg); } }
+
+/* ── Payment history table ────────────────────────────────────── */
+.sub-history-table-wrap { overflow-x: auto; }
+.sub-history-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.sub-history-table th {
+  text-align: left; color: var(--text-muted); font-weight: 500; font-size: 12px;
+  padding: 8px 10px; border-bottom: 1px solid var(--border);
+}
+.sub-history-table td { padding: 8px 10px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+.sub-history-table tr:last-child td { border-bottom: none; }
+
 /* ── Grace period banner (top of content area) ───────────── */
 .grace-banner {
   display: flex;

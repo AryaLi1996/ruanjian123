@@ -6,12 +6,12 @@
  * Grace period:  features stay active for LICENSE_CONFIG.gracePeriodDays after expiry.
  * Offline:       last valid local token is used; grace period absorbs network outages.
  */
-import { createHmac, timingSafeEqual } from 'crypto'
+import { createHmac, timingSafeEqual, randomUUID } from 'crypto'
 import { promises as fs, existsSync }   from 'fs'
 import { join }                          from 'path'
 import { EventEmitter }                  from 'events'
 import { app }                           from 'electron'
-import { LICENSE_CONFIG }                from './license-config'
+import { LICENSE_CONFIG, type PaymentMethod, type PlanId } from './license-config'
 import { encryptModelBytes, decryptModelBytes } from './model-crypto'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -45,6 +45,39 @@ export interface ActivationResult {
   success: boolean
   error?:  string
   state?:  SubscriptionState
+}
+
+// ── Payment orders (Ticket 28) ──────────────────────────────────────────────
+
+export type OrderStatus = 'pending' | 'paid' | 'failed' | 'expired'
+
+export interface PaymentOrder {
+  orderId:     string
+  planId:      PlanId
+  method:      PaymentMethod
+  status:      OrderStatus
+  amount:      number
+  currency:    string
+  createdAt:   number
+  // 'embedded': open url in an in-app Electron BrowserWindow (modal-like) —
+  //             used for WeChat Pay / Douyin Pay, whose hosted pages render
+  //             their own QR code when loaded from a non-mobile context.
+  // 'external': open url in the system default browser — used for Alipay and
+  //             card, where the user benefits from their existing session /
+  //             saved autofill and a clearer trust boundary.
+  presentAs?:  'embedded' | 'external'
+  redirectUrl?: string
+}
+
+export interface PaymentHistoryEntry {
+  orderId:   string
+  planId:    PlanId
+  method:    PaymentMethod
+  status:    OrderStatus
+  amount:    number
+  currency:  string
+  createdAt: number
+  paidAt?:   number
 }
 
 // ── Token helpers ─────────────────────────────────────────────────────────────
@@ -99,6 +132,20 @@ export class SubscriptionMonitor extends EventEmitter {
   // ── Paths ───────────────────────────────────────────────────────────────────
   private get _tokenPath(): string { return join(app.getPath('userData'), 'license.enc') }
   private get _tsPath():    string { return join(app.getPath('userData'), '.license_ts') }
+  private get _anonIdPath(): string { return join(app.getPath('userData'), '.anon_id') }
+
+  // ── Anonymous user ID ───────────────────────────────────────────────────────
+  // No account system: payments/licenses are tied to a random ID generated on
+  // first use and persisted locally, per Ticket 28 §4.
+  private async _getOrCreateAnonId(): Promise<string> {
+    try {
+      const id = (await fs.readFile(this._anonIdPath, 'utf8')).trim()
+      if (id) return id
+    } catch { /* not created yet */ }
+    const id = randomUUID()
+    await fs.writeFile(this._anonIdPath, id, { mode: 0o600 })
+    return id
+  }
 
   // ── Anti-clock-tamper ───────────────────────────────────────────────────────
   private async _maxSeenTs(): Promise<number> {
@@ -251,31 +298,86 @@ export class SubscriptionMonitor extends EventEmitter {
   }
 
   // ── Server call ─────────────────────────────────────────────────────────────
-  private async _verifyWithServer(licenseKey: string): Promise<string> {
+  // Every route (license verify, order creation/status, payment history) lives
+  // on the same Function URL, dispatched server-side by path — see handler.py.
+  private async _request<T = unknown>(method: 'GET' | 'POST', path: string, body?: Record<string, unknown>): Promise<T> {
     if (!LICENSE_CONFIG.verificationUrl) {
       throw new Error(
         'License verification URL is not configured. Set LICENSE_URL to the deployed Lambda Function URL.',
       )
     }
     const { net } = await import('electron')
-    const req     = net.request({ method: 'POST', url: LICENSE_CONFIG.verificationUrl })
+    const base = LICENSE_CONFIG.verificationUrl.replace(/\/+$/, '')
+    const req  = net.request({ method, url: `${base}/${path}` })
     return new Promise((resolve, reject) => {
-      let body = ''
+      let respBody = ''
       req.on('response', (res) => {
-        res.on('data', (c: Buffer) => { body += c.toString() })
+        res.on('data', (c: Buffer) => { respBody += c.toString() })
         res.on('end', () => {
-          try {
-            const d = JSON.parse(body) as { token?: string; valid?: boolean; error?: string }
-            if (d.token && d.valid) resolve(d.token)
-            else reject(new Error(d.error ?? 'Verification failed'))
-          } catch { reject(new Error('Invalid server response')) }
+          try { resolve(JSON.parse(respBody)) } catch { reject(new Error('Invalid server response')) }
         })
       })
       req.on('error', (e: Error) => reject(e))
-      req.setHeader('Content-Type', 'application/json')
-      req.write(JSON.stringify({ licenseKey, appVersion: app.getVersion() }))
+      if (body !== undefined) {
+        req.setHeader('Content-Type', 'application/json')
+        req.write(JSON.stringify(body))
+      }
       req.end()
     })
+  }
+
+  private async _verifyWithServer(licenseKey: string): Promise<string> {
+    const d = await this._request('POST', '', { licenseKey, appVersion: app.getVersion() }) as
+      { token?: string; valid?: boolean; error?: string }
+    if (d.token && d.valid) return d.token
+    throw new Error(d.error ?? 'Verification failed')
+  }
+
+  // ── Payment orders (Ticket 28) ──────────────────────────────────────────────
+
+  async createOrder(planId: PlanId, method: PaymentMethod): Promise<PaymentOrder> {
+    const userId = await this._getOrCreateAnonId()
+    const d = await this._request('POST', 'create-order', {
+      planId, method, userId, appVersion: app.getVersion(),
+    }) as PaymentOrder & { error?: string }
+    if (d.error) throw new Error(d.error)
+    return d
+  }
+
+  /**
+   * Single status check — the renderer polls this on an interval (cancellable
+   * by the user) rather than us holding one long-lived request open. When the
+   * order has just been paid, saves and applies the new/extended license token
+   * so the subscription monitor updates without an app restart.
+   */
+  async getOrderStatus(orderId: string): Promise<{ status: OrderStatus; order?: PaymentOrder }> {
+    const userId = await this._getOrCreateAnonId()
+    const d = await this._request(
+      'GET',
+      `order-status?orderId=${encodeURIComponent(orderId)}&userId=${encodeURIComponent(userId)}`,
+    ) as { status: OrderStatus; order?: PaymentOrder; token?: string; error?: string }
+    if (d.error) throw new Error(d.error)
+
+    if (d.status === 'paid' && d.token) {
+      const payload = verifyToken(d.token)
+      if (payload) {
+        await this._saveToken(d.token)
+        const now    = Math.floor(Date.now() / 1000)
+        await this._saveMaxSeenTs(now)
+        const status = this._resolveStatus(payload, now)
+        this._setState(this._buildState(status, payload, now))
+        this._startRefreshTimer()
+      }
+    }
+    return { status: d.status, order: d.order }
+  }
+
+  async getPaymentHistory(): Promise<PaymentHistoryEntry[]> {
+    const userId = await this._getOrCreateAnonId()
+    const d = await this._request('GET', `payment-history?userId=${encodeURIComponent(userId)}`) as
+      { orders?: PaymentHistoryEntry[]; error?: string }
+    if (d.error) throw new Error(d.error)
+    return Array.isArray(d.orders) ? d.orders : []
   }
 
   // ── Background refresh timer ────────────────────────────────────────────────
