@@ -23,9 +23,10 @@ interface Props {
   onImportLyrics:   (lines: LyricLine[]) => void
   songTitle:        string
   onlineSearchAllowed: boolean
+  coverArtUrl?:     string | null
 }
 
-const WINDOW = 20   // render current line ± WINDOW to cap DOM node count
+const WINDOW = 30   // render current line ± WINDOW to cap DOM node count
 
 function formatDuration(sec: number | null): string {
   if (sec == null || !Number.isFinite(sec)) return ''
@@ -36,12 +37,20 @@ function formatDuration(sec: number | null): string {
 
 export function LyricsPanel({
   lines, currentIndex, collapsed, onToggleCollapse, onSeek, onImportFile, onImportLyrics,
-  songTitle, onlineSearchAllowed,
+  songTitle, onlineSearchAllowed, coverArtUrl,
 }: Props): JSX.Element {
   const { t } = useTranslation()
   const [fontSize, setFontSize] = useState(16)
   const [theme, setTheme] = useState<'dark' | 'light'>('dark')
   const [dragging, setDragging] = useState(false)
+  const [fullscreen, setFullscreen] = useState(false)
+
+  useEffect(() => {
+    if (!fullscreen) return
+    const onKey = (e: KeyboardEvent): void => { if (e.key === 'Escape') setFullscreen(false) }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [fullscreen])
 
   const [searchOpen, setSearchOpen] = useState(false)
   const [query, setQuery] = useState('')
@@ -101,27 +110,37 @@ export function LyricsPanel({
   const end = Math.min(lines.length, currentIndex + WINDOW + 1)
   const visible = lines.slice(start, end)
 
+  const effectiveCollapsed = collapsed && !fullscreen
+
   return (
-    <div className={`card pbm-lyrics${collapsed ? ' collapsed' : ''} theme-${theme}`}>
+    <div className={`card pbm-lyrics${effectiveCollapsed ? ' collapsed' : ''}${fullscreen ? ' fullscreen' : ''}${coverArtUrl ? ' has-backdrop' : ''} theme-${theme}`}>
+      {coverArtUrl && <div className="pbm-lyrics-backdrop" style={{ backgroundImage: `url(${coverArtUrl})` }} />}
+      <div className="pbm-lyrics-content">
       <div className="pbm-lyrics-header">
         <span className="pbm-panel-title" style={{ marginBottom: 0 }}>{t('playback.lyrics')}</span>
         <div className="row" style={{ gap: 6 }}>
-          {!collapsed && (
+          {(!collapsed || fullscreen) && (
             <>
               <button className="btn btn-ghost pbm-mini-btn" onClick={() => setFontSize((s) => Math.max(11, s - 2))}>A-</button>
               <button className="btn btn-ghost pbm-mini-btn" onClick={() => setFontSize((s) => Math.min(28, s + 2))}>A+</button>
               <button className="btn btn-ghost pbm-mini-btn" onClick={() => setTheme((th) => th === 'dark' ? 'light' : 'dark')}>
                 {theme === 'dark' ? '🌙' : '☀️'}
               </button>
+              <button className="btn btn-ghost pbm-mini-btn" onClick={() => setFullscreen((f) => !f)}
+                title={fullscreen ? t('playback.exitFullscreen') : t('playback.enterFullscreen')}>
+                {fullscreen ? '⤡' : '⤢'}
+              </button>
             </>
           )}
-          <button className="btn btn-ghost pbm-mini-btn" onClick={onToggleCollapse}>
-            {collapsed ? t('playback.expand') : t('playback.collapse')}
-          </button>
+          {!fullscreen && (
+            <button className="btn btn-ghost pbm-mini-btn" onClick={onToggleCollapse}>
+              {collapsed ? t('playback.expand') : t('playback.collapse')}
+            </button>
+          )}
         </div>
       </div>
 
-      {!collapsed && (
+      {!effectiveCollapsed && (
         <>
           <div className="row" style={{ gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
             <button className="btn btn-ghost" onClick={() => inputRef.current?.click()}>
@@ -179,6 +198,7 @@ export function LyricsPanel({
           )}
         </>
       )}
+      </div>
 
       {searchOpen && (
         <div className="pbm-lyrics-search-overlay" onMouseDown={(e) => { if (e.target === e.currentTarget) setSearchOpen(false) }}>

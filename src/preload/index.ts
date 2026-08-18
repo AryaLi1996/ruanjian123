@@ -36,6 +36,10 @@ contextBridge.exposeInMainWorld('engine', {
   logRendererError: (payload: unknown): Promise<void> =>
     ipcRenderer.invoke('log:renderer-error', payload),
 
+  // Reveal a song's source file in the OS file manager (Playback/Monitor song list)
+  showInFolder: (filePath: string): Promise<void> =>
+    ipcRenderer.invoke('fs:show-in-folder', filePath),
+
   // Model encryption / decryption (machine-bound AES-256-GCM)
   encryptModel:     (modelPath: string): Promise<{ encPath: string; sizeBytes: number }> =>
     ipcRenderer.invoke('model:encrypt', modelPath),

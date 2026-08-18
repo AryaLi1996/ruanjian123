@@ -267,6 +267,11 @@ ipcMain.handle('log:renderer-error', (_event, payload: unknown) => {
   log.error('[renderer] uncaught error', payload)
 })
 
+// Reveal a song's source file in the OS file manager (Playback/Monitor song list)
+ipcMain.handle('fs:show-in-folder', (_event, filePath: string) => {
+  shell.showItemInFolder(filePath)
+})
+
 // Online lyrics search (Playback/Monitor page) — proxied through main so the
 // renderer's CSP (connect-src 'self') doesn't have to allow third-party hosts.
 interface LyricsSearchResult {
