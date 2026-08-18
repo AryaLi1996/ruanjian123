@@ -8,6 +8,10 @@ import { setupAutoUpdater, downloadUpdate, quitAndInstall } from './auto-updater
 import { SubscriptionMonitor } from './subscription-monitor'
 import { LICENSE_CONFIG, usingDefaultSigningSecret } from './license-config'
 import { loadModels, saveModels, type PersistedModel } from './model-registry'
+import {
+  saveBackground, saveBackgroundMeta, loadBackground, loadBackgroundSource, removeBackground,
+  type SaveBackgroundPayload, type BackgroundMeta,
+} from './background-store'
 import log from 'electron-log'
 // Collect native crash dumps locally so a renderer/GPU crash leaves a trace.
 // Never let telemetry setup stop the app from starting.
@@ -377,6 +381,15 @@ ipcMain.handle('model:decrypt-verify', async (_event, encPath: string) => {
 
 ipcMain.handle('models:load', () => loadModels())
 ipcMain.handle('models:save', (_event, models: PersistedModel[]) => saveModels(models))
+
+// ── Custom background image persistence (Ticket 27/30) ─────────────────────────
+// See background-store.ts — durable disk copy backing the renderer's
+// localStorage cache, so the feature survives a cleared/full localStorage.
+ipcMain.handle('bg:save',        (_event, payload: SaveBackgroundPayload) => saveBackground(payload))
+ipcMain.handle('bg:save-meta',   (_event, meta: BackgroundMeta) => saveBackgroundMeta(meta))
+ipcMain.handle('bg:load',        () => loadBackground())
+ipcMain.handle('bg:load-source', () => loadBackgroundSource())
+ipcMain.handle('bg:remove',      () => removeBackground())
 
 // Best-effort cleanup when a model card is deleted. Scoped to the engine's
 // own scratch directory so a compromised/buggy renderer can't use this to

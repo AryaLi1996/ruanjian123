@@ -5,8 +5,8 @@
   --bg-panel:       var(--bg-panel-solid);
   --bg-hover:       #22263a;
   --accent:         #6366f1;
-  --accent-dim:     #4f52c5;
-  --accent-active:  #4144a8;
+  --accent-hover:   #a0a1f4;
+  --accent-active:  #4346ff;
   --on-accent:      #ffffff;
   --success:        #22c55e;
   --warning:        #f59e0b;
@@ -30,11 +30,24 @@
   --bg-image:   none;
   --bg-overlay: rgba(8, 10, 16, 0.52);
 
+  /* Base surface for the Playback/Lyrics view's has-backdrop state (a
+     per-song blurred-cover-art backdrop, unrelated to the app-wide
+     background image above) — named here rather than left as a bare hex in
+     that rule so it reads as a deliberate design constant, not a stray
+     magic number. Intentionally NOT overridden by data-appearance='light':
+     has-backdrop always lays light, semi-transparent-white text over a
+     photographic backdrop (see .pbm-lyrics.has-backdrop .pbm-lyrics-line
+     etc.), the same "always dark, like a real player's lyrics screen"
+     treatment Spotify/Apple Music use regardless of the app's own theme —
+     switching this to --bg-solid would leave that white text unreadable
+     against the light-appearance panel colour. */
+  --lyrics-backdrop-base: #0f1117;
+
   /* Semantic aliases so the app's design tokens read the way Ticket 27
      names them, without renaming every existing --accent/--bg/--text usage
      throughout this file — both names always refer to the same values. */
   --color-primary:          var(--accent);
-  --color-primary-hover:    var(--accent-dim);
+  --color-primary-hover:    var(--accent-hover);
   --color-primary-active:   var(--accent-active);
   --color-background:       var(--bg);
   --color-surface:          var(--bg-panel);
@@ -49,7 +62,7 @@
 }
 
 /* Light appearance — toggled by useSettingsStore via document.documentElement's
-   data-appearance attribute. --accent/--accent-dim are set inline by that
+   data-appearance attribute. --accent/--accent-hover are set inline by that
    same store (theme colour), so they aren't repeated here. */
 :root[data-appearance='light'] {
   --bg-solid:       #f3f4f8;
@@ -63,10 +76,13 @@
   --border:         #dde1ec;
 }
 
-/* Custom background image (Ticket 27) — surfaces go semi-transparent so the
-   blurred backdrop shows through underneath cards/panels, while the app
-   window itself (html/body) turns fully transparent so the fixed
-   .app-bg-layer behind it is what actually shows in the gaps between them. */
+/* Custom background image (Ticket 27/30) — surfaces go semi-transparent so
+   the blurred backdrop shows through underneath cards/panels, while the app
+   window itself (html/body/#root) turns fully transparent so the fixed
+   .app-bg-layer behind it is what actually shows in the gaps between them.
+   --bg keeps a translucent value (rather than fully transparent) since it's
+   still used by plain, non-panel surfaces (inputs, badges, etc.) that want
+   *some* backdrop tint without the full panel treatment. */
 :root[data-has-bg-image='true'] {
   --bg:       color-mix(in srgb, var(--bg-solid) 90%, transparent);
   --bg-panel: color-mix(in srgb, var(--bg-panel-solid) 86%, transparent);
@@ -92,7 +108,16 @@ html, body, #root {
   transition: background 0.15s, color 0.15s;
 }
 
-:root[data-has-bg-image='true'] body { background: transparent; }
+/* All three of html/body/#root share `background: var(--bg)` above; with a
+   background image active, --bg itself is only 90% opaque (not fully
+   transparent — see the color-mix above), so leaving even one of these three
+   stacked boxes un-overridden repaints that 90%-opaque colour on top of
+   .app-bg-layer and hides the image almost entirely (Ticket 30's core bug).
+   All three must go fully transparent so .app-bg-layer is what actually
+   shows through the page background. */
+:root[data-has-bg-image='true'] html,
+:root[data-has-bg-image='true'] body,
+:root[data-has-bg-image='true'] #root { background: transparent; }
 
 /* ── Custom background image layer ──────────────────────── */
 /* Sits behind .app-layout (which is otherwise transparent over it), holding
@@ -314,7 +339,7 @@ html, body, #root {
   color: var(--on-accent);
 }
 
-.btn-primary:hover:not(:disabled)  { background: var(--accent-dim); }
+.btn-primary:hover:not(:disabled)  { background: var(--accent-hover); }
 .btn-primary:active:not(:disabled) { background: var(--accent-active); }
 .btn-primary:disabled              { opacity: 0.45; cursor: not-allowed; }
 
@@ -325,6 +350,16 @@ html, body, #root {
 }
 
 .btn-ghost:hover:not(:disabled) { background: var(--bg-hover); color: var(--text); }
+
+/* Recording panel's "recording in progress" button — accent only while
+   armed/recording, kept neutral (.btn-ghost) while idle, per Ticket 29 §6
+   (accent marks an active state, not the button that starts one). */
+.btn-record-active {
+  background: var(--accent);
+  color: var(--on-accent);
+  animation: pulse 1s infinite;
+}
+.btn-record-active:hover:not(:disabled) { background: var(--accent-hover); }
 
 /* ── Result box ──────────────────────────────────────────── */
 .result-box {
@@ -536,7 +571,7 @@ html, body, #root {
   flex-shrink: 0;
   transition: background 0.15s;
 }
-.player-play-btn:hover { background: var(--accent-dim); }
+.player-play-btn:hover { background: var(--accent-hover); }
 
 .player-body { flex: 1; min-width: 0; }
 .player-title {
@@ -1261,7 +1296,8 @@ html, body, #root {
   position: absolute;
   top: 0; bottom: 0;
   width: 2px;
-  background: var(--danger);
+  background: var(--accent);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--accent) 70%, transparent);
   pointer-events: none;
 }
 
@@ -1375,7 +1411,7 @@ html, body, #root {
   transform: scale(1.15);
   z-index: 0;
 }
-.pbm-lyrics.has-backdrop { background: #0f1117; }
+.pbm-lyrics.has-backdrop { background: var(--lyrics-backdrop-base); }
 
 .pbm-lyrics-content {
   position: relative;
@@ -1540,23 +1576,53 @@ html, body, #root {
 .settings-subhead { font-size: 12px; font-weight: 600; color: var(--text-muted); margin-bottom: 10px; }
 .settings-subhead-spaced { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--border); }
 
-.swatch-grid { display: flex; flex-wrap: wrap; gap: 14px; }
+.swatch-grid { display: flex; flex-wrap: wrap; gap: 10px 6px; }
+
+/* Each preset is a swatch circle *plus* a persistent name label underneath —
+   not shown only on hover — so picking one never depends on distinguishing
+   hues alone (Ticket 29 §10: several presets are same-family reds that
+   collapse together under protanopia/deuteranopia). */
+.swatch-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  width: 62px;
+  padding: 6px 2px;
+  background: none;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+.swatch-item:hover { background: var(--bg-hover); }
 
 .swatch-btn {
-  width: 36px;
-  height: 36px;
+  width: 32px;
+  height: 32px;
   border-radius: 50%;
   border: 2px solid transparent;
-  cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
   outline-offset: 3px;
   transition: transform 0.1s, outline-color 0.15s;
 }
-.swatch-btn:hover    { transform: scale(1.08); }
-.swatch-btn.selected { outline: 2px solid var(--text); }
-.swatch-check         { color: #fff; font-size: 15px; font-weight: 700; text-shadow: 0 1px 2px rgba(0,0,0,0.4); }
+.swatch-item:hover .swatch-btn    { transform: scale(1.08); }
+.swatch-item.selected .swatch-btn { outline: 2px solid var(--text); }
+.swatch-check                     { color: #fff; font-size: 14px; font-weight: 700; text-shadow: 0 1px 2px rgba(0,0,0,0.4); }
+
+.swatch-name {
+  font-size: 10.5px;
+  color: var(--text-muted);
+  text-align: center;
+  line-height: 1.2;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.swatch-item.selected .swatch-name { color: var(--text); font-weight: 700; }
 
 .avatar-row { display: flex; align-items: center; gap: 20px; }
 
@@ -1637,6 +1703,48 @@ html, body, #root {
 }
 .custom-accent-label { font-size: 12px; color: var(--text-muted); flex: 1; }
 
+/* ── Appearance: accent preview + contrast readout (Ticket 29 §9/§10) ───
+   Shows the accent as it will actually be used — a primary button, an
+   active nav tab, and a highlighted lyric line — so prominence can be
+   judged before committing, plus the measured contrast ratio against the
+   surface colour so "is this legible" isn't a guess. */
+.accent-preview {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 14px;
+  margin-top: 14px;
+  padding: 14px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--bg);
+}
+.accent-preview-tab {
+  padding: 6px 12px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+}
+.accent-preview-lyric {
+  font-size: 13px;
+  font-weight: 700;
+  padding: 4px 10px;
+  border-radius: 8px;
+}
+.accent-preview-spacer { flex: 1 1 auto; }
+.contrast-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.contrast-badge.pass { background: color-mix(in srgb, var(--success) 16%, transparent); color: var(--success); }
+.contrast-badge.fail { background: color-mix(in srgb, var(--danger) 16%, transparent);  color: var(--danger); }
+
 /* ── Appearance: background image ────────────────────────── */
 .bg-upload-row { display: flex; align-items: center; gap: 20px; }
 
@@ -1659,5 +1767,23 @@ html, body, #root {
 .bg-preview-placeholder { font-size: 22px; opacity: 0.7; }
 
 .bg-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-.bg-hint  { flex-basis: 100%; font-size: 11px; color: var(--text-muted); margin-top: 2px; }
-.bg-error { flex-basis: 100%; font-size: 11px; color: var(--danger); margin-top: 2px; }
+.bg-hint    { flex-basis: 100%; font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+.bg-error   { flex-basis: 100%; font-size: 11px; color: var(--danger); margin-top: 2px; }
+.bg-success { flex-basis: 100%; font-size: 11px; color: var(--success); margin-top: 2px; }
+.bg-hint.bg-warning { color: var(--warning); }
+
+/* Blur-intensity / overlay-opacity sliders (Ticket 30 §5) — same layout as
+   the Font card's size slider above, reused here for consistency. */
+.bg-adjust-grid { margin-top: 16px; display: flex; flex-direction: column; gap: 10px; }
+.bg-adjust-row { display: flex; align-items: center; gap: 14px; }
+.bg-adjust-row .field-label { font-size: 12px; color: var(--text-muted); flex-shrink: 0; width: 96px; }
+.bg-adjust-slider { flex: 1; accent-color: var(--accent); }
+.bg-adjust-value {
+  flex-shrink: 0;
+  width: 46px;
+  text-align: center;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}

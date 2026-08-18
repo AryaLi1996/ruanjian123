@@ -110,4 +110,12 @@ contextBridge.exposeInMainWorld('engine', {
     ipcRenderer.on('payment:window-closed', h)
     return () => ipcRenderer.removeListener('payment:window-closed', h)
   },
+
+  // Custom background image persistence (Ticket 27/30) — durable disk copy
+  // backing the renderer's localStorage cache, see main/background-store.ts.
+  saveBackgroundImage:  (payload: unknown): Promise<void> => ipcRenderer.invoke('bg:save', payload),
+  saveBackgroundMeta:   (meta: unknown):    Promise<void> => ipcRenderer.invoke('bg:save-meta', meta),
+  loadBackgroundImage:  (): Promise<unknown> => ipcRenderer.invoke('bg:load'),
+  loadBackgroundSource: (): Promise<string | null> => ipcRenderer.invoke('bg:load-source'),
+  removeBackgroundImage: (): Promise<void> => ipcRenderer.invoke('bg:remove'),
 })

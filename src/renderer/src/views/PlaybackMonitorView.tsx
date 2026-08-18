@@ -482,7 +482,10 @@ export function PlaybackMonitorView(): JSX.Element {
       const w = canvas.width, h = canvas.height
       ctx2d.fillStyle = '#0f1117'
       ctx2d.fillRect(0, 0, w, h)
-      ctx2d.strokeStyle = '#ec4899'
+      // Neutral slate, not accent — the waveform trace itself should stay
+      // out of the way so accent-coloured elements (record button, playhead
+      // elsewhere) are what draws the eye (Ticket 29 §6).
+      ctx2d.strokeStyle = '#64748b'
       ctx2d.lineWidth = 1.5
       ctx2d.beginPath()
       const step = w / data.length
@@ -792,11 +795,14 @@ export function PlaybackMonitorView(): JSX.Element {
             <div className="pbm-rec-controls">
               <span className="pbm-time">{formatDuration(recSeconds)}</span>
               {!recording ? (
-                <button className="btn btn-primary" onClick={() => void startRecording()}>
+                // Idle: neutral — accent is reserved for the armed/recording
+                // state so it reads as "live" rather than just "clickable"
+                // (Ticket 29 §6).
+                <button className="btn btn-ghost" onClick={() => void startRecording()}>
                   {t('playback.record')}
                 </button>
               ) : (
-                <button className="btn btn-ghost" onClick={() => void stopRecording()}>
+                <button className="btn btn-record-active" onClick={() => void stopRecording()}>
                   {t('playback.stopRecording')}
                 </button>
               )}
