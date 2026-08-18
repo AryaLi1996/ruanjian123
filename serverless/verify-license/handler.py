@@ -69,6 +69,7 @@ Swap provider logic in _check_payment_provider() to change monetisation
 without touching any other code.
 """
 import base64
+import decimal
 import hashlib
 import hmac
 import json
@@ -264,6 +265,27 @@ def _new_order_id() -> str:
     return "ord_" + secrets.token_hex(12)
 
 
+def _from_decimal(value: Any) -> Any:
+    """Recursively converts DynamoDB's Decimal (what the boto3 *resource* API
+    returns for every Number attribute) back to a plain int/float.
+
+    Every read from ORDERS_TABLE/LICENSES_TABLE must be passed through this
+    before the result is either (a) JSON-serialized — json.dumps() raises
+    TypeError on a bare Decimal — or (b) used in arithmetic that feeds back
+    into a new record, e.g. _issue_or_extend_license() extending expiresAt.
+    Converting at the read boundary (here) means every caller downstream
+    just sees ordinary numbers, instead of every call site needing its own
+    Decimal-aware json.dumps(default=...).
+    """
+    if isinstance(value, decimal.Decimal):
+        return int(value) if value == value.to_integral_value() else float(value)
+    if isinstance(value, dict):
+        return {k: _from_decimal(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_from_decimal(v) for v in value]
+    return value
+
+
 def _put_order(order: dict[str, Any]) -> None:
     table = _orders_table()
     if table is None:
@@ -279,14 +301,25 @@ def _get_order(order_id: str) -> dict[str, Any] | None:
     if table is None:
         return None
     resp = table.get_item(Key={"orderId": order_id})
-    return resp.get("Item")
+    return _from_decimal(resp.get("Item"))
 
 
 def _mark_order_paid(order_id: str, provider_txn_id: str) -> dict[str, Any] | None:
     """Idempotent: only the first call for a given order actually transitions
     it (and therefore extends the license) — later retries of the same
     provider webhook see the ConditionalCheckFailed and are treated as a
-    no-op success, satisfying Ticket 28 §5's idempotency requirement."""
+    no-op, satisfying Ticket 28 §5's idempotency requirement.
+
+    Returns the updated order Attributes only when *this* call performed the
+    transition; returns None both when the table is unconfigured and when
+    the order was already paid (by an earlier call, possibly a concurrent
+    one). Callers must treat None as "do not re-run license issuance" — the
+    two None cases are handled identically by every current caller, so
+    collapsing them here is safe, and it's what actually makes the
+    idempotency guarantee hold: returning the already-paid order here (as
+    this used to) reads as truthy to callers doing `if updated: issue(...)`,
+    which extends the license a second time for one payment.
+    """
     table = _orders_table()
     if table is None:
         return None
@@ -302,15 +335,30 @@ def _mark_order_paid(order_id: str, provider_txn_id: str) -> dict[str, Any] | No
             },
             ReturnValues="ALL_NEW",
         )
-        return resp.get("Attributes")
+        return _from_decimal(resp.get("Attributes"))
     except Exception as exc:  # noqa: BLE001
         # botocore raises ClientError with response['Error']['Code'] ==
-        # 'ConditionalCheckFailedException' — meaning "already processed",
-        # not an error worth surfacing. The code only shows up in str(exc),
-        # not the exception's class name, so check the message.
+        # 'ConditionalCheckFailedException' — meaning "already processed by
+        # another call", not an error worth surfacing. The code only shows
+        # up in str(exc), not the exception's class name, so check the
+        # message.
         if "ConditionalCheckFailed" in str(exc):
-            return _get_order(order_id)
+            return None
         raise
+
+
+def _settle_paid_order(order: dict[str, Any], provider_txn_id: str) -> None:
+    """Transitions a pending order to paid and extends the user's license —
+    the one sequence every payment-provider webhook needs to run, exactly
+    once, on the first delivery of its "payment succeeded" event. Shared by
+    every webhook handler so this idempotency-sensitive logic (and any
+    future fix to it) lives in one place instead of being copy-pasted per
+    provider."""
+    if order["status"] != "pending":
+        return
+    updated = _mark_order_paid(order["orderId"], provider_txn_id)
+    if updated:
+        _issue_or_extend_license(order["userId"], order["planId"])
 
 
 def _query_orders_by_user(user_id: str, limit: int = 50) -> list[dict[str, Any]]:
@@ -324,7 +372,7 @@ def _query_orders_by_user(user_id: str, limit: int = 50) -> list[dict[str, Any]]
         ScanIndexForward=False,
         Limit=limit,
     )
-    return resp.get("Items", [])
+    return [_from_decimal(item) for item in resp.get("Items", [])]
 
 
 def _get_license_row(user_id: str) -> dict[str, Any] | None:
@@ -332,7 +380,7 @@ def _get_license_row(user_id: str) -> dict[str, Any] | None:
     if table is None:
         return None
     resp = table.get_item(Key={"userId": user_id})
-    return resp.get("Item")
+    return _from_decimal(resp.get("Item"))
 
 
 def _issue_or_extend_license(user_id: str, plan_id: str) -> tuple[str, int]:
@@ -580,16 +628,29 @@ def _handle_douyin_webhook(event: dict) -> dict:
     if not hmac.compare_digest(expected, str(payload.get("sign", ""))):
         return {"statusCode": 400, "headers": _cors_headers(), "body": json.dumps({"error": "invalid signature"})}
 
+    # Replay protection, mirroring _verify_stripe_signature's tolerance_sec
+    # check below: 'timestamp' is part of the signed params (see
+    # _douyin_signature / _create_douyin_order), so it can't be altered
+    # without invalidating 'sign' — but without this check, a captured
+    # valid (signature, body) pair could otherwise be replayed indefinitely.
+    # Only enforced when the field is present: NOTE — confirm the callback
+    # payload's actual timestamp field name against the current 抖音支付 docs
+    # for your merchant type; until that's confirmed, a payload that omits
+    # it skips this check rather than rejecting every real callback.
+    if "timestamp" in payload:
+        try:
+            if abs(time.time() - int(payload["timestamp"])) > 300:
+                return {"statusCode": 400, "headers": _cors_headers(), "body": json.dumps({"error": "stale webhook"})}
+        except (TypeError, ValueError):
+            return {"statusCode": 400, "headers": _cors_headers(), "body": json.dumps({"error": "invalid timestamp"})}
+
     order_id = str(payload.get("out_order_no", ""))
     txn_id   = str(payload.get("order_id", order_id))
     order    = _get_order(order_id)
     if not order:
         return {"statusCode": 404, "headers": _cors_headers(), "body": json.dumps({"error": "order not found"})}
 
-    if order["status"] == "pending":
-        updated = _mark_order_paid(order_id, txn_id)
-        if updated:
-            _issue_or_extend_license(order["userId"], order["planId"])
+    _settle_paid_order(order, txn_id)
 
     # Douyin expects a specific ack body/shape — adjust to match the current
     # 抖音支付 callback contract for your merchant type.
@@ -680,10 +741,7 @@ def _handle_checkout_completed(session: dict[str, Any]) -> dict[str, Any]:
         order = _get_order(order_id)
         if not order:
             return {"handled": False, "reason": f"unknown orderId {order_id}"}
-        if order["status"] == "pending":
-            updated = _mark_order_paid(order_id, session.get("id", order_id))
-            if updated:
-                _issue_or_extend_license(order["userId"], order["planId"])
+        _settle_paid_order(order, session.get("id", order_id))
         return {"handled": True, "orderId": order_id}
 
     # Legacy flow: static Payment Link in *subscription* mode, no orderId

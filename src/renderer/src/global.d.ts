@@ -68,7 +68,7 @@ declare global {
       onLicenseStateChange: (cb: (state: unknown) => void) => () => void
       // Multi-channel payment (Ticket 28)
       createPaymentOrder: (planId: string, method: string) => Promise<PaymentOrder & { error?: string }>
-      getOrderStatus:     (orderId: string) => Promise<{ status: string; order?: PaymentOrder; error?: string }>
+      getOrderStatus:     (orderId: string) => Promise<{ status: string; order?: PaymentOrder; licensed?: boolean; error?: string }>
       getPaymentHistory:  () => Promise<PaymentHistoryEntry[]>
       openEmbeddedPayment:  (url: string) => Promise<void>
       closeEmbeddedPayment: () => Promise<void>
