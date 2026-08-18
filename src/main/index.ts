@@ -1,4 +1,4 @@
-import { app, BrowserWindow, shell, ipcMain, dialog, crashReporter } from 'electron'
+import { app, BrowserWindow, shell, ipcMain, dialog, crashReporter, Menu } from 'electron'
 import { join, resolve, sep } from 'path'
 import { existsSync } from 'fs'
 import { promises as fs } from 'fs'
@@ -58,6 +58,47 @@ function isFirstLaunch(): boolean {
 function markInitialized(): void {
   const marker = join(app.getPath('userData'), '.initialized')
   fs.writeFile(marker, Date.now().toString()).catch(() => {})
+}
+
+// macOS's auto-generated default menu (used whenever nobody calls
+// Menu.setApplicationMenu) hard-codes app.getName() into its labels —
+// "About ruanjian", "Hide ruanjian", "Quit ruanjian" — which is the raw
+// package.json `name` field, not productName, so it kept the old
+// placeholder even after the SootheVoice rebrand (Ticket 32). Building an
+// explicit template instead lets the standard macOS roles (about/hide/
+// quit) pick up the real bundle name from the packaged app's Info.plist
+// (CFBundleName, generated from electron-builder's productName) — the
+// *correct* mechanism, unlike app.setName(), which would also silently
+// relocate app.getPath('userData') and orphan existing users' license/
+// model data. Scoped to darwin only: Windows/Linux keep Electron's
+// existing default menu untouched.
+function setupAppMenu(): void {
+  if (process.platform !== 'darwin') return
+  const template: Electron.MenuItemConstructorOptions[] = [
+    {
+      label: 'SootheVoice',
+      submenu: [
+        { role: 'about' },
+        { type: 'separator' },
+        { role: 'services' },
+        { type: 'separator' },
+        { role: 'hide' },
+        { role: 'hideOthers' },
+        { role: 'unhide' },
+        { type: 'separator' },
+        { role: 'quit' },
+      ],
+    },
+    { role: 'editMenu' },
+    { role: 'viewMenu' },
+    { role: 'windowMenu' },
+  ]
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template))
+  app.setAboutPanelOptions({
+    applicationName:    'SootheVoice',
+    applicationVersion: app.getVersion(),
+    copyright:          'Copyright © 2026',
+  })
 }
 
 function createWindow(): BrowserWindow {
@@ -205,6 +246,7 @@ if (app.isPackaged && usingDefaultSigningSecret) {
 app.whenReady().then(async () => {
   await initializeMonitorWithTimeout(3_000)   // load local license before showing window
 
+  setupAppMenu()
   const win = createWindow()
   // Warm-up never gates window creation or UI access.
   void warmUpEngine()
@@ -212,6 +254,9 @@ app.whenReady().then(async () => {
   // Pass first-launch flag to renderer via IPC
   ipcMain.handle('app:is-first-launch', () => isFirstLaunch())
   ipcMain.handle('app:mark-initialized', () => markInitialized())
+
+  // App version, for the About page (Ticket 32)
+  ipcMain.handle('app:get-version', () => app.getVersion())
 
   // Renderer's warm-up screen reuses this run instead of spawning its own.
   ipcMain.handle('app:warmup-result', () => warmUpEngine())
@@ -303,7 +348,7 @@ ipcMain.handle(
     try {
       const res = await fetch(`https://lrclib.org/api/search?${params.toString()}`, {
         signal: controller.signal,
-        headers: { 'User-Agent': `Ruanjian/${app.getVersion()} (Playback-Monitor lyrics search)` },
+        headers: { 'User-Agent': `SootheVoice/${app.getVersion()} (Playback-Monitor lyrics search)` },
       })
       if (!res.ok) throw new Error(`lrclib responded ${res.status}`)
       const data = await res.json()

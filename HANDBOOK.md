@@ -1,4 +1,4 @@
-# Ruanjian — User Handbook
+# SootheVoice — User Handbook
 
 > **Version 0.1.0 · 2026**  
 > AI Singing Voice Studio · Desktop Application for Windows & macOS
@@ -23,7 +23,7 @@
 
 ## 1. Introduction
 
-**Ruanjian** is a desktop AI singing voice studio that lets you:
+**SootheVoice** is a desktop AI singing voice studio that lets you:
 
 | Feature | What it does |
 |---|---|
@@ -64,20 +64,20 @@ All AI processing runs **locally on your device** — your audio and models neve
 ## 3. Installation
 
 ### Windows
-1. Download `Ruanjian-0.1.0-win-x64-setup.exe` from the official website.
+1. Download `SootheVoice-0.1.0-win-x64-setup.exe` from the official website.
 2. Double-click the installer.
 3. If Windows Defender SmartScreen shows a warning, click **More info → Run anyway** (the app is not yet code-signed in early versions).
-4. Choose installation directory (default: `%LocalAppData%\Programs\Ruanjian`).
+4. Choose installation directory (default: `%LocalAppData%\Programs\SootheVoice`).
 5. Click **Install**. The app launches automatically on completion.
 
 > **Note**: The installer bundles a portable Python runtime. You do **not** need to install Python separately.
 
 ### macOS
-1. Download `Ruanjian-0.1.0-mac-universal.dmg` (works on both Intel and Apple Silicon).
-2. Open the DMG and drag **Ruanjian** to the Applications folder.
-3. On first launch, macOS may say "Ruanjian cannot be opened because Apple cannot check it for malicious software." If so:
+1. Download `SootheVoice-0.1.0-mac-universal.dmg` (works on both Intel and Apple Silicon).
+2. Open the DMG and drag **SootheVoice** to the Applications folder.
+3. On first launch, macOS may say "SootheVoice cannot be opened because Apple cannot check it for malicious software." If so:
    - Open **System Settings → Privacy & Security**.
-   - Scroll down and click **Open Anyway** next to the Ruanjian entry.
+   - Scroll down and click **Open Anyway** next to the SootheVoice entry.
 4. Click **Open** in the confirmation dialog.
 
 > **Note**: The app requires microphone permission for future voice input features. You may decline; it does not affect current functionality.
@@ -89,7 +89,7 @@ After launch, the onboarding wizard runs automatically. If you see the **Hardwar
 
 ## 4. First Launch & Onboarding
 
-When you open Ruanjian for the first time, a four-step wizard guides you through setup:
+When you open SootheVoice for the first time, a four-step wizard guides you through setup:
 
 ### Step 1 — Welcome
 Displays a feature overview. Click **Get Started →** to proceed.
@@ -110,16 +110,16 @@ Click **Continue →** to proceed.
 The inference engine runs a quick matrix multiplication test. A latency under 1 ms confirms the engine is healthy. Click **Continue →** after the test completes.
 
 ### Step 4 — Ready
-Click **Open Ruanjian** to enter the main application.
+Click **Open SootheVoice** to enter the main application.
 
-> The wizard runs only once. To re-run it, go to `%AppData%\Ruanjian` (Windows) or `~/Library/Application Support/Ruanjian` (macOS) and delete the `.initialized` file.
+> The wizard runs only once. To re-run it, go to `%AppData%\ruanjian` (Windows) or `~/Library/Application Support/ruanjian` (macOS) and delete the `.initialized` file.
 
 ---
 
 ## 5. Subscription & Licensing
 
 ### Plans
-Ruanjian requires an active monthly subscription ($9.90/month) to use AI features. A **free 30-day trial** is available.
+SootheVoice requires an active monthly subscription ($9.90/month) to use AI features. A **free 30-day trial** is available.
 
 ### Activating a License
 
@@ -214,7 +214,7 @@ When training completes:
 ### Encrypting Models
 Trained models are automatically encrypted with a machine-specific AES-256-GCM key. The `.enc` file **cannot be used on another computer**. To transfer a model:
 1. Export the plaintext ONNX file before encrypting (a future export feature will be added).
-2. The recipient must activate the model with their own Ruanjian installation.
+2. The recipient must activate the model with their own SootheVoice installation.
 
 ---
 
@@ -313,19 +313,19 @@ After processing:
 ### License File Location
 | Platform | Path |
 |---|---|
-| Windows | `%AppData%\Ruanjian\license.enc` |
-| macOS | `~/Library/Application Support/Ruanjian/license.enc` |
+| Windows | `%AppData%\ruanjian\license.enc` |
+| macOS | `~/Library/Application Support/ruanjian/license.enc` |
 
 This file is encrypted with a machine-specific key. Copying it to another device will not activate that device.
 
 ### Model Storage Location
 | Platform | Path |
 |---|---|
-| Windows | `%AppData%\Ruanjian\` (encrypted `.enc` files) |
-| macOS | `~/Library/Application Support/Ruanjian/` |
+| Windows | `%AppData%\ruanjian\` (encrypted `.enc` files) |
+| macOS | `~/Library/Application Support/ruanjian/` |
 
 ### Auto-Updates
-Ruanjian automatically checks for updates in the background. When an update is available:
+SootheVoice automatically checks for updates in the background. When an update is available:
 1. A notification banner appears at the bottom of the left sidebar.
 2. Click **⬇ Download** to download the update.
 3. After download, click **Restart & Install** to apply it immediately.
@@ -348,8 +348,8 @@ You can continue using the app during the download. The update installs on the n
 
 **Solutions**:
 1. Check the app log at:
-   - Windows: `%AppData%\Ruanjian\logs\main.log`
-   - macOS: `~/Library/Logs/Ruanjian/main.log`
+   - Windows: `%AppData%\ruanjian\logs\main.log`
+   - macOS: `~/Library/Logs/ruanjian/main.log`
 2. Try uninstalling and reinstalling. Your models and license are preserved (stored in AppData, not the install directory).
 3. On Windows: ensure Visual C++ Redistributable 2022 is installed.
 
@@ -360,10 +360,10 @@ You can continue using the app during the download. The update installs on the n
 **Symptom**: The status dot in the sidebar stays grey or shows an error.
 
 **Solutions**:
-1. Check that no other application is using the Python engine (another Ruanjian window).
-2. On macOS: check **System Settings → Privacy & Security → Files and Folders** to ensure Ruanjian has access to the Downloads/Documents folder.
+1. Check that no other application is using the Python engine (another SootheVoice window).
+2. On macOS: check **System Settings → Privacy & Security → Files and Folders** to ensure SootheVoice has access to the Downloads/Documents folder.
 3. Run the onboarding wizard again by deleting `.initialized` (see First Launch section).
-4. Check the engine log at `~/Library/Logs/Ruanjian/main.log` for Python errors.
+4. Check the engine log at `~/Library/Logs/ruanjian/main.log` for Python errors.
 
 ---
 
@@ -447,8 +447,8 @@ You can continue using the app during the download. The update installs on the n
 
 **Location of large files**:
 - `engine/*.onnx` — AI models (5–50 MB each)
-- `AppData/Ruanjian/training/` — uploaded audio for training (auto-created, can be deleted after training)
-- `AppData/Ruanjian/model_*.enc` — trained models (encrypted)
+- `AppData/ruanjian/training/` — uploaded audio for training (auto-created, can be deleted after training)
+- `AppData/ruanjian/model_*.enc` — trained models (encrypted)
 
 You can safely delete the `training/` subdirectory after your models are trained.
 
@@ -456,10 +456,10 @@ You can safely delete the `training/` subdirectory after your models are trained
 
 ## 11. Frequently Asked Questions
 
-**Q: Does Ruanjian work offline?**  
+**Q: Does SootheVoice work offline?**  
 A: Yes, after initial license activation. All AI processing is local. An internet connection is only needed to activate or renew your subscription.
 
-**Q: Can I run Ruanjian on a machine without a GPU?**  
+**Q: Can I run SootheVoice on a machine without a GPU?**  
 A: Yes. All features work in CPU mode. Training will take longer (20–360 min depending on mode) — there is no cloud training option, so a faster local GPU is the only way to speed this up.
 
 **Q: How long does training take with my Apple M1?**  

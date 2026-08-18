@@ -72,6 +72,7 @@ declare global {
       deleteDataFile:    (filePath: string) => Promise<boolean>
       isFirstLaunch:     () => Promise<boolean>
       markInitialized:   () => Promise<void>
+      getAppVersion:     () => Promise<string>
       setBackgroundColor: (hex: string) => Promise<void>
       getWarmupResult:   () => Promise<WarmupResult>
       retryWarmup:       () => Promise<WarmupResult>

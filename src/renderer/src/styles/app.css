@@ -176,9 +176,9 @@ html, body, #root {
   border-bottom: 1px solid var(--border);
 }
 
-.tb-brand { display: flex; flex-direction: column; line-height: 1.15; flex-shrink: 0; }
-.tb-title    { font-size: 15px; font-weight: 700; letter-spacing: 0.4px; }
-.tb-subtitle { font-size: 10px; color: var(--text-muted); }
+.tb-brand { display: flex; align-items: center; gap: 8px; line-height: 1.15; flex-shrink: 0; }
+.tb-logo  { flex-shrink: 0; }
+.tb-title { font-size: 15px; font-weight: 700; letter-spacing: 0.4px; }
 
 .tb-nav { display: flex; align-items: center; gap: 4px; flex: 1; min-width: 0; overflow-x: auto; }
 
@@ -294,6 +294,23 @@ html, body, #root {
 .view-header { margin-bottom: 28px; }
 .view-title  { font-size: 22px; font-weight: 700; }
 .view-desc   { color: var(--text-muted); margin-top: 4px; font-size: 13px; }
+
+/* ── Subscription page watermark (Ticket 32 §6) ──────────────
+   A faint, blurred brand mark sitting behind the page's own content —
+   decorative only, so it's unclickable and never competes with the
+   actual UI for legibility. */
+.sub-view-root    { position: relative; overflow: hidden; }
+.sub-view-content { position: relative; z-index: 1; }
+.sub-watermark {
+  position: absolute;
+  top: -40px;
+  right: -60px;
+  z-index: 0;
+  opacity: 0.06;
+  filter: blur(2px);
+  pointer-events: none;
+  user-select: none;
+}
 
 .card {
   background: var(--bg-panel);
@@ -1013,6 +1030,43 @@ html, body, #root {
 }
 .grace-renew-btn { font-size: 12px; padding: 5px 14px; flex-shrink: 0; }
 
+/* ── Trial banner (Ticket 33) — top of gated content ────── */
+/* Uses the accent color rather than grace-banner's amber: an active trial
+   isn't a warning, so it shouldn't read as one. */
+.trial-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg-panel));
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  border-radius: var(--radius);
+  padding: 10px 16px;
+  margin-bottom: 20px;
+  font-size: 13px;
+}
+.trial-banner-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.trial-banner-btn { font-size: 12px; padding: 5px 14px; }
+.trial-banner-dismiss {
+  background: none; border: none; cursor: pointer;
+  color: var(--text-muted); font-size: 14px; line-height: 1; padding: 4px;
+}
+.trial-banner-dismiss:hover { color: var(--text); }
+
+/* ── Trial status line — top of the Subscription page ───── */
+.trial-status-line {
+  background: color-mix(in srgb, var(--accent) 10%, var(--bg-panel));
+  border: 1px solid color-mix(in srgb, var(--accent) 26%, transparent);
+  border-radius: var(--radius);
+  padding: 10px 16px;
+  margin-bottom: 20px;
+  font-size: 13px;
+}
+.trial-status-line-expired {
+  background: color-mix(in srgb, var(--danger) 10%, var(--bg-panel));
+  border-color: color-mix(in srgb, var(--danger) 26%, transparent);
+}
+
 /* ── Lock / expired screen ───────────────────────────────── */
 .lock-screen {
   display: flex;
@@ -1160,6 +1214,59 @@ html, body, #root {
 .tutorial-actions { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 12px; }
 .tutorial-dont-show { display: flex; align-items: center; gap: 7px; color: var(--text-muted); font-size: 11px; cursor: pointer; }
 .tutorial-dont-show input { accent-color: var(--accent); }
+
+/* ── Startup splash screen (Ticket 32 §3) ────────────────────
+   Fixed to the logo's own dark gradient, independent of the user's
+   light/dark appearance setting — this is the very first thing shown,
+   before the app's own theming is even relevant. */
+.splash-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  overflow-y: auto;
+  background: linear-gradient(135deg, #1A1A2E 0%, #16213E 100%);
+}
+.splash-card {
+  position: relative;
+  width: min(420px, 100%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 4px;
+}
+.splash-skip {
+  position: absolute;
+  top: -36px;
+  right: 0;
+  border: 0;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.55);
+  cursor: pointer;
+  font-size: 12px;
+}
+.splash-skip:hover { color: rgba(255, 255, 255, 0.9); }
+.splash-logo   { flex-shrink: 0; margin-bottom: 22px; box-shadow: 0 20px 60px rgba(0, 0, 0, 0.4); border-radius: 22px; }
+.splash-name   { font-size: 30px; font-weight: 700; color: #FFFFFF; margin: 0; letter-spacing: 0.5px; }
+.splash-slogan { font-size: 13px; color: rgba(255, 255, 255, 0.55); margin: 6px 0 0; }
+.splash-status {
+  width: 100%;
+  margin-top: 34px;
+  padding-top: 26px;
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+.splash-status-title { font-size: 15px; font-weight: 600; color: rgba(255, 255, 255, 0.9); margin: 0; }
+.splash-description  { font-size: 13px; color: rgba(255, 255, 255, 0.6); line-height: 1.6; max-width: 340px; margin: 0; }
+.splash-status .warmup-success { color: var(--success); }
+.splash-status .ob-btn { width: 100%; }
 
 /* ── Playback / Monitor view ─────────────────────────────── */
 .pbm-header {
@@ -1696,6 +1803,32 @@ html, body, #root {
 .avatar-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .avatar-hint  { flex-basis: 100%; font-size: 11px; color: var(--text-muted); margin-top: 2px; }
 .avatar-error { flex-basis: 100%; font-size: 11px; color: var(--danger); margin-top: 2px; }
+
+/* ── About (Ticket 32) ───────────────────────────────────── */
+.about-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 4px;
+  padding: 8px 0 4px;
+}
+.about-logo   { border-radius: 22px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25); margin-bottom: 10px; }
+.about-name-zh { font-size: 20px; font-weight: 700; }
+.about-name-en { font-size: 13px; color: var(--text-muted); margin-bottom: 8px; }
+.about-slogan-zh { font-size: 13px; color: var(--text-muted); }
+.about-slogan-en { font-size: 12px; color: var(--text-muted); opacity: 0.8; margin-bottom: 14px; }
+.about-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--text-muted);
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+  width: 100%;
+  max-width: 260px;
+}
 
 /* ── Appearance: font settings ───────────────────────────── */
 .font-family-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }

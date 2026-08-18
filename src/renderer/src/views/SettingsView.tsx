@@ -15,6 +15,7 @@ import {
   BackgroundImageError, processBackgroundImage,
   MIN_BLUR_PX, MAX_BLUR_PX, MIN_OVERLAY_OPACITY, MAX_OVERLAY_OPACITY,
 } from '../utils/backgroundImage'
+import { BrandLogo } from '../components/brand/BrandLogo'
 
 const APPEARANCE_OPTIONS: { value: Appearance; icon: string }[] = [
   { value: 'system', icon: '🖥️' },
@@ -73,6 +74,10 @@ export function SettingsView(): JSX.Element {
   const [bgError, setBgError] = useState<string | null>(null)
   const [bgBusy, setBgBusy] = useState(false)
   const [bgUpdated, setBgUpdated] = useState(false)
+
+  // About card (Ticket 32 §5)
+  const [appVersion, setAppVersion] = useState<string | null>(null)
+  useEffect(() => { window.engine.getAppVersion().then(setAppVersion).catch(() => setAppVersion(null)) }, [])
   // The blur slider needs to feel instant while dragging without triggering
   // a canvas re-blur on every pixel of movement — see the commit handler
   // below. The overlay slider has no such cost, so it stays fully
@@ -393,6 +398,22 @@ export function SettingsView(): JSX.Element {
             )}
             <p className="avatar-hint">{t('settings.photoHint')}</p>
             {photoError && <p className="avatar-error">{photoError}</p>}
+          </div>
+        </div>
+      </div>
+
+      {/* ── About ──────────────────────────────────────────── */}
+      <div className="card about-card">
+        <div className="card-title">{t('settings.about.title')}</div>
+        <div className="about-content">
+          <BrandLogo variant="full" size={96} className="about-logo" />
+          <div className="about-name-zh">{t('app.nameZh')}</div>
+          <div className="about-name-en">{t('app.nameEn')}</div>
+          <div className="about-slogan-zh">{t('app.sloganZh')}</div>
+          <div className="about-slogan-en">{t('app.sloganEn')}</div>
+          <div className="about-meta">
+            {appVersion && <span>{t('settings.about.version', { version: appVersion })}</span>}
+            <span>{t('settings.about.developer')}: {t('settings.about.developerName')}</span>
           </div>
         </div>
       </div>

@@ -4,6 +4,7 @@ import i18n from '../i18n'
 import { useAppStore, type ActiveView } from '../store/useAppStore'
 import { useSubscriptionStore } from '../store/useSubscriptionStore'
 import { useSettingsStore } from '../store/useSettingsStore'
+import { BrandLogo } from './brand/BrandLogo'
 
 interface NavItem { view: ActiveView; icon: string; key: string }
 interface UpdateInfo { version?: string }
@@ -50,8 +51,8 @@ export function TopToolbar(): JSX.Element {
   return (
     <header className="top-toolbar">
       <div className="tb-brand">
-        <span className="tb-title">{t('app.title')}</span>
-        <span className="tb-subtitle">{t('app.subtitle')}</span>
+        <BrandLogo variant="simple" size={24} className="tb-logo" />
+        <span className="tb-title">{t('app.name')}</span>
       </div>
 
       <nav className="tb-nav" role="navigation" aria-label="Main navigation">

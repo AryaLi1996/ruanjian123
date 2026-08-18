@@ -14,10 +14,19 @@ if (!hasSigningCert) {
 
 const config = {
   appId:       'com.ruanjian.app',
-  productName: 'Ruanjian',
+  productName: 'SootheVoice',
   copyright:   'Copyright © 2026',
 
   directories: { buildResources: 'build', output: 'dist' },
+
+  // SootheVoice / 舒音 brand mark (Ticket 32 §7) — full logo, dark
+  // rounded-square background, generated from src/assets/brand/logo-full.svg.
+  // build/icon.icns is provided directly (built via iconutil from a proper
+  // .iconset so macOS gets a native, non-resampled icon at every size);
+  // build/icon.png is the single 1024x1024 source electron-builder derives
+  // the Windows .ico from at build time (linux also falls back to it). Set
+  // per-platform below rather than as a shared top-level `icon` since mac
+  // needs the .icns specifically while win/linux want the source .png.
 
   files: ['out/**/*', 'node_modules/**/*', 'package.json'],
 
@@ -50,6 +59,7 @@ const config = {
 
   mac: {
     target: [{ target: 'dmg', arch: ['x64', 'arm64'] }],
+    icon:               'build/icon.icns',
     category:           'public.app-category.productivity',
     // PyInstaller standalone engine (built by scripts/package-engine.sh).
     // Absent in dev — python-bridge falls back to system python3.
@@ -132,6 +142,7 @@ const config = {
     target: process.env.WIN_INSTALLER === 'nsis'
       ? [{ target: 'nsis',     arch: ['x64'] }]
       : [{ target: 'portable', arch: ['x64'] }],
+    icon:                       'build/icon.png',
     verifyUpdateCodeSignature: false,
     // PyInstaller standalone engine, built by scripts/package-engine.sh with
     // ENGINE_ARCH unset (single x64 output, matching the x64-only target
@@ -158,6 +169,7 @@ const config = {
 
   linux: {
     target:   ['AppImage', 'deb'],
+    icon:     'build/icon.png',
     category: 'Audio',
     // Same rationale as win.extraResources above.
     extraResources: [

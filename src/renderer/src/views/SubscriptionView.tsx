@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useSubscriptionStore } from '../store/useSubscriptionStore'
+import { BrandLogo } from '../components/brand/BrandLogo'
 import type {
   ActivationResult,
   LicenseConfig,
@@ -88,8 +89,16 @@ function clearPendingOrder(): void {
 
 export function SubscriptionView(): JSX.Element {
   const { t, i18n } = useTranslation()
-  const { status, expiresAt, daysRemaining, graceDaysLeft, payload } =
+  const { status, expiresAt, daysRemaining, graceDaysLeft, payload, trial } =
     useSubscriptionStore()
+
+  // Ticket 33: shown above the status card. Hidden once actually subscribed
+  // (active/grace_period) — a subscribed user has no use for trial messaging.
+  const subscribed = status === 'active' || status === 'grace_period'
+  const trialBannerKey =
+    !subscribed && trial.active  ? 'trial.subscription.active'  :
+    !subscribed && trial.expired ? 'trial.subscription.expired' :
+    null
 
   const [key,       setKey]       = useState('')
   const [activating, setActivating] = useState(false)
@@ -342,11 +351,22 @@ export function SubscriptionView(): JSX.Element {
   }
 
   return (
-    <>
+    <div className="sub-view-root">
+      {/* Faint brand watermark — Ticket 32 §6. Purely decorative, so it
+          sits behind the actual content (z-index) and never intercepts
+          clicks (pointer-events: none). */}
+      <BrandLogo variant="simple" size={520} className="sub-watermark" />
+      <div className="sub-view-content">
       <div className="view-header">
         <h1 className="view-title">{t('subscription.title')}</h1>
         <p className="view-desc">{t('subscription.description')}</p>
       </div>
+
+      {trialBannerKey && (
+        <div className={`trial-status-line${trial.expired ? ' trial-status-line-expired' : ''}`}>
+          {t(trialBannerKey, { days: trial.daysRemaining })}
+        </div>
+      )}
 
       {/* ── Status card ────────────────────────────────── */}
       <div className="card">
@@ -618,7 +638,8 @@ export function SubscriptionView(): JSX.Element {
           </div>
         )}
       </div>
-    </>
+      </div>
+    </div>
   )
 }
 
