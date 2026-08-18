@@ -412,5 +412,52 @@ ipcMain.handle('license:activate',    (_, key: string) => monitor.activate(key))
 ipcMain.handle('license:deactivate',  ()           => monitor.deactivate())
 ipcMain.handle('license:refresh',     ()           => monitor.refresh())
 ipcMain.handle('license:get-config',  () => ({
-  checkoutUrl: LICENSE_CONFIG.checkoutUrl,
+  checkoutUrl:    LICENSE_CONFIG.checkoutUrl,
+  plans:          LICENSE_CONFIG.plans,
+  paymentMethods: LICENSE_CONFIG.paymentMethods,
+  pollIntervalMs: LICENSE_CONFIG.orderPollIntervalMs,
+  pollTimeoutMs:  LICENSE_CONFIG.orderPollTimeoutMs,
 }))
+
+// ── Multi-channel payment IPC (Ticket 28) ───────────────────────────────────
+ipcMain.handle('payment:create-order', (_, planId: string, method: string) =>
+  monitor.createOrder(planId as never, method as never))
+ipcMain.handle('payment:order-status', (_, orderId: string) => monitor.getOrderStatus(orderId))
+ipcMain.handle('payment:history',      ()                   => monitor.getPaymentHistory())
+
+// Hosted checkout pages for methods whose QR code is rendered by the
+// provider/aggregator's own page (WeChat Pay, Douyin Pay) are shown in a
+// modal-like child BrowserWindow instead of the system browser, so the QR
+// appears inline over the app per Ticket 28 §3. Card/Alipay use the system
+// browser instead (see setWindowOpenHandler above) — a clearer trust
+// boundary for entering card details or an Alipay login.
+let _paymentWin: BrowserWindow | null = null
+
+ipcMain.handle('payment:open-embedded', (event, url: string) => {
+  if (_paymentWin && !_paymentWin.isDestroyed()) _paymentWin.close()
+
+  const parent = BrowserWindow.fromWebContents(event.sender) ?? undefined
+  _paymentWin = new BrowserWindow({
+    width: 420,
+    height: 640,
+    parent,
+    modal: Boolean(parent),
+    show: false,
+    title: '',
+    autoHideMenuBar: true,
+    webPreferences: { sandbox: true, contextIsolation: true },
+  })
+  _paymentWin.once('ready-to-show', () => _paymentWin?.show())
+  _paymentWin.on('closed', () => {
+    _paymentWin = null
+    if (!event.sender.isDestroyed()) event.sender.send('payment:window-closed')
+  })
+  // Only ever navigate within the payment provider's own origin(s) — never
+  // let this window be redirected somewhere arbitrary by page content.
+  _paymentWin.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+  _paymentWin.loadURL(url)
+})
+
+ipcMain.handle('payment:close-embedded', () => {
+  if (_paymentWin && !_paymentWin.isDestroyed()) _paymentWin.close()
+})

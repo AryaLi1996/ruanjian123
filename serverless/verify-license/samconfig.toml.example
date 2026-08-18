@@ -9,3 +9,10 @@ capabilities = "CAPABILITY_NAMED_IAM"
 parameter_overrides = "PaymentProvider=custom MockMode=false ExpiryDays=30"
 # For real Stripe payment verification, use instead:
 # parameter_overrides = "PaymentProvider=stripe StripeApiKey=sk_live_... StripeWebhookSecret=whsec_... MockMode=false ExpiryDays=30"
+#
+# Ticket 28 — multi-channel payment (card / WeChat Pay / Alipay via Stripe
+# Checkout, Douyin Pay direct). Add to parameter_overrides above once you
+# have real credentials; every field defaults to blank/disabled otherwise:
+# PaymentSuccessUrl=https://yourdomain.example/payment/success \
+# PaymentCancelUrl=https://yourdomain.example/payment/cancel \
+# DouyinAppId=... DouyinMerchantId=... DouyinAppSecret=...

@@ -89,10 +89,25 @@ contextBridge.exposeInMainWorld('engine', {
   activateLicense:    (key: string):         Promise<unknown> => ipcRenderer.invoke('license:activate', key),
   deactivateLicense:  ():                    Promise<void>    => ipcRenderer.invoke('license:deactivate'),
   refreshLicense:     ():                    Promise<void>    => ipcRenderer.invoke('license:refresh'),
-  getLicenseConfig:   ():                    Promise<{ checkoutUrl: string }> => ipcRenderer.invoke('license:get-config'),
+  getLicenseConfig:   ():                    Promise<unknown> => ipcRenderer.invoke('license:get-config'),
   onLicenseStateChange: (cb: (state: unknown) => void): (() => void) => {
     const h = (_: Electron.IpcRendererEvent, s: unknown) => cb(s)
     ipcRenderer.on('license:state-changed', h)
     return () => ipcRenderer.removeListener('license:state-changed', h)
+  },
+
+  // Multi-channel payment (Ticket 28)
+  createPaymentOrder: (planId: string, method: string): Promise<unknown> =>
+    ipcRenderer.invoke('payment:create-order', planId, method),
+  getOrderStatus:     (orderId: string): Promise<unknown> =>
+    ipcRenderer.invoke('payment:order-status', orderId),
+  getPaymentHistory:  (): Promise<unknown> =>
+    ipcRenderer.invoke('payment:history'),
+  openEmbeddedPayment:  (url: string): Promise<void> => ipcRenderer.invoke('payment:open-embedded', url),
+  closeEmbeddedPayment: ():            Promise<void> => ipcRenderer.invoke('payment:close-embedded'),
+  onPaymentWindowClosed: (cb: () => void): (() => void) => {
+    const h = (): void => cb()
+    ipcRenderer.on('payment:window-closed', h)
+    return () => ipcRenderer.removeListener('payment:window-closed', h)
   },
 })

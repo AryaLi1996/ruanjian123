@@ -5,19 +5,35 @@ Deploy to AWS Lambda or Alibaba Cloud Function Compute (FC).
 Both platforms deliver events with similar JSON bodies; set FC_COMPAT=true
 for Alibaba FC format.
 
-This single function serves two routes on the same Function URL, dispatched
-by request path — no API Gateway needed:
+This single function serves several routes on the same Function URL,
+dispatched by request path — no API Gateway needed:
 
   POST /                 licence verification (default route; see handler())
   POST /stripe-webhook   Stripe webhook listener — issues a license key onto
                           a subscription's metadata when checkout completes
+                          (legacy manual-key flow), AND — for orders created
+                          via /create-order — extends the paying user's
+                          license directly (Ticket 28).
+  POST /create-order     Ticket 28: create a payment order for one of
+                          card | wechat_pay | alipay | douyin_pay and return
+                          a URL for the app to open (see PaymentMethod in
+                          src/main/license-config.ts).
+  GET  /order-status      Ticket 28: poll an order; once paid, returns the
+                          signed license token so the app can unlock without
+                          restarting.
+  GET  /payment-history   Ticket 28: list an anonymous user's past orders.
+  POST /douyin-webhook    Ticket 28: Douyin Pay payment-result callback.
 
 Environment variables
 ---------------------
 LICENSE_SIGNING_SECRET  HMAC signing secret (must match Electron app)
 MOCK_MODE               'true' → accept any key (CI / demo use only)
 PAYMENT_PROVIDER        'stripe' | 'lemonsqueezy' | 'custom' (default)
-STRIPE_API_KEY          required when PAYMENT_PROVIDER=stripe
+STRIPE_API_KEY          required when PAYMENT_PROVIDER=stripe, or to accept
+                        card / wechat_pay / alipay orders via /create-order
+                        (Ticket 28 routes these through Stripe Checkout —
+                        WeChat Pay / Alipay must be enabled for the Stripe
+                        account first; see Stripe Dashboard → Payment methods)
 STRIPE_WEBHOOK_SECRET   required to accept POST /stripe-webhook (Stripe
                         Dashboard → Webhooks → signing secret, "whsec_...")
 LEMON_API_KEY           required when PAYMENT_PROVIDER=lemonsqueezy
@@ -28,6 +44,26 @@ SES_SENDER_EMAIL        verified SES sender address; emails the newly-issued
                         Uses boto3, which ships preinstalled in the AWS Lambda
                         Python runtime; no requirements.txt needed on AWS.
 SES_REGION              defaults to the function's own AWS_REGION
+ORDERS_TABLE            DynamoDB table name for payment orders (Ticket 28).
+                        /create-order, /order-status, /payment-history, and
+                        both webhooks 501 until this is set.
+LICENSES_TABLE          DynamoDB table name mapping anonymous userId →
+                        current license token (Ticket 28 auto-issuance path;
+                        independent of the legacy Stripe-metadata lookup).
+PAYMENT_SUCCESS_URL     Stripe Checkout success_url base (Ticket 28); the app
+                        never actually loads this page — see order-status
+                        polling — but Stripe requires a valid URL.
+PAYMENT_CANCEL_URL      Stripe Checkout cancel_url base (Ticket 28).
+DOUYIN_APP_ID           Douyin Open Platform app ID (Ticket 28).
+DOUYIN_MERCHANT_ID      Douyin Pay merchant ID (抖音支付商户号).
+DOUYIN_APP_SECRET       Douyin Pay signing secret — used for both request
+                        signing and notification verification. NOTE: confirm
+                        the exact signing algorithm (HMAC-SHA256 vs the
+                        legacy MD5 scheme) and endpoint paths against the
+                        current 抖音开放平台/精选联盟-支付 docs for your
+                        merchant type before going live; this template
+                        implements the widely-documented ecpay-style scheme.
+DOUYIN_NOTIFY_URL       Overrides the auto-derived Douyin callback URL.
 
 Swap provider logic in _check_payment_provider() to change monetisation
 without touching any other code.
@@ -66,6 +102,13 @@ if SIGNING_SECRET == _DEFAULT_SIGNING_SECRET and not MOCK_MODE:
     )
 ALLOWED_FEATURES = ["training", "synthesis", "separation", "cover"]
 
+# Keep in sync with PLANS in src/main/license-config.ts.
+PLANS: dict[str, dict[str, Any]] = {
+    "monthly": {"durationDays": 30,  "amount": 2900,  "currency": "cny"},
+    "annual":  {"durationDays": 365, "amount": 29900, "currency": "cny"},
+}
+PAYMENT_METHODS = {"wechat_pay", "alipay", "douyin_pay", "card"}
+
 
 # ── Token helpers ─────────────────────────────────────────────────────────────
 
@@ -77,13 +120,16 @@ def _sign(data: str) -> str:
     return hmac.new(SIGNING_SECRET.encode(), data.encode(), hashlib.sha256).hexdigest()
 
 
-def create_token(user_id: str, plan_id: str, license_key: str) -> str:
+def create_token(user_id: str, plan_id: str, license_key: str, expires_at: int | None = None) -> str:
+    """expires_at: Unix seconds. Defaults to now + EXPIRY_DAYS (legacy verify-key flow);
+    the Ticket 28 order flow passes an explicit value so renewals correctly
+    extend from the *current* expiry rather than always restarting the clock."""
     header  = _b64url(json.dumps({"alg": "HS256", "typ": "LICENSE"}))
     payload = _b64url(json.dumps({
         "userId":     user_id,
         "planId":     plan_id,
         "licenseKey": license_key,
-        "expiresAt":  int(time.time()) + EXPIRY_DAYS * 86400,
+        "expiresAt":  expires_at if expires_at is not None else int(time.time()) + EXPIRY_DAYS * 86400,
         "issuedAt":   int(time.time()),
         "features":   ALLOWED_FEATURES,
     }))
@@ -183,6 +229,379 @@ def _check_lemonsqueezy(license_key: str) -> dict | None:
     return None
 
 
+# ── Order / license store (Ticket 28) ───────────────────────────────────────────
+# A lightweight DynamoDB-backed store. Stateless/pay-per-use like the rest of
+# this function — no fixed infrastructure. Every endpoint in this section
+# degrades to a clear 501 (not a crash) when its table env var is unset, the
+# same pattern SES_SENDER_EMAIL already uses above.
+
+def _ddb_table(name: str):  # noqa: ANN201
+    """Returns a boto3 DynamoDB Table resource, or None if unconfigured/unavailable."""
+    if not name:
+        return None
+    try:
+        import boto3  # noqa: PLC0415
+    except ImportError:
+        return None
+    return boto3.resource("dynamodb").Table(name)
+
+
+def _orders_table():  # noqa: ANN201
+    return _ddb_table(os.environ.get("ORDERS_TABLE", ""))
+
+
+def _licenses_table():  # noqa: ANN201
+    return _ddb_table(os.environ.get("LICENSES_TABLE", ""))
+
+
+def _not_configured(what: str) -> dict:
+    return {"statusCode": 501, "headers": _cors_headers(),
+            "body": json.dumps({"error": f"{what} is not configured on the server"})}
+
+
+def _new_order_id() -> str:
+    import secrets  # noqa: PLC0415
+    return "ord_" + secrets.token_hex(12)
+
+
+def _put_order(order: dict[str, Any]) -> None:
+    table = _orders_table()
+    if table is None:
+        return
+    # Orders are only ever created once per orderId (we generate it), so a
+    # plain put is fine here; the *transition* to paid below is what needs
+    # the idempotency guard, since providers retry webhooks.
+    table.put_item(Item=order)
+
+
+def _get_order(order_id: str) -> dict[str, Any] | None:
+    table = _orders_table()
+    if table is None:
+        return None
+    resp = table.get_item(Key={"orderId": order_id})
+    return resp.get("Item")
+
+
+def _mark_order_paid(order_id: str, provider_txn_id: str) -> dict[str, Any] | None:
+    """Idempotent: only the first call for a given order actually transitions
+    it (and therefore extends the license) — later retries of the same
+    provider webhook see the ConditionalCheckFailed and are treated as a
+    no-op success, satisfying Ticket 28 §5's idempotency requirement."""
+    table = _orders_table()
+    if table is None:
+        return None
+    try:
+        resp = table.update_item(
+            Key={"orderId": order_id},
+            UpdateExpression="SET #s = :paid, paidAt = :now, providerTxnId = :txn",
+            ConditionExpression="attribute_exists(orderId) AND #s = :pending",
+            ExpressionAttributeNames={"#s": "status"},
+            ExpressionAttributeValues={
+                ":paid": "paid", ":pending": "pending",
+                ":now": int(time.time()), ":txn": provider_txn_id,
+            },
+            ReturnValues="ALL_NEW",
+        )
+        return resp.get("Attributes")
+    except Exception as exc:  # noqa: BLE001
+        # botocore raises ClientError with response['Error']['Code'] ==
+        # 'ConditionalCheckFailedException' — meaning "already processed",
+        # not an error worth surfacing. The code only shows up in str(exc),
+        # not the exception's class name, so check the message.
+        if "ConditionalCheckFailed" in str(exc):
+            return _get_order(order_id)
+        raise
+
+
+def _query_orders_by_user(user_id: str, limit: int = 50) -> list[dict[str, Any]]:
+    table = _orders_table()
+    if table is None:
+        return []
+    resp = table.query(
+        IndexName="userId-createdAt-index",
+        KeyConditionExpression="userId = :u",
+        ExpressionAttributeValues={":u": user_id},
+        ScanIndexForward=False,
+        Limit=limit,
+    )
+    return resp.get("Items", [])
+
+
+def _get_license_row(user_id: str) -> dict[str, Any] | None:
+    table = _licenses_table()
+    if table is None:
+        return None
+    resp = table.get_item(Key={"userId": user_id})
+    return resp.get("Item")
+
+
+def _issue_or_extend_license(user_id: str, plan_id: str) -> tuple[str, int]:
+    """Extends from the user's current expiry if it's still in the future
+    (renewal before lapse stacks, matching Ticket 28 §4), otherwise starts
+    fresh from now. Returns (token, expiresAt)."""
+    plan = PLANS.get(plan_id, PLANS["monthly"])
+    now  = int(time.time())
+
+    existing   = _get_license_row(user_id)
+    base       = existing["expiresAt"] if existing and existing.get("expiresAt", 0) > now else now
+    expires_at = base + plan["durationDays"] * 86400
+
+    license_key = _generate_license_key()
+    token = create_token(user_id, plan_id, license_key, expires_at=expires_at)
+
+    table = _licenses_table()
+    if table is not None:
+        table.put_item(Item={
+            "userId": user_id, "token": token, "planId": plan_id,
+            "licenseKey": license_key, "expiresAt": expires_at, "updatedAt": now,
+        })
+    return token, expires_at
+
+
+# ── Order creation: routes each method to its payment provider ─────────────────
+
+def _create_stripe_order(order_id: str, user_id: str, plan_id: str, method: str) -> dict[str, Any]:
+    """card / wechat_pay / alipay all go through one Stripe Checkout Session
+    (one-time payment, not a Stripe *subscription* — our own license token is
+    the source of truth for expiry, see _issue_or_extend_license). Stripe's
+    hosted Checkout page renders the WeChat Pay QR / Alipay redirect itself,
+    so we never have to parse or re-render provider-specific payment data."""
+    import urllib.request  # noqa: PLC0415
+    from urllib.parse import urlencode  # noqa: PLC0415
+
+    api_key = os.environ.get("STRIPE_API_KEY")
+    if not api_key:
+        raise RuntimeError("STRIPE_API_KEY not configured")
+
+    plan = PLANS[plan_id]
+    success_base = os.environ.get("PAYMENT_SUCCESS_URL", "https://ruanjian.app/payment/success")
+    cancel_base  = os.environ.get("PAYMENT_CANCEL_URL",  "https://ruanjian.app/payment/cancel")
+
+    fields: dict[str, str] = {
+        "mode":                 "payment",
+        "success_url":          f"{success_base}?order_id={order_id}",
+        "cancel_url":           f"{cancel_base}?order_id={order_id}",
+        "client_reference_id":  order_id,
+        "payment_method_types[0]": method,  # 'card' | 'wechat_pay' | 'alipay'
+        "line_items[0][price_data][currency]":                 plan["currency"],
+        "line_items[0][price_data][unit_amount]":               str(plan["amount"]),
+        "line_items[0][price_data][product_data][name]":        f"Ruanjian {plan_id} subscription",
+        "line_items[0][quantity]":                               "1",
+        "metadata[orderId]": order_id,
+        "metadata[userId]":  user_id,
+        "metadata[planId]":  plan_id,
+    }
+    if method == "wechat_pay":
+        # Required for WeChat Pay on Checkout Sessions — tells Stripe this is
+        # a browser (not native app) context so it renders the QR variant.
+        fields["payment_method_options[wechat_pay][client]"] = "web"
+
+    body = urlencode(fields).encode()
+    req  = urllib.request.Request(
+        "https://api.stripe.com/v1/checkout/sessions", data=body, method="POST",
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/x-www-form-urlencoded"},
+    )
+    with urllib.request.urlopen(req, timeout=8) as r:
+        session = json.load(r)
+
+    # Card/Alipay: send the user to the system browser. WeChat Pay: embed in
+    # an in-app window so the QR shows inline (see main/index.ts payment:open-embedded).
+    present_as = "embedded" if method == "wechat_pay" else "external"
+    return {"providerOrderId": session["id"], "url": session["url"], "presentAs": present_as}
+
+
+def _douyin_signature(params: dict[str, str], secret: str) -> str:
+    """抖音开放平台 ecpay-style signing: sort params (excluding 'sign' and any
+    empty values) by key, join as f"{key}={value}" with '&', append the
+    secret, HMAC-SHA256, hex digest. Some Douyin merchant integrations use a
+    legacy MD5 variant instead — confirm which one your merchant type uses
+    in the current 抖音支付 docs before relying on this in production."""
+    items = sorted((k, v) for k, v in params.items() if k != "sign" and v not in (None, ""))
+    signed_str = "&".join(f"{k}={v}" for k, v in items)
+    return hmac.new(secret.encode(), signed_str.encode(), hashlib.sha256).hexdigest()
+
+
+def _create_douyin_order(order_id: str, user_id: str, plan_id: str) -> dict[str, Any]:
+    """Creates a Douyin Pay H5 order. Desktop web has no Douyin app to deep-link
+    into, so — like WeChat Pay above — the returned page is shown in an
+    embedded window; Douyin's own H5 checkout page renders a scan-to-pay QR
+    when it detects a non-mobile user agent. NOTE: verify the exact endpoint
+    path/params for your merchant type (抖音开放平台 vs 抖音电商开放平台)
+    before going live — this implements the commonly-documented ecpay
+    create_order shape."""
+    import urllib.request  # noqa: PLC0415
+
+    app_id      = os.environ.get("DOUYIN_APP_ID")
+    merchant_id = os.environ.get("DOUYIN_MERCHANT_ID")
+    secret      = os.environ.get("DOUYIN_APP_SECRET")
+    if not (app_id and merchant_id and secret):
+        raise RuntimeError("DOUYIN_APP_ID / DOUYIN_MERCHANT_ID / DOUYIN_APP_SECRET not configured")
+
+    plan        = PLANS[plan_id]
+    notify_url  = os.environ.get("DOUYIN_NOTIFY_URL") or _self_url("douyin-webhook")
+
+    params: dict[str, str] = {
+        "app_id":       app_id,
+        "merchant_id":  merchant_id,
+        "out_order_no": order_id,
+        "total_amount": str(plan["amount"]),
+        "currency":     plan["currency"].upper(),
+        "subject":      f"Ruanjian {plan_id} subscription",
+        "notify_url":   notify_url,
+        "timestamp":    str(int(time.time())),
+    }
+    params["sign"] = _douyin_signature(params, secret)
+
+    req = urllib.request.Request(
+        "https://developer.toutiao.com/api/apps/ecpay/v1/create_order",
+        data=json.dumps(params).encode(),
+        method="POST",
+        headers={"Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=8) as r:
+        data = json.load(r)
+
+    if str(data.get("err_no", data.get("errno", 0))) != "0":
+        raise RuntimeError(f"Douyin order creation failed: {data}")
+
+    pay_url = data.get("data", {}).get("pay_url") or data.get("pay_url", "")
+    return {"providerOrderId": data.get("order_id", order_id), "url": pay_url, "presentAs": "embedded"}
+
+
+def _self_url(path: str) -> str:
+    base = os.environ.get("LICENSE_URL", "").rstrip("/")
+    return f"{base}/{path}" if base else path
+
+
+# ── /create-order, /order-status, /payment-history handlers ────────────────────
+
+def _handle_create_order(event: dict) -> dict:
+    if _orders_table() is None:
+        return _not_configured("ORDERS_TABLE")
+    try:
+        body     = json.loads(event.get("body") or "{}")
+        plan_id  = str(body.get("planId", ""))
+        method   = str(body.get("method", ""))
+        user_id  = str(body.get("userId", "")).strip()
+    except json.JSONDecodeError:
+        return {"statusCode": 400, "headers": _cors_headers(), "body": json.dumps({"error": "invalid body"})}
+
+    if plan_id not in PLANS:
+        return {"statusCode": 400, "headers": _cors_headers(), "body": json.dumps({"error": "unknown planId"})}
+    if method not in PAYMENT_METHODS:
+        return {"statusCode": 400, "headers": _cors_headers(), "body": json.dumps({"error": "unknown method"})}
+    if not user_id or len(user_id) > 128:
+        return {"statusCode": 400, "headers": _cors_headers(), "body": json.dumps({"error": "userId required"})}
+
+    order_id = _new_order_id()
+    plan     = PLANS[plan_id]
+
+    try:
+        if method == "douyin_pay":
+            provider = _create_douyin_order(order_id, user_id, plan_id)
+        else:
+            provider = _create_stripe_order(order_id, user_id, plan_id, method)
+    except Exception as exc:  # noqa: BLE001
+        return {"statusCode": 502, "headers": _cors_headers(),
+                "body": json.dumps({"error": f"payment provider error: {exc}"})}
+
+    order = {
+        "orderId": order_id, "userId": user_id, "planId": plan_id, "method": method,
+        "status": "pending", "amount": plan["amount"], "currency": plan["currency"],
+        "createdAt": int(time.time()), "providerOrderId": provider["providerOrderId"],
+    }
+    _put_order(order)
+
+    return {
+        "statusCode": 200, "headers": _cors_headers(),
+        "body": json.dumps({
+            "orderId": order_id, "planId": plan_id, "method": method, "status": "pending",
+            "amount": plan["amount"], "currency": plan["currency"], "createdAt": order["createdAt"],
+            "presentAs": provider["presentAs"], "redirectUrl": provider["url"],
+        }),
+    }
+
+
+def _handle_order_status(event: dict) -> dict:
+    if _orders_table() is None:
+        return _not_configured("ORDERS_TABLE")
+    qs       = _query_params(event)
+    order_id = qs.get("orderId", "")
+    user_id  = qs.get("userId", "")
+    if not order_id or not user_id:
+        return {"statusCode": 400, "headers": _cors_headers(), "body": json.dumps({"error": "orderId and userId required"})}
+
+    order = _get_order(order_id)
+    if not order or order.get("userId") != user_id:
+        return {"statusCode": 404, "headers": _cors_headers(), "body": json.dumps({"error": "order not found"})}
+
+    resp: dict[str, Any] = {
+        "status": order["status"],
+        "order": {
+            "orderId": order["orderId"], "planId": order["planId"], "method": order["method"],
+            "status": order["status"], "amount": order["amount"], "currency": order["currency"],
+            "createdAt": order["createdAt"],
+        },
+    }
+    if order["status"] == "paid":
+        row = _get_license_row(user_id)
+        if row:
+            resp["token"] = row["token"]
+    return {"statusCode": 200, "headers": _cors_headers(), "body": json.dumps(resp)}
+
+
+def _handle_payment_history(event: dict) -> dict:
+    if _orders_table() is None:
+        return _not_configured("ORDERS_TABLE")
+    user_id = _query_params(event).get("userId", "")
+    if not user_id:
+        return {"statusCode": 400, "headers": _cors_headers(), "body": json.dumps({"error": "userId required"})}
+
+    orders = _query_orders_by_user(user_id)
+    history = [{
+        "orderId": o["orderId"], "planId": o["planId"], "method": o["method"], "status": o["status"],
+        "amount": o["amount"], "currency": o["currency"], "createdAt": o["createdAt"],
+        **({"paidAt": o["paidAt"]} if o.get("paidAt") else {}),
+    } for o in orders]
+    return {"statusCode": 200, "headers": _cors_headers(), "body": json.dumps({"orders": history})}
+
+
+def _handle_douyin_webhook(event: dict) -> dict:
+    secret = os.environ.get("DOUYIN_APP_SECRET")
+    if not secret or _orders_table() is None:
+        return _not_configured("DOUYIN_APP_SECRET / ORDERS_TABLE")
+
+    try:
+        payload = json.loads(_raw_body(event) or b"{}")
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return {"statusCode": 400, "headers": _cors_headers(), "body": json.dumps({"error": "invalid payload"})}
+
+    expected = _douyin_signature(payload, secret)
+    if not hmac.compare_digest(expected, str(payload.get("sign", ""))):
+        return {"statusCode": 400, "headers": _cors_headers(), "body": json.dumps({"error": "invalid signature"})}
+
+    order_id = str(payload.get("out_order_no", ""))
+    txn_id   = str(payload.get("order_id", order_id))
+    order    = _get_order(order_id)
+    if not order:
+        return {"statusCode": 404, "headers": _cors_headers(), "body": json.dumps({"error": "order not found"})}
+
+    if order["status"] == "pending":
+        updated = _mark_order_paid(order_id, txn_id)
+        if updated:
+            _issue_or_extend_license(order["userId"], order["planId"])
+
+    # Douyin expects a specific ack body/shape — adjust to match the current
+    # 抖音支付 callback contract for your merchant type.
+    return {"statusCode": 200, "headers": _cors_headers(), "body": json.dumps({"err_no": 0, "err_tips": "success"})}
+
+
+def _query_params(event: dict) -> dict[str, str]:
+    """Works for both Function URL (payload format 2.0) and API Gateway REST events."""
+    qs = event.get("queryStringParameters")
+    return dict(qs) if qs else {}
+
+
 # ── Stripe webhook: license key issuance ────────────────────────────────────────
 # _check_stripe() above can only find a subscription by license_key if that key
 # already exists in the subscription's metadata. Nothing sets it there except
@@ -249,9 +668,28 @@ def _send_license_key_email(to_email: str, license_key: str) -> bool:
 
 
 def _handle_checkout_completed(session: dict[str, Any]) -> dict[str, Any]:
+    metadata = session.get("metadata") or {}
+    order_id = metadata.get("orderId")
+
+    # Ticket 28 order flow: one-time Checkout Session created by
+    # /create-order (see _create_stripe_order). Extends the paying user's
+    # license directly — no manual key entry, no Stripe *subscription* object.
+    if order_id:
+        if _orders_table() is None:
+            return {"handled": False, "reason": "ORDERS_TABLE not configured"}
+        order = _get_order(order_id)
+        if not order:
+            return {"handled": False, "reason": f"unknown orderId {order_id}"}
+        if order["status"] == "pending":
+            updated = _mark_order_paid(order_id, session.get("id", order_id))
+            if updated:
+                _issue_or_extend_license(order["userId"], order["planId"])
+        return {"handled": True, "orderId": order_id}
+
+    # Legacy flow: static Payment Link in *subscription* mode, no orderId
+    # metadata — issue a license key the customer enters manually.
     subscription_id = session.get("subscription")
     if not subscription_id:
-        # e.g. a one-time payment mode session with no subscription attached
         return {"handled": False, "reason": "no subscription on session"}
 
     license_key = _generate_license_key()
@@ -321,6 +759,7 @@ def _handle_stripe_webhook(event: dict) -> dict:
 def _cors_headers() -> dict[str, str]:
     return {
         "Access-Control-Allow-Origin":  "*",
+        "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
         "Access-Control-Allow-Headers": "Content-Type, Stripe-Signature",
         "Content-Type":                 "application/json",
     }
@@ -359,8 +798,17 @@ def handler(event: dict, context: object) -> dict:
     if event.get("httpMethod") == "OPTIONS":
         return {"statusCode": 204, "headers": _cors_headers(), "body": ""}
 
-    if _request_path(event).rstrip("/").endswith("/stripe-webhook"):
+    path = _request_path(event).rstrip("/")
+    if path.endswith("/stripe-webhook"):
         return _handle_stripe_webhook(event)
+    if path.endswith("/douyin-webhook"):
+        return _handle_douyin_webhook(event)
+    if path.endswith("/create-order"):
+        return _handle_create_order(event)
+    if path.endswith("/order-status"):
+        return _handle_order_status(event)
+    if path.endswith("/payment-history"):
+        return _handle_payment_history(event)
 
     try:
         raw_body    = event.get("body") or "{}"

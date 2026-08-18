@@ -12,9 +12,34 @@
 // active can have its license tokens forged offline; see the warning below.
 const DEFAULT_SIGNING_SECRET = 'ruanjian-dev-signing-secret-v1-change-in-production'
 
+// ── Multi-channel payment (Ticket 28) ─────────────────────────────────────────
+// One payment = one order = license extended by that plan's duration.
+// This is independent of Stripe's own "subscription" object — the source of
+// truth for expiry is our own signed license token, not Stripe billing state.
+export type PaymentMethod = 'wechat_pay' | 'alipay' | 'douyin_pay' | 'card'
+export type PlanId = 'monthly' | 'annual'
+
+export interface PlanDef {
+  id:           PlanId
+  durationDays: number
+  amount:       number   // minor currency units (e.g. fen for CNY, cents for USD)
+  currency:     string   // ISO 4217, lowercase — must match the serverless PLAN config
+}
+
+// NOTE: WeChat Pay / Alipay via Stripe Checkout only support a subset of
+// presentment currencies, and that list can change — confirm the current one
+// in the Stripe docs before choosing `currency` for a real deployment.
+export const PLANS: readonly PlanDef[] = [
+  { id: 'monthly', durationDays: 30,  amount: 2900,  currency: 'cny' },  // ¥29 / mo
+  { id: 'annual',  durationDays: 365, amount: 29900, currency: 'cny' },  // ¥299 / yr
+] as const
+
+export const PAYMENT_METHODS: readonly PaymentMethod[] = ['wechat_pay', 'alipay', 'douyin_pay', 'card']
+
 export const LICENSE_CONFIG = {
   // ── Serverless verification endpoint ───────────────────────────────────────
-  // Replace with your actual deployed URL.
+  // Replace with your actual deployed URL. All payment routes below live on
+  // this same Function URL, dispatched by path (see serverless/verify-license).
   // Set VITE_LICENSE_URL (renderer) or LICENSE_URL (main) env var in production.
   verificationUrl: process.env['LICENSE_URL'] ??
     'https://5pmjnezmzrbjw2tjmnzpt232xy0duvyr.lambda-url.us-east-1.on.aws/',
@@ -24,7 +49,7 @@ export const LICENSE_CONFIG = {
   // public key embedded here.  For HMAC (this template): rotate via app update.
   signingSecret: process.env['LICENSE_SIGNING_SECRET'] ?? DEFAULT_SIGNING_SECRET,
 
-  // ── Payment checkout URL ────────────────────────────────────────────────────
+  // ── Payment checkout URL (legacy: static Stripe Payment Link / "Manage") ───
   checkoutUrl: process.env['CHECKOUT_URL'] ?? '',
 
   // ── Subscription enforcement ────────────────────────────────────────────────
@@ -39,6 +64,13 @@ export const LICENSE_CONFIG = {
   // Activating this key in dev mode creates a local 30-day token without
   // hitting the server — safe for automated tests and first-launch demos.
   demoKey: 'RUANJIAN-DEMO-2026',
+
+  // ── Plans & payment methods (Ticket 28) ─────────────────────────────────────
+  plans:          PLANS,
+  paymentMethods: PAYMENT_METHODS,
+  // How often the client polls /order-status while a payment is pending.
+  orderPollIntervalMs: 3_000,
+  orderPollTimeoutMs:  10 * 60_000,
 } as const
 
 /** True when no LICENSE_SIGNING_SECRET override was supplied — see the warning this drives in index.ts. */
