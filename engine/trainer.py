@@ -15,6 +15,7 @@ Provides:
 from __future__ import annotations
 
 import json
+import os
 import time
 from pathlib import Path
 from typing import Literal
@@ -246,14 +247,20 @@ def build_optimizer(
     lr:            float,
     mode:          Literal["standard", "professional"],
     lora_plus_eta: float = 16.0,
+    fused:         bool = False,
 ) -> torch.optim.Optimizer:
     """
     Standard mode  : uniform lr for all trainable params.
     Professional   : LoRA+ — lora_B params get lr × lora_plus_eta.
+
+    fused=True uses PyTorch's fused CUDA Adam kernel (single kernel launch
+    for the whole param-group update instead of one per tensor) — only
+    valid when every param is a CUDA tensor, so callers must gate it on
+    device == "cuda".
     """
     if mode != "professional":
         return torch.optim.Adam(
-            [p for p in model.parameters() if p.requires_grad], lr=lr)
+            [p for p in model.parameters() if p.requires_grad], lr=lr, fused=fused)
 
     lora_a, lora_b, other = [], [], []
     for name, param in model.named_parameters():
@@ -267,7 +274,7 @@ def build_optimizer(
         {"params": lora_a, "lr": lr},
         {"params": lora_b, "lr": lr * lora_plus_eta},
         {"params": other,  "lr": lr},
-    ])
+    ], fused=fused)
 
 
 # ── ONNX export ───────────────────────────────────────────────────────────────
@@ -380,6 +387,16 @@ def _pick_device() -> str:
     return "cpu"
 
 
+def _configure_backend(device: str) -> None:
+    """One-time perf knobs. No-ops on backends that don't support them."""
+    if device == "cuda":
+        # Let cuDNN pick the fastest conv/matmul algorithm for our fixed
+        # input shapes (safe here — every batch is the same shape), and
+        # allow TF32 matmuls on Ampere+ for a free throughput bump.
+        torch.backends.cudnn.benchmark = True
+        torch.set_float32_matmul_precision("high")
+
+
 def train(
     data_dir:      Path,
     output_path:   Path,
@@ -400,12 +417,13 @@ def train(
     """
     device = device or _pick_device()
     gc     = (mode == "professional")   # gradient checkpointing in pro mode
+    _configure_backend(device)
 
     model = MicroVITSModel(gradient_checkpointing=gc)
     model = apply_lora(model, mode)
     model.to(device)
 
-    opt = build_optimizer(model, lr, mode, lora_plus_eta)
+    opt = build_optimizer(model, lr, mode, lora_plus_eta, fused=(device == "cuda"))
 
     # Preprocess raw data if needed; fall back to synthetic dataset if empty
     proc_dir = data_dir / "_processed"
@@ -415,34 +433,62 @@ def train(
             proc_dir = data_dir   # VocalDataset will use dummy mode
 
     dataset = VocalDataset(proc_dir)
-    loader  = DataLoader(dataset, batch_size=batch_size, shuffle=True,
-                         drop_last=True, num_workers=0)
+    # Worker processes only pay off when __getitem__ does real disk I/O
+    # (the synthetic/dummy fallback is pure in-memory sine-wave math, where
+    # process spawn/IPC overhead would make things slower, not faster).
+    n_workers = min(4, os.cpu_count() or 1) if not dataset._dummy else 0
+    loader = DataLoader(
+        dataset, batch_size=batch_size, shuffle=True, drop_last=True,
+        num_workers=n_workers,
+        pin_memory=(device == "cuda"),
+        persistent_workers=n_workers > 0,
+    )
     loss_fn = nn.MSELoss()
 
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
     total     = sum(p.numel() for p in model.parameters())
+
+    # AMP: real speedup on CUDA tensor cores; harmless no-op elsewhere.
+    # GradScaler(enabled=False)/autocast(enabled=False) fall straight
+    # through to plain fp32 ops, so this one code path is safe on CPU/MPS.
+    amp_enabled = (device == "cuda")
+    scaler      = torch.cuda.amp.GradScaler(enabled=amp_enabled)
+    trainable_params = [p for p in model.parameters() if p.requires_grad]
+
+    # Cosine LR decay improves final convergence over a flat LR for the
+    # short fine-tuning runs this trainer targets (LoRA fine-tuning
+    # benefits from annealing toward the end of training).
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=max(epochs, 1))
 
     t0        = time.perf_counter()
     best_loss = float("inf")
 
     for epoch in range(1, epochs + 1):
         model.train()
-        epoch_loss, n_batches = 0.0, 0
+        epoch_loss_t = torch.zeros((), device=device)
+        n_batches    = 0
 
         for frames, cond in loader:
-            frames, cond = frames.to(device), cond.to(device)
-            opt.zero_grad()
-            pred   = model(frames, cond)
-            target = frames.flatten(start_dim=1)
-            loss   = loss_fn(pred, target)
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(
-                [p for p in model.parameters() if p.requires_grad], max_norm=1.0)
-            opt.step()
-            epoch_loss += float(loss.item())
-            n_batches  += 1
+            frames = frames.to(device, non_blocking=True)
+            cond   = cond.to(device, non_blocking=True)
+            opt.zero_grad(set_to_none=True)
+            with torch.autocast(device_type="cuda", enabled=amp_enabled):
+                pred   = model(frames, cond)
+                target = frames.flatten(start_dim=1)
+                loss   = loss_fn(pred, target)
+            scaler.scale(loss).backward()
+            scaler.unscale_(opt)
+            torch.nn.utils.clip_grad_norm_(trainable_params, max_norm=1.0)
+            scaler.step(opt)
+            scaler.update()
+            # Accumulate on-device and defer the CPU sync (.item()) to once
+            # per epoch instead of once per batch — on CUDA/MPS every
+            # .item() call forces a device sync that stalls the pipeline.
+            epoch_loss_t += loss.detach()
+            n_batches    += 1
 
-        avg_loss  = epoch_loss / max(n_batches, 1)
+        scheduler.step()
+        avg_loss  = (epoch_loss_t / max(n_batches, 1)).item()
         best_loss = min(best_loss, avg_loss)
         elapsed   = time.perf_counter() - t0
 
