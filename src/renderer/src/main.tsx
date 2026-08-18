@@ -1,6 +1,7 @@
 import React from 'react'
 import ReactDOM from 'react-dom/client'
 import './i18n'
+import './store/useSettingsStore'
 import './styles/app.css'
 import App from './App'
 

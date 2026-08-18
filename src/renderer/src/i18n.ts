@@ -38,6 +38,14 @@ const resources = {
       onboarding: { welcome: '欢迎使用 Ruanjian', welcomeDesc: 'AI 歌手翻唱软件，帮助你训练歌手模型、制作翻唱并处理音频。', modelTitle: '模型训练', modelDesc: '在模型训练页面上传干声素材，创建属于你的 AI 歌手模型。', coverTitle: '翻唱创作', coverDesc: '上传歌曲，分离人声与伴奏，再选择模型替换原唱。', toolsTitle: '音频工具', toolsDesc: '使用批量音源分离工具快速提取人声、和声与伴奏。', next: '下一步', skip: '跳过', getStarted: '开始使用', progress: '{{current}} / {{total}}', showAgain: '再次查看使用教程', dontShow: '不再显示',
         start: '开始使用 →', hardware: '检测硬件', scanning: '正在扫描 GPU 加速…', continue: '继续 →', warmup: '模型预热', warmupDesc: '预加载推理引擎，让第一次合成更快。', warmupRunning: '正在初始化 AI 引擎…', warmupSuccess: '✓ 引擎已就绪，可以开始使用。', warmupContinue: '继续', warmupSkip: '跳过预热', runWarmup: '运行预热', ready: '✓ 引擎就绪', warmupFailed: '预热失败，将以降级模式继续。', retryWarmup: '重试预热', allSet: '准备完成！', allSetDesc: 'Ruanjian 已配置完成，可以开始使用。', open: '打开 Ruanjian' },
       errors: { verificationUrl: '许可证验证服务未配置。', checkoutUrl: '支付页面未配置。', engine: '引擎错误：{{message}}', generic: '发生错误：{{message}}' },
+      settings: {
+        title: '设置', description: '自定义外观模式、主题色彩，并上传你的个人头像。',
+        appearance: '外观模式', system: '跟随系统', light: '浅色', dark: '深色',
+        themeColor: '主题色彩',
+        accent: { indigo: '靛蓝', blue: '天蓝', teal: '青绿', green: '翠绿', orange: '橙色', pink: '粉色', red: '红色', violet: '紫罗兰' },
+        profilePhoto: '个人头像', uploadPhoto: '上传照片', removePhoto: '移除照片',
+        photoHint: '建议使用正方形图片，将自动裁剪并压缩为头像。', photoInvalid: '无法读取该图片，请换一张重试。',
+      },
     },
   },
   'en-US': {
@@ -61,6 +69,14 @@ const resources = {
       subscription: { title: 'Subscription', description: 'Manage your Ruanjian license and plan.', status: 'License Status', plan: 'Plan', monthly: 'Monthly', annual: 'Annual', trial: 'Trial', validUntil: 'Valid until', daysRemaining: 'Days remaining', features: 'Licensed features', active: '✓ Active', unlicensed: '○ Unlicensed', expired: '✕ Expired', grace: '⚠ Expired (grace period)', graceMessage: 'Your subscription expired; {{count}} day(s) of grace remain.', invalid: '✕ Invalid token', manage: 'Manage Subscription', renew: 'Renew', activateTitle: 'Activate License', renewTitle: 'Renew Subscription', enterKey: 'Enter your license key to unlock all Ruanjian features.', expiredDesc: 'Your subscription has expired. Renew to restore full access.', subscribe: 'Subscribe', subscribeNow: 'Subscribe Now', activateKey: 'Or enter an existing license key', keyPlaceholder: 'RUANJIAN-XXXX-XXXX-XXXX', activating: 'Activating…', demo: 'Demo: use RUANJIAN-DEMO-2026 for a free 30-day trial.', subscribeUnlock: 'Subscribe to Unlock', lockDescription: 'Ruanjian requires an active subscription to use AI features. Start with a free 30-day trial.', haveKey: 'Already have a key? Go to the Subscription page.', expiredTitle: 'Subscription Expired', expiredLockDesc: 'Your subscription has lapsed. Renew to restore access to all features.', openCheckout: 'Open payment page' },
       onboarding: { welcome: 'Welcome to Ruanjian', welcomeDesc: 'AI Singer Cover Software for training singer models, creating covers, and processing audio.', modelTitle: 'Model Training', modelDesc: 'Upload dry vocal material on the Model Training page to create your own AI singer model.', coverTitle: 'Cover Creation', coverDesc: 'Upload a song, separate vocals and accompaniment, then replace the original vocal with your model.', toolsTitle: 'Audio Tools', toolsDesc: 'Use the batch source separation tool to extract vocals, harmony, and accompaniment.', next: 'Next', skip: 'Skip', getStarted: 'Get Started', progress: '{{current}} / {{total}}', showAgain: 'Show Tutorial Again', dontShow: "Don't show again", start: 'Get Started →', hardware: 'Detecting Hardware', scanning: 'Scanning for GPU acceleration…', continue: 'Continue →', warmup: 'Model Warm-Up', warmupDesc: 'Pre-load the inference engine so your first synthesis is instant.', warmupRunning: 'Initializing the AI engine…', warmupSuccess: '✓ Engine ready. You can start using the app.', warmupContinue: 'Continue', warmupSkip: 'Skip warm-up', runWarmup: 'Run Warm-Up', ready: '✓ Engine ready', warmupFailed: 'Warm-up failed. Continuing in degraded mode.', retryWarmup: 'Retry Warm-Up', allSet: 'You\'re All Set!', allSetDesc: 'Ruanjian is configured and ready.', open: 'Open Ruanjian' },
       errors: { verificationUrl: 'License verification service is not configured.', checkoutUrl: 'Payment page is not configured.', engine: 'Engine error: {{message}}', generic: 'An error occurred: {{message}}' },
+      settings: {
+        title: 'Settings', description: 'Customize the appearance mode, theme colour, and your profile photo.',
+        appearance: 'Appearance', system: 'System', light: 'Light', dark: 'Dark',
+        themeColor: 'Theme Colour',
+        accent: { indigo: 'Indigo', blue: 'Blue', teal: 'Teal', green: 'Green', orange: 'Orange', pink: 'Pink', red: 'Red', violet: 'Violet' },
+        profilePhoto: 'Profile Photo', uploadPhoto: 'Upload Photo', removePhoto: 'Remove Photo',
+        photoHint: 'A square image works best — it will be auto-cropped and compressed.', photoInvalid: 'Could not read that image. Please try another.',
+      },
     },
   },
 } as const

@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import i18n from '../i18n'
 import { useAppStore, type ActiveView } from '../store/useAppStore'
 import { useSubscriptionStore } from '../store/useSubscriptionStore'
+import { useSettingsStore } from '../store/useSettingsStore'
 
 interface NavItem { view: ActiveView; icon: string; key: string }
 interface UpdateInfo { version?: string }
@@ -30,6 +31,7 @@ export function TopToolbar(): JSX.Element {
   const engineStatus  = useAppStore((s) => s.engineStatus)
   const setActiveView = useAppStore((s) => s.setActiveView)
   const subStatus     = useSubscriptionStore((s) => s.status)
+  const avatarDataUrl = useSettingsStore((s) => s.avatarDataUrl)
 
   const [updateInfo,     setUpdateInfo] = useState<UpdateInfo | null>(null)
   const [downloading,    setDownloading] = useState(false)
@@ -109,6 +111,18 @@ export function TopToolbar(): JSX.Element {
             <option value="en-US">{t('language.en')}</option>
           </select>
         </label>
+
+        <button
+          className={`tb-settings-btn${activeView === 'settings' ? ' active' : ''}`}
+          onClick={() => setActiveView('settings')}
+          title={t('settings.title')}
+          aria-current={activeView === 'settings' ? 'page' : undefined}
+        >
+          {avatarDataUrl
+            ? <img src={avatarDataUrl} alt="" className="tb-settings-avatar" />
+            : <span aria-hidden="true">⚙️</span>}
+          <span className="sr-only">{t('settings.title')}</span>
+        </button>
       </div>
     </header>
   )
