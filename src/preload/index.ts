@@ -53,6 +53,10 @@ contextBridge.exposeInMainWorld('engine', {
   isFirstLaunch:   (): Promise<boolean> => ipcRenderer.invoke('app:is-first-launch'),
   markInitialized: (): Promise<void>    => ipcRenderer.invoke('app:mark-initialized'),
 
+  // Syncs the native window's paint colour with the renderer's appearance setting
+  setBackgroundColor: (hex: string): Promise<void> =>
+    ipcRenderer.invoke('window:set-background-color', hex),
+
   // Engine warm-up (shared with main's own startup probe — see index.ts)
   getWarmupResult: (): Promise<{ passed: boolean; ep?: string; elapsedMs?: number; degraded?: boolean; error?: string }> =>
     ipcRenderer.invoke('app:warmup-result'),

@@ -7,6 +7,7 @@ import { CoverView }      from '../views/CoverView'
 import { AudioToolsView } from '../views/AudioToolsView'
 import { PlaybackMonitorView } from '../views/PlaybackMonitorView'
 import { SubscriptionView } from '../views/SubscriptionView'
+import { SettingsView } from '../views/SettingsView'
 import { SubscriptionGate } from './SubscriptionGate'
 import { ErrorBoundary } from './ErrorBoundary'
 
@@ -17,14 +18,18 @@ export function Layout(): JSX.Element {
   // Sync subscription state from main process on mount
   useEffect(() => { _init() }, [_init])
 
-  const isSubView = (activeView as string) === 'subscription'
+  const isSubView      = (activeView as string) === 'subscription'
+  const isSettingsView = (activeView as string) === 'settings'
+  // Appearance/theme prefs and the subscription page itself must stay
+  // reachable even when the licence is expired or unset.
+  const bypassesGate = isSubView || isSettingsView
 
-  const view = isSubView
-    ? <SubscriptionView />
-    : activeView === 'training'    ? <TrainingView />  :
-      activeView === 'cover'       ? <CoverView />     :
-      activeView === 'playback'    ? <PlaybackMonitorView /> :
-                                     <AudioToolsView />
+  const view = isSubView      ? <SubscriptionView /> :
+    isSettingsView             ? <SettingsView />      :
+    activeView === 'training'  ? <TrainingView />      :
+    activeView === 'cover'     ? <CoverView />         :
+    activeView === 'playback'  ? <PlaybackMonitorView /> :
+                                 <AudioToolsView />
 
   return (
     <div className="app-layout">
@@ -34,7 +39,7 @@ export function Layout(): JSX.Element {
         key={activeView}
       >
         <ErrorBoundary label={activeView}>
-          {isSubView ? view : <SubscriptionGate>{view}</SubscriptionGate>}
+          {bypassesGate ? view : <SubscriptionGate>{view}</SubscriptionGate>}
         </ErrorBoundary>
       </main>
     </div>

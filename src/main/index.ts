@@ -213,6 +213,16 @@ app.whenReady().then(async () => {
   ipcMain.handle('app:warmup-result', () => warmUpEngine())
   ipcMain.handle('app:warmup-retry', () => { warmupPromise = null; return warmUpEngine() })
 
+  // Keeps the native window's paint colour in sync with the renderer's chosen
+  // appearance. backgroundColor is only shown momentarily (window creation
+  // uses show:false + ready-to-show), but Chromium also repaints it into any
+  // gap during resize/maximize compositing — without this a light-appearance
+  // user would see a flash of the dark startup default on every resize.
+  ipcMain.handle('window:set-background-color', (event, hex: string) => {
+    if (!/^#[0-9a-fA-F]{6}$/.test(hex)) return
+    BrowserWindow.fromWebContents(event.sender)?.setBackgroundColor(hex)
+  })
+
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })
