@@ -11,7 +11,7 @@ import { promises as fs, existsSync }   from 'fs'
 import { join }                          from 'path'
 import { EventEmitter }                  from 'events'
 import { app }                           from 'electron'
-import { LICENSE_CONFIG, type PaymentMethod, type PlanId } from './license-config'
+import { LICENSE_CONFIG, PAYMENT_METHODS, type PaymentMethod, type PlanId } from './license-config'
 import { encryptModelBytes, decryptModelBytes } from './model-crypto'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -78,6 +78,18 @@ export interface PaymentHistoryEntry {
   currency:  string
   createdAt: number
   paidAt?:   number
+}
+
+// Ticket 31: server-computed availability + display metadata for the
+// picker — see /payment-methods in handler.py. `color` is null for methods
+// (card) meant to follow the app's current theme accent instead of a fixed
+// brand color.
+export interface PaymentMethodInfo {
+  id:      PaymentMethod
+  enabled: boolean
+  name:    string
+  icon:    string
+  color:   string | null
 }
 
 // ── Token helpers ─────────────────────────────────────────────────────────────
@@ -390,6 +402,34 @@ export class SubscriptionMonitor extends EventEmitter {
       { orders?: PaymentHistoryEntry[]; error?: string }
     if (d.error) throw new Error(d.error)
     return Array.isArray(d.orders) ? d.orders : []
+  }
+
+  /**
+   * Ticket 31: which payment methods are actually usable right now, per the
+   * server's own provider-credential check (see /payment-methods in
+   * handler.py) — never the static PAYMENT_METHODS list, which is just
+   * "methods this build knows how to render," not "methods that work." The
+   * server also owns each method's display name/icon/color (localized to
+   * `lang`, e.g. the renderer's current i18n.language) so the client isn't
+   * duplicating that mapping just to draw the picker.
+   * Defensively re-filtered against PAYMENT_METHODS here too, so a server
+   * response naming an id this build doesn't recognize can't reach the UI.
+   */
+  async getPaymentMethods(lang: string): Promise<PaymentMethodInfo[]> {
+    const d = await this._request('GET', `payment-methods?lang=${encodeURIComponent(lang)}`) as
+      { methods?: { id?: string; enabled?: boolean; name?: string; icon?: string; color?: string | null }[]; error?: string }
+    if (d.error) throw new Error(d.error)
+    const known = new Set<string>(PAYMENT_METHODS)
+    return (Array.isArray(d.methods) ? d.methods : [])
+      .filter((m): m is { id: PaymentMethod; enabled?: boolean; name?: string; icon?: string; color?: string | null } =>
+        Boolean(m?.id) && m.enabled !== false && known.has(m.id as string))
+      .map((m) => ({
+        id:      m.id,
+        enabled: true,
+        name:    m.name || m.id,
+        icon:    m.icon || '',
+        color:   m.color ?? null,
+      }))
   }
 
   // ── Background refresh timer ────────────────────────────────────────────────

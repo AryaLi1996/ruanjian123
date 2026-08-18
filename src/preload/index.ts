@@ -103,6 +103,8 @@ contextBridge.exposeInMainWorld('engine', {
     ipcRenderer.invoke('payment:order-status', orderId),
   getPaymentHistory:  (): Promise<unknown> =>
     ipcRenderer.invoke('payment:history'),
+  getPaymentMethods:  (lang: string): Promise<unknown> =>
+    ipcRenderer.invoke('payment:get-methods', lang),
   openEmbeddedPayment:  (url: string): Promise<void> => ipcRenderer.invoke('payment:open-embedded', url),
   closeEmbeddedPayment: ():            Promise<void> => ipcRenderer.invoke('payment:close-embedded'),
   onPaymentWindowClosed: (cb: () => void): (() => void) => {

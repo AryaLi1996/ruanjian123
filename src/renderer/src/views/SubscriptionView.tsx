@@ -5,6 +5,7 @@ import type {
   ActivationResult,
   LicenseConfig,
   PaymentMethod,
+  PaymentMethodInfo,
   PaymentOrder,
   PaymentHistoryEntry,
   PlanId,
@@ -16,11 +17,28 @@ async function openManageCheckout(): Promise<void> {
   window.open(checkoutUrl, '_blank', 'noopener,noreferrer')
 }
 
+// Display fallback only — the live picker gets its name/icon/color straight
+// from the server (see PaymentMethodInfo / getPaymentMethods), which is now
+// the source of truth. This stays around for two cases that never go
+// through that live list: rendering a *historical* order/payment-history
+// row whose method may no longer be in the currently-available set, and a
+// defensive fallback if an older/newer server build ever omits a field.
 const METHOD_BADGE: Record<PaymentMethod, { glyph: string; color: string }> = {
   wechat_pay: { glyph: '微', color: '#07c160' },
   alipay:     { glyph: '支', color: '#1677ff' },
   douyin_pay: { glyph: '抖', color: '#000000' },
   card:       { glyph: '💳', color: 'var(--accent)' },
+}
+
+// Prefers the server-supplied icon/color; falls back to METHOD_BADGE above
+// when a field is missing. `color: null` (server's card entry) intentionally
+// resolves to the current theme accent rather than a fixed brand hex.
+function badgeFor(method: PaymentMethodInfo): { glyph: string; color: string } {
+  const fallback = METHOD_BADGE[method.id]
+  return {
+    glyph: method.icon || fallback?.glyph || '💳',
+    color: method.color || fallback?.color || 'var(--accent)',
+  }
 }
 
 type OrderPhase = 'idle' | 'creating' | 'pending' | 'success' | 'error'
@@ -81,7 +99,15 @@ export function SubscriptionView(): JSX.Element {
 
   const [config, setConfig] = useState<LicenseConfig | null>(null)
   const [selectedPlan,   setSelectedPlan]   = useState<PlanId>('monthly')
-  const [selectedMethod, setSelectedMethod] = useState<PaymentMethod>('wechat_pay')
+
+  // ── Payment method availability (Ticket 31) ───────────────────────────────
+  // Fetched live from the server (see getPaymentMethods) rather than assumed
+  // from the static LicenseConfig.paymentMethods list — only methods that
+  // are actually configured/working are ever shown, so there's no disabled/
+  // "unavailable" state to render in the picker below.
+  const [methods,        setMethods]        = useState<PaymentMethodInfo[]>([])
+  const [methodsLoading, setMethodsLoading]  = useState(true)
+  const [selectedMethod, setSelectedMethod]  = useState<PaymentMethod | null>(null)
 
   // Lazily seeded from a pending order stashed before an earlier unmount
   // (see PENDING_ORDER_KEY above) so the UI shows "waiting for payment"
@@ -101,10 +127,34 @@ export function SubscriptionView(): JSX.Element {
       .then((cfg) => {
         setCheckoutReady(Boolean(cfg.checkoutUrl))
         setConfig(cfg)
-        if (cfg.paymentMethods?.length) setSelectedMethod(cfg.paymentMethods[0])
       })
       .catch(() => setCheckoutReady(false))
   }, [])
+
+  // A fetch failure and a genuinely-empty response are both treated as "no
+  // methods available right now" — same friendly notice + retry either way
+  // (see render below), since the user has no way to tell those apart and
+  // neither should look like a broken app.
+  const loadMethods = useCallback(() => {
+    setMethodsLoading(true)
+    window.engine.getPaymentMethods(i18n.language)
+      .then((list) => {
+        setMethods(list)
+        // Keep the current selection if it's still offered; otherwise
+        // auto-select when there's exactly one option (skips the picker
+        // entirely, see render below) and clear it when there are none/many.
+        setSelectedMethod((prev) =>
+          (prev && list.some((m) => m.id === prev) ? prev : (list.length === 1 ? list[0].id : null)))
+      })
+      .catch(() => setMethods([]))
+      .finally(() => setMethodsLoading(false))
+  }, [i18n.language])
+
+  // Re-fetch when the user switches the app language (Settings) so the
+  // picker's server-supplied names stay in sync — every other string on
+  // this page updates instantly via i18next, so a stale English/Chinese
+  // payment-method name after a language switch would stand out.
+  useEffect(() => { loadMethods() }, [loadMethods])
 
   const loadHistory = useCallback(() => {
     setHistoryLoading(true)
@@ -222,6 +272,7 @@ export function SubscriptionView(): JSX.Element {
   }, [order, orderPhase, stopPolling, loadHistory, t])
 
   async function handleSubscribe(): Promise<void> {
+    if (!selectedMethod) return
     setOrderError(null)
     setOrderPhase('creating')
     try {
@@ -393,26 +444,64 @@ export function SubscriptionView(): JSX.Element {
 
               <div className="sub-method-picker">
                 <span className="sub-field-label">{t('subscription.choosePayment')}</span>
-                <div className="sub-option-grid">
-                  {config.paymentMethods.map((method) => (
-                    <button
-                      key={method}
-                      type="button"
-                      className={`sub-option${selectedMethod === method ? ' sub-option-selected' : ''}`}
-                      onClick={() => setSelectedMethod(method)}
-                    >
-                      <span className="sub-method-badge" style={{ background: METHOD_BADGE[method].color }}>
-                        {METHOD_BADGE[method].glyph}
-                      </span>
-                      <span>{t(`subscription.method.${method}`)}</span>
+
+                {methodsLoading && (
+                  <div className="sub-methods-loading">
+                    <div className="sub-spinner" />
+                    <span>{t('subscription.methodsLoading')}</span>
+                  </div>
+                )}
+
+                {!methodsLoading && methods.length === 0 && (
+                  <div className="notice-banner">
+                    <span>{t('subscription.methodsUnavailable')}</span>
+                    <button type="button" className="btn btn-ghost notice-banner-btn" onClick={loadMethods}>
+                      {t('common.retry')}
                     </button>
-                  ))}
-                </div>
+                  </div>
+                )}
+
+                {/* Exactly one method available: skip the selection step
+                    entirely — a single large, direct CTA (Ticket 31 §2/§4). */}
+                {!methodsLoading && methods.length === 1 && (
+                  <button type="button" className="btn btn-primary sub-method-single" onClick={handleSubscribe}>
+                    <span className="sub-method-badge" style={{ background: badgeFor(methods[0]).color }}>
+                      {badgeFor(methods[0]).glyph}
+                    </span>
+                    {t('subscription.payWith', { method: methods[0].name })}
+                  </button>
+                )}
+
+                {!methodsLoading && methods.length > 1 && (
+                  <div className="sub-method-grid">
+                    {methods.map((method) => (
+                      <button
+                        key={method.id}
+                        type="button"
+                        className={`sub-method-card${selectedMethod === method.id ? ' sub-method-card-selected' : ''}`}
+                        onClick={() => setSelectedMethod(method.id)}
+                      >
+                        <span className="sub-method-badge" style={{ background: badgeFor(method).color }}>
+                          {badgeFor(method).glyph}
+                        </span>
+                        <span>{method.name}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
 
-              <button className="btn btn-primary sub-checkout-btn" onClick={handleSubscribe} style={{ marginTop: 14 }}>
-                💳 {t('subscription.payNow')}
-              </button>
+              {/* The single-method case already has its own CTA above. */}
+              {methods.length > 1 && (
+                <button
+                  className="btn btn-primary sub-checkout-btn"
+                  onClick={handleSubscribe}
+                  disabled={!selectedMethod}
+                  style={{ marginTop: 14 }}
+                >
+                  💳 {t('subscription.payNow')}
+                </button>
+              )}
             </>
           )}
 
