@@ -18,9 +18,9 @@ const DEFAULT_SIGNING_SECRET = 'ruanjian-dev-signing-secret-v1-change-in-product
 // truth for expiry is our own signed license token, not Stripe billing state.
 export type PaymentMethod = 'wechat_pay' | 'alipay' | 'douyin_pay' | 'card'
 
-// ── Multi-period plans (Ticket 34) ────────────────────────────────────────────
-// Four billing periods, each a market-standard discount off the per-month
-// base rate: monthly 0%, quarterly 10%, semi-annual 20%, annual 30%.
+// ── Multi-period plans (Ticket 34, pricing updated by Ticket 36) ──────────────
+// Four billing periods, each a discount off the per-month base rate:
+// monthly 0%, quarterly 5%, semi-annual 10%, annual 15%.
 export type PlanId     = 'monthly' | 'quarterly' | 'semi_annual' | 'annual'
 export type PlanPeriod = 'month' | 'quarter' | 'half_year' | 'year'
 
@@ -29,7 +29,8 @@ export interface PlanDef {
   period:          PlanPeriod
   durationDays:    number
   discountPercent: number
-  price:           number   // major units (e.g. dollars) — display/reference only
+  price:           number   // major units (e.g. yuan) — display/reference only
+  priceUSD:        number   // display-only USD equivalent (Ticket 36) — never used for billing
   amount:          number   // minor currency units (e.g. fen for CNY, cents for USD)
   currency:        string   // ISO 4217, lowercase — must match the serverless PLAN config
 }
@@ -37,30 +38,44 @@ export interface PlanDef {
 // This whole block is an OFFLINE FALLBACK ONLY, used if a live GET /plans
 // fetch fails (see subscription-monitor.ts's getPlans()) — the serverless
 // function's _build_plans() in handler.py is the actual source of truth for
-// pricing (BASE_MONTHLY_PRICE/PLAN_CURRENCY env vars). Keep this formula and
-// the default price in sync with that file's default.
+// pricing (BASE_MONTHLY_PRICE/PLAN_CURRENCY/USD_EXCHANGE_RATE env vars). Keep
+// this formula and the default price/rate in sync with that file's default.
 //
 // NOTE: WeChat Pay / Alipay via Stripe Checkout only support a subset of
 // presentment currencies, and that list can change — confirm the current one
 // in the Stripe docs before choosing `currency` for a real deployment.
-const _FALLBACK_BASE_MONTHLY_PRICE = 9.99
-const _FALLBACK_CURRENCY = 'usd'
+const _FALLBACK_BASE_MONTHLY_PRICE = 99 // RMB (Ticket 36)
+const _FALLBACK_CURRENCY = 'cny'
+// Exported so subscription-monitor.ts's getPlans() can derive priceUSD for a
+// live /plans response that (e.g. an older server build) omits the field.
+export const FALLBACK_USD_EXCHANGE_RATE = 7.0
 
 function _planPrice(months: number, discountPercent: number): number {
   const raw = _FALLBACK_BASE_MONTHLY_PRICE * months * (1 - discountPercent / 100)
-  return Math.round((raw + Number.EPSILON) * 100) / 100
+  // RMB rounds to whole yuan (Ticket 36 §2's "取整到元"), unlike the old
+  // USD pricing which rounded to cents.
+  return Math.round(raw + Number.EPSILON)
+}
+
+function _planPriceUSD(priceMajorUnits: number): number {
+  return Math.round(priceMajorUnits / FALLBACK_USD_EXCHANGE_RATE)
 }
 
 function _plan(id: PlanId, period: PlanPeriod, durationDays: number, months: number, discountPercent: number): PlanDef {
   const price = _planPrice(months, discountPercent)
-  return { id, period, durationDays, discountPercent, price, amount: Math.round(price * 100), currency: _FALLBACK_CURRENCY }
+  return {
+    id, period, durationDays, discountPercent, price,
+    priceUSD: _planPriceUSD(price),
+    amount:   Math.round(price * 100),
+    currency: _FALLBACK_CURRENCY,
+  }
 }
 
 export const PLANS: readonly PlanDef[] = [
   _plan('monthly',     'month',     30,  1,  0),   // full price
-  _plan('quarterly',   'quarter',   90,  3,  10),  // 10% off
-  _plan('semi_annual', 'half_year', 180, 6,  20),  // 20% off
-  _plan('annual',      'year',      365, 12, 30),  // 30% off — best value
+  _plan('quarterly',   'quarter',   90,  3,  5),   // 5% off
+  _plan('semi_annual', 'half_year', 180, 6,  10),  // 10% off
+  _plan('annual',      'year',      365, 12, 15),  // 15% off — best value
 ] as const
 
 export const PAYMENT_METHODS: readonly PaymentMethod[] = ['wechat_pay', 'alipay', 'douyin_pay', 'card']

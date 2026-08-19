@@ -77,6 +77,7 @@ declare global {
       setBackgroundColor: (hex: string) => Promise<void>
       getWarmupResult:   () => Promise<WarmupResult>
       retryWarmup:       () => Promise<WarmupResult>
+      updaterCheck:       () => Promise<void>
       updaterDownload:    () => Promise<void>
       updaterQuitInstall: () => Promise<void>
       onUpdaterEvent:    (cb: (event: string, data: unknown) => void) => () => void

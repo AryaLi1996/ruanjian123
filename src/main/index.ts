@@ -4,7 +4,7 @@ import { existsSync } from 'fs'
 import { promises as fs } from 'fs'
 import { callPythonEngine, callPythonEngineStreaming } from './python-bridge'
 import { encryptModelFile, decryptModelFile } from './model-crypto'
-import { setupAutoUpdater, downloadUpdate, quitAndInstall } from './auto-updater'
+import { setupAutoUpdater, checkForUpdates, downloadUpdate, quitAndInstall } from './auto-updater'
 import { SubscriptionMonitor } from './subscription-monitor'
 import { LICENSE_CONFIG, usingDefaultSigningSecret } from './license-config'
 import { loadModels, saveModels, type PersistedModel } from './model-registry'
@@ -469,6 +469,14 @@ ipcMain.handle('fs:delete-in-data-dir', async (_event, filePath: string) => {
 // ── Auto-updater IPC ──────────────────────────────────────────────────────────
 ipcMain.handle('updater:download',     () => downloadUpdate())
 ipcMain.handle('updater:quit-install', () => quitAndInstall())
+// Manual "Check for Updates" button in Settings (Ticket 37 §2) — reuses the
+// exact same electron-updater check the startup timer runs, broadcasting
+// results over the usual updater:* events rather than a dedicated reply, so
+// SettingsView listens the same way TopToolbar already does.
+ipcMain.handle('updater:check', (event) => {
+  const win = BrowserWindow.fromWebContents(event.sender)
+  if (win) checkForUpdates(win)
+})
 
 // ── Subscription / license IPC ────────────────────────────────────────────────
 const monitor = SubscriptionMonitor.getInstance()

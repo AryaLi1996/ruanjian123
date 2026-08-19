@@ -23,18 +23,28 @@ function monthsFor(plan: PlanInfo): number {
   return Math.max(1, Math.round(plan.durationDays / 30))
 }
 
+// Ticket 36: plan prices are whole units (yuan or USD) already, not cents —
+// force 0 fraction digits so e.g. ¥282 doesn't render as ¥282.00.
 function formatPrice(price: number, currency: string, locale: string): string {
   try {
-    return new Intl.NumberFormat(locale, { style: 'currency', currency: currency.toUpperCase() }).format(price)
+    return new Intl.NumberFormat(locale, {
+      style: 'currency', currency: currency.toUpperCase(),
+      minimumFractionDigits: 0, maximumFractionDigits: 0,
+    }).format(price)
   } catch {
-    return `${price.toFixed(2)} ${currency.toUpperCase()}`
+    return `${Math.round(price)} ${currency.toUpperCase()}`
   }
 }
 
-async function openManageCheckout(): Promise<void> {
-  const { checkoutUrl } = await window.engine.getLicenseConfig()
-  if (!checkoutUrl) return
-  window.open(checkoutUrl, '_blank', 'noopener,noreferrer')
+// Ticket 36 §4: the English UI shows the plan's USD equivalent (server- or
+// fallback-computed, see PlanInfo.priceUSD); Chinese shows the real RMB
+// price. Actual payment is always processed in `plan.currency` regardless of
+// which one is displayed — this only ever feeds formatPrice()/the charge
+// summary, never an order/payment-provider call.
+function displayPrice(plan: PlanInfo, language: string): { amount: number; currency: string } {
+  return language.startsWith('en')
+    ? { amount: plan.priceUSD, currency: 'USD' }
+    : { amount: plan.price, currency: plan.currency }
 }
 
 // Display fallback only — the live picker gets its name/icon/color straight
@@ -65,10 +75,12 @@ type OrderPhase = 'idle' | 'creating' | 'pending' | 'success' | 'error'
 
 function formatAmount(amount: number, currency: string, locale: string): string {
   try {
-    return new Intl.NumberFormat(locale, { style: 'currency', currency: currency.toUpperCase() })
-      .format(amount / 100)
+    return new Intl.NumberFormat(locale, {
+      style: 'currency', currency: currency.toUpperCase(),
+      minimumFractionDigits: 0, maximumFractionDigits: 0,
+    }).format(amount / 100)
   } catch {
-    return `${(amount / 100).toFixed(2)} ${currency.toUpperCase()}`
+    return `${Math.round(amount / 100)} ${currency.toUpperCase()}`
   }
 }
 
@@ -123,7 +135,6 @@ export function SubscriptionView(): JSX.Element {
   const [activating, setActivating] = useState(false)
   const [error,     setError]     = useState<string | null>(null)
   const [success,   setSuccess]   = useState<string | null>(null)
-  const [checkoutReady, setCheckoutReady] = useState(false)
 
   const [config, setConfig] = useState<LicenseConfig | null>(null)
 
@@ -160,12 +171,7 @@ export function SubscriptionView(): JSX.Element {
   const pollTimeout = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
-    window.engine.getLicenseConfig()
-      .then((cfg) => {
-        setCheckoutReady(Boolean(cfg.checkoutUrl))
-        setConfig(cfg)
-      })
-      .catch(() => setCheckoutReady(false))
+    window.engine.getLicenseConfig().then(setConfig).catch(() => {})
   }, [])
 
   // A fetch failure falls back to the static (offline) plan list from
@@ -411,6 +417,9 @@ export function SubscriptionView(): JSX.Element {
   const monthlyPlan      = plans.find((p) => p.id === 'monthly') ?? null
   const maxPlanDiscount  = plans.reduce((max, p) => Math.max(max, p.discountPercent), 0)
   const selectedPlanInfo = plans.find((p) => p.id === selectedPlan) ?? null
+  // Ticket 36 §4: the monthly plan's displayed (RMB or USD) unit price,
+  // reused below to derive every plan card's pre-discount "original" total.
+  const monthlyDisplay   = monthlyPlan ? displayPrice(monthlyPlan, i18n.language) : null
 
   const waitingHintKey: Record<PaymentMethod, string> = {
     wechat_pay: 'subscription.waitingWechat',
@@ -477,14 +486,10 @@ export function SubscriptionView(): JSX.Element {
 
         {(status === 'active' || status === 'grace_period') && (
           <div className="row" style={{ marginTop: 16, gap: 10 }}>
-            <button
-              className="btn btn-primary"
-              onClick={openManageCheckout}
-              disabled={!checkoutReady}
-            >
-              {checkoutReady ? t('subscription.manage') : t('common.paymentUnavailable')}
-            </button>
-              <button className="btn btn-ghost" onClick={() => window.engine.refreshLicense()}>
+            {/* Ticket 36: the "Payment page unavailable" button was removed
+                here — the renewal card below (choose plan → choose payment
+                method) is the only payment entry point. */}
+            <button className="btn btn-ghost" onClick={() => window.engine.refreshLicense()}>
               {t('common.refresh')}
             </button>
             <button
@@ -537,7 +542,11 @@ export function SubscriptionView(): JSX.Element {
                   <div className="sub-plan-grid">
                     {plans.map((plan) => {
                       const months = monthsFor(plan)
-                      const originalTotal = plan.discountPercent > 0 && monthlyPlan ? monthlyPlan.price * months : null
+                      // Ticket 36 §4: shown in RMB (zh) or its USD equivalent
+                      // (en) — see displayPrice(). Actual billing always
+                      // happens in plan.currency regardless of which is shown.
+                      const planDisplay = displayPrice(plan, i18n.language)
+                      const originalTotal = plan.discountPercent > 0 && monthlyDisplay ? monthlyDisplay.amount * months : null
                       // "Best value" tracks whichever plan(s) carry the steepest
                       // discount, not a hardcoded 'annual' id — a future 5th
                       // tier with a bigger cut is highlighted automatically,
@@ -556,11 +565,11 @@ export function SubscriptionView(): JSX.Element {
                           <div className="sub-plan-price-row">
                             {originalTotal != null && (
                               <span className="sub-plan-price-original">
-                                {formatPrice(originalTotal, plan.currency, i18n.language)}
+                                {formatPrice(originalTotal, planDisplay.currency, i18n.language)}
                               </span>
                             )}
                             <span className="sub-plan-price-final">
-                              {formatPrice(plan.price, plan.currency, i18n.language)}
+                              {formatPrice(planDisplay.amount, planDisplay.currency, i18n.language)}
                             </span>
                           </div>
                           {plan.discountPercent > 0 && (
@@ -629,12 +638,18 @@ export function SubscriptionView(): JSX.Element {
                 )}
               </div>
 
-              {/* Ticket 34 §3: total due, shown once a plan is picked —
-                  regardless of the method picker's single-CTA vs. grid shape. */}
+              {/* Ticket 34 §3 / Ticket 36 §4: total due, shown once a plan is
+                  picked — regardless of the method picker's single-CTA vs.
+                  grid shape. Shown in RMB or its USD equivalent per language;
+                  the actual charge is always in selectedPlanInfo.currency. */}
               {selectedPlanInfo && (
                 <p className="sub-charge-summary">
                   {t('subscription.chargeSummary', {
-                    amount: formatPrice(selectedPlanInfo.price, selectedPlanInfo.currency, i18n.language),
+                    amount: formatPrice(
+                      displayPrice(selectedPlanInfo, i18n.language).amount,
+                      displayPrice(selectedPlanInfo, i18n.language).currency,
+                      i18n.language,
+                    ),
                     period: t('subscription.periodMonths', { count: monthsFor(selectedPlanInfo) }),
                   })}
                 </p>

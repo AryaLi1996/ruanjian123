@@ -55,7 +55,8 @@ export interface PlanDef {
   period: PlanPeriod
   durationDays: number
   discountPercent: number
-  price: number       // major units (e.g. dollars) — display/reference only
+  price: number       // major units (e.g. yuan) — display/reference only
+  priceUSD: number     // display-only USD equivalent (Ticket 36) — never used for billing
   amount: number       // minor currency units
   currency: string   // ISO 4217, lowercase
 }
@@ -69,7 +70,8 @@ export interface PlanInfo {
   period: PlanPeriod
   durationDays: number
   discountPercent: number
-  price: number       // major units (e.g. dollars)
+  price: number       // major units (e.g. yuan)
+  priceUSD: number     // display-only USD equivalent (Ticket 36) — never used for billing
   currency: string
 }
 

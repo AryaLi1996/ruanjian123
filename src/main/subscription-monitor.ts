@@ -11,7 +11,7 @@ import { promises as fs, existsSync }   from 'fs'
 import { join }                          from 'path'
 import { EventEmitter }                  from 'events'
 import { app }                           from 'electron'
-import { LICENSE_CONFIG, PAYMENT_METHODS, PLANS, type PaymentMethod, type PlanId, type PlanPeriod } from './license-config'
+import { LICENSE_CONFIG, PAYMENT_METHODS, PLANS, FALLBACK_USD_EXCHANGE_RATE, type PaymentMethod, type PlanId, type PlanPeriod } from './license-config'
 import { encryptModelBytes, decryptModelBytes } from './model-crypto'
 import { getDeviceId } from './device-id'
 
@@ -139,7 +139,8 @@ export interface PlanInfo {
   period:          PlanPeriod
   durationDays:    number
   discountPercent: number
-  price:           number   // major units (e.g. dollars)
+  price:           number   // major units (e.g. yuan)
+  priceUSD:        number   // display-only USD equivalent (Ticket 36) — never used for billing
   currency:        string
 }
 
@@ -603,6 +604,12 @@ export class SubscriptionMonitor extends EventEmitter {
       .filter((p): p is PlanInfo =>
         Boolean(p?.id) && known.has(p.id as string) &&
         typeof p.durationDays === 'number' && typeof p.price === 'number')
+      // Ticket 36: an older server build might not send priceUSD yet —
+      // derive it from `price` rather than let the English UI show nothing.
+      .map((p) => ({
+        ...p,
+        priceUSD: typeof p.priceUSD === 'number' ? p.priceUSD : Math.round(p.price / FALLBACK_USD_EXCHANGE_RATE),
+      }))
   }
 
   /**

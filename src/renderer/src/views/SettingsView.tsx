@@ -88,6 +88,36 @@ export function SettingsView(): JSX.Element {
   // About card (Ticket 32 §5)
   const [appVersion, setAppVersion] = useState<string | null>(null)
   useEffect(() => { window.engine.getAppVersion().then(setAppVersion).catch(() => setAppVersion(null)) }, [])
+
+  // Updates card (Ticket 37) — manual "Check for Updates", rendered inline
+  // instead of through the notification system. Reuses the same
+  // window.engine.onUpdaterEvent channel TopToolbar listens on (both the
+  // startup check and this page's manual check broadcast over it), so this
+  // reacts to whichever one last ran rather than tracking its own request id.
+  type UpdateCheckStatus = 'idle' | 'checking' | 'up-to-date' | 'available' | 'failed'
+  const [updateStatus, setUpdateStatus] = useState<UpdateCheckStatus>('idle')
+  const [latestVersion, setLatestVersion] = useState<string | null>(null)
+
+  useEffect(() => {
+    const unsub = window.engine.onUpdaterEvent((event, data) => {
+      if (event === 'updater:checking')     setUpdateStatus('checking')
+      if (event === 'updater:not-available') setUpdateStatus('up-to-date')
+      if (event === 'updater:available') {
+        setLatestVersion((data as { version?: string })?.version ?? null)
+        setUpdateStatus('available')
+      }
+      // Ticket 37 §1: shown only here, inline — never as a toast or
+      // notification-center entry (see auto-updater.ts's 'error' handler).
+      if (event === 'updater:error') setUpdateStatus('failed')
+    })
+    return unsub
+  }, [])
+
+  function handleCheckForUpdates(): void {
+    setUpdateStatus('checking')
+    setLatestVersion(null)
+    void window.engine.updaterCheck()
+  }
   // The blur slider needs to feel instant while dragging without triggering
   // a canvas re-blur on every pixel of movement — see the commit handler
   // below. The overlay slider has no such cost, so it stays fully
@@ -472,6 +502,42 @@ export function SettingsView(): JSX.Element {
             </button>
           ))}
         </div>
+      </div>
+
+      {/* ── Updates (Ticket 37) ─────────────────────────────── */}
+      <div className="card">
+        <div className="card-title">{t('settings.updates.title')}</div>
+        {appVersion && (
+          <p className="updates-current-version">{t('settings.about.version', { version: appVersion })}</p>
+        )}
+        <div className="updates-row">
+          <button
+            type="button"
+            className="btn btn-ghost"
+            onClick={handleCheckForUpdates}
+            disabled={updateStatus === 'checking'}
+          >
+            {updateStatus === 'checking' ? t('settings.updates.checking') : t('settings.updates.checkButton')}
+          </button>
+          {updateStatus === 'available' && (
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={() => window.engine.updaterDownload()}
+            >
+              {t('settings.updates.updateNow')}
+            </button>
+          )}
+        </div>
+        {updateStatus === 'up-to-date' && (
+          <p className="updates-status is-success">{t('settings.updates.upToDate')}</p>
+        )}
+        {updateStatus === 'available' && (
+          <p className="updates-status">{t('settings.updates.newVersion', { version: latestVersion ?? '' })}</p>
+        )}
+        {updateStatus === 'failed' && (
+          <p className="updates-status is-error">{t('settings.updates.failed')}</p>
+        )}
       </div>
 
       {/* ── About ──────────────────────────────────────────── */}

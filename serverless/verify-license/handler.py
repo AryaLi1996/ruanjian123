@@ -87,12 +87,17 @@ TRIALS_TABLE            Ticket 33: DynamoDB table name for 7-day free trial
                         records, keyed by deviceId. /trial/activate and
                         /trial/status 501 until this is set.
 TRIAL_DAYS              Ticket 33: trial length in days. Defaults to 7.
-BASE_MONTHLY_PRICE      Ticket 34: base monthly subscription price (major
-                        currency units, e.g. "9.99"). Quarterly/semi-annual/
-                        annual plans apply a market-standard discount on top
-                        of this — see _build_plans(). Defaults to "9.99".
+BASE_MONTHLY_PRICE      Ticket 34/36: base monthly subscription price (major
+                        currency units, e.g. "99"). Quarterly/semi-annual/
+                        annual plans apply a discount on top of this — see
+                        _build_plans(). Defaults to "99" (RMB, Ticket 36).
 PLAN_CURRENCY           Ticket 34: ISO 4217 currency code (lowercase) for the
-                        computed plans, e.g. "usd" or "cny". Defaults to "usd".
+                        computed plans, e.g. "usd" or "cny". Defaults to "cny"
+                        (Ticket 36).
+USD_EXCHANGE_RATE       Ticket 36: fixed CNY→USD rate used only to compute the
+                        `priceUSD` display field on GET /plans for the
+                        English UI — actual payment is always processed in
+                        PLAN_CURRENCY. Defaults to "7.0".
 
 Swap provider logic in _check_payment_provider() to change monetisation
 without touching any other code.
@@ -139,40 +144,62 @@ ALLOWED_FEATURES = ["training", "synthesis", "separation", "cover"]
 # truth for pricing — GET /plans (see _handle_get_plans) exposes it so the
 # client never hardcodes amounts (src/main/license-config.ts keeps its own
 # copy of this formula only as an offline fallback — keep the two in sync).
-def _parse_base_monthly_price(raw: str) -> float:
-    """A malformed BASE_MONTHLY_PRICE must not crash the whole function at
+def _parse_positive_float(raw: str, env_name: str, default: float) -> float:
+    """A malformed numeric env var must not crash the whole function at
     import time — every route (license verify, orders, trials, ...) shares
     this module, so an unhandled ValueError here would 500 all of them, not
     just /plans. Falls back to the default and lets _build_plans() proceed;
     the bad value is still visible in CloudWatch via the stderr warning."""
     try:
-        return float(raw)
+        value = float(raw)
+        if value <= 0:
+            raise ValueError(raw)
+        return value
     except ValueError:
-        print(f"BASE_MONTHLY_PRICE={raw!r} is not a valid number; falling back to 9.99", file=sys.stderr)
-        return 9.99
+        print(f"{env_name}={raw!r} is not a valid positive number; falling back to {default}", file=sys.stderr)
+        return default
 
 
-BASE_MONTHLY_PRICE = _parse_base_monthly_price(os.environ.get("BASE_MONTHLY_PRICE", "9.99"))
-PLAN_CURRENCY      = os.environ.get("PLAN_CURRENCY", "usd").lower()
+# Ticket 36: base price switched from USD 9.99 to RMB 99/month; discounts
+# switched from 10/20/30% to 5/10/15%. USD_EXCHANGE_RATE only drives the
+# priceUSD *display* field below — payment is always taken in PLAN_CURRENCY.
+BASE_MONTHLY_PRICE = _parse_positive_float(os.environ.get("BASE_MONTHLY_PRICE", "99"), "BASE_MONTHLY_PRICE", 99.0)
+PLAN_CURRENCY      = os.environ.get("PLAN_CURRENCY", "cny").lower()
+USD_EXCHANGE_RATE  = _parse_positive_float(os.environ.get("USD_EXCHANGE_RATE", "7.0"), "USD_EXCHANGE_RATE", 7.0)
 
 # (planId, period, durationDays, months, discountPercent)
 _PLAN_TIERS: list[tuple[str, str, int, float, int]] = [
     ("monthly",     "month",     30,  1,  0),
-    ("quarterly",   "quarter",   90,  3,  10),
-    ("semi_annual", "half_year", 180, 6,  20),
-    ("annual",      "year",      365, 12, 30),
+    ("quarterly",   "quarter",   90,  3,  5),
+    ("semi_annual", "half_year", 180, 6,  10),
+    ("annual",      "year",      365, 12, 15),
 ]
+
+
+def _round_half_up(value: decimal.Decimal, quantum: decimal.Decimal) -> float:
+    return float(value.quantize(quantum, rounding=decimal.ROUND_HALF_UP))
 
 
 def _plan_price(months: float, discount_percent: int) -> float:
     """Total price for `months` of service at `discount_percent` off the
-    per-month base rate, rounded to 2 decimal places (Ticket 34 §1).
-    Uses Decimal rather than float — float's binary rounding can land a
-    result like 26.965 on the wrong side of the 2-decimal boundary
-    (round-half-down instead of the expected round-half-up), which for money
-    is a real cents-level discrepancy, not a cosmetic one."""
+    per-month base rate (Ticket 34 §1 / Ticket 36 §2). Uses Decimal rather
+    than float — float's binary rounding can land a result on the wrong side
+    of the rounding boundary (round-half-down instead of the expected
+    round-half-up), which for money is a real discrepancy, not a cosmetic
+    one. RMB plans round to whole yuan (Ticket 36: "取整到元"); any other
+    configured currency keeps 2-decimal (cents) rounding."""
     raw = decimal.Decimal(str(BASE_MONTHLY_PRICE)) * decimal.Decimal(months) * (1 - decimal.Decimal(discount_percent) / 100)
-    return float(raw.quantize(decimal.Decimal("0.01"), rounding=decimal.ROUND_HALF_UP))
+    quantum = decimal.Decimal("1") if PLAN_CURRENCY == "cny" else decimal.Decimal("0.01")
+    return _round_half_up(raw, quantum)
+
+
+def _plan_price_usd(price_major_units: float) -> int:
+    """USD-equivalent of an already-rounded PLAN_CURRENCY price, for display
+    on the English UI only (Ticket 36 §2/§4) — rounded to the nearest whole
+    dollar. Actual payment is still processed in PLAN_CURRENCY; the client
+    must never use this for anything but display."""
+    raw = decimal.Decimal(str(price_major_units)) / decimal.Decimal(str(USD_EXCHANGE_RATE))
+    return int(_round_half_up(raw, decimal.Decimal("1")))
 
 
 def _build_plans() -> dict[str, dict[str, Any]]:
@@ -183,7 +210,8 @@ def _build_plans() -> dict[str, dict[str, Any]]:
             "period":          period,
             "durationDays":    duration_days,
             "discountPercent": discount,
-            "price":           price,                  # major units (e.g. dollars) — display/reference
+            "price":           price,                  # major units (e.g. yuan) — display/reference
+            "priceUSD":        _plan_price_usd(price),  # display-only USD equivalent (Ticket 36)
             "amount":          round(price * 100),      # minor units — what payment providers charge
             "currency":        PLAN_CURRENCY,
         }
@@ -802,7 +830,9 @@ def _handle_payment_methods(event: dict) -> dict:
 def _handle_get_plans(event: dict) -> dict:
     """Returns all four billing-period plans with server-computed prices, so
     the client renders its plan cards without hardcoding any amount. See
-    _build_plans() — BASE_MONTHLY_PRICE/PLAN_CURRENCY env vars control it."""
+    _build_plans() — BASE_MONTHLY_PRICE/PLAN_CURRENCY/USD_EXCHANGE_RATE env
+    vars control it. `priceUSD` (Ticket 36) is a display-only USD equivalent
+    for the English UI — actual payment is always taken in `currency`."""
     plans = [
         {
             "id":              plan_id,
@@ -810,13 +840,18 @@ def _handle_get_plans(event: dict) -> dict:
             "durationDays":    p["durationDays"],
             "discountPercent": p["discountPercent"],
             "price":           p["price"],
+            "priceUSD":        p["priceUSD"],
             "currency":        p["currency"],
         }
         for plan_id, p in PLANS.items()
     ]
     return {
         "statusCode": 200, "headers": _cors_headers(),
-        "body": json.dumps({"plans": plans, "baseMonthlyPrice": BASE_MONTHLY_PRICE}),
+        "body": json.dumps({
+            "plans": plans,
+            "baseMonthlyPrice": BASE_MONTHLY_PRICE,
+            "usdExchangeRate": USD_EXCHANGE_RATE,
+        }),
     }
 
 
