@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import i18n from '../i18n'
 import { useAppStore, type ActiveView } from '../store/useAppStore'
@@ -40,21 +40,35 @@ export function TopToolbar(): JSX.Element {
   const [downloading,    setDownloading] = useState(false)
   const [readyToInstall, setReady]      = useState(false)
 
+  // Ticket 37 §1/§4: checks can now fire repeatedly — the startup timer plus
+  // any number of manual "Check for Updates" clicks from Settings — but the
+  // "new version available" toast must still show only once per version, not
+  // once per check. A ref (not state) survives across those repeated
+  // updater:available events without itself triggering a re-render, and
+  // isn't reset when the user dismisses the toast, so a re-check for the
+  // same version stays silent until a newer one is actually detected.
+  const notifiedVersionRef = useRef<string | null>(null)
+
   useEffect(() => {
     const unsub = window.engine.onUpdaterEvent((event, data) => {
       if (event === 'updater:available') {
         const info = data as UpdateInfo
         setUpdateInfo(info)
-        // Ticket 35 §5: surface this even if the user is on a different page —
-        // the toolbar banner above only exists while TopToolbar is mounted,
-        // which it always is, but the notification also lands in history.
-        notify({
-          category: 'system',
-          titleKey: 'notification.system.updateAvailable.title',
-          messageKey: 'notification.system.updateAvailable.message',
-          messageParams: { version: info?.version ?? '' },
-          action: { type: 'command', command: 'download-update' },
-        })
+        const version = info?.version ?? ''
+        if (version && notifiedVersionRef.current !== version) {
+          notifiedVersionRef.current = version
+          // Ticket 35 §5: surface this even if the user is on a different
+          // page — the toolbar banner above only exists while TopToolbar is
+          // mounted, which it always is, but the notification also lands in
+          // history.
+          notify({
+            category: 'system',
+            titleKey: 'notification.system.updateAvailable.title',
+            messageKey: 'notification.system.updateAvailable.message',
+            messageParams: { version },
+            action: { type: 'command', command: 'download-update' },
+          })
+        }
       }
       if (event === 'updater:progress')   setDownloading(true)
       if (event === 'updater:downloaded') {

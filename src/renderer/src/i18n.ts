@@ -21,7 +21,7 @@ const resources = {
       common: {
         loading: '加载中…', cancel: '取消', retry: '重试', reset: '重置', refresh: '刷新',
         activate: '激活', deactivate: '停用', download: '下载', error: '错误', done: '完成',
-        unavailable: '不可用', paymentUnavailable: '支付页面不可用',
+        unavailable: '不可用',
       },
       updater: {
         ready: '更新已准备安装', install: '重启并安装', available: '发现更新 {{version}}',
@@ -118,7 +118,8 @@ const resources = {
         system: {
           updateAvailable: { title: '发现新版本', message: '版本 {{version}} 可供下载。' },
           updateReady:     { title: '更新已就绪', message: '重启应用以完成安装。' },
-          updateError:     { title: '更新检查失败', message: '{{message}}' },
+          // Ticket 37 §1/§4: "Update Check Failed" no longer fires as a
+          // notification — failures surface only inline in Settings → Updates.
           welcome:         { title: '欢迎使用舒音', message: '从模型训练开始，创建属于你的 AI 歌手吧。' },
           licenseGrace:    { title: '许可证验证异常', message: '暂时无法验证订阅状态，已进入宽限期，请检查网络连接。' },
           rendererRecovered: { title: '应用已恢复', message: '界面从异常中恢复，如仍有问题请重启应用。' },
@@ -152,6 +153,14 @@ const resources = {
         about: {
           title: '关于', version: '版本 {{version}}', developer: '开发者', developerName: 'SootheVoice 团队',
         },
+        // Ticket 37: manual "Check for Updates" moved here from the
+        // automatic-only flow — see settings.updates in TopToolbar's
+        // updater.* keys above for the toolbar-side download/install copy.
+        updates: {
+          title: '更新', checkButton: '检查更新', checking: '正在检查…',
+          upToDate: '当前已是最新版本。', newVersion: '发现新版本 {{version}}。',
+          updateNow: '立即更新', failed: '检查更新失败，请稍后重试。',
+        },
         notifications: {
           title: '通知', description: '管理任务、订阅与系统通知的显示方式。', categories: '通知类别',
           category: {
@@ -172,7 +181,7 @@ const resources = {
       },
       language: { label: 'Language', zh: '简体中文', en: 'English' },
       nav: { training: 'Model Training', cover: 'Cover Creation', audioTools: 'Audio Tools', playback: 'Playback / Monitor', subscription: 'Subscription' },
-      common: { loading: 'Loading…', cancel: 'Cancel', retry: 'Retry', reset: 'Reset', refresh: 'Refresh', activate: 'Activate', deactivate: 'Deactivate', download: 'Download', error: 'Error', done: 'Done', unavailable: 'Unavailable', paymentUnavailable: 'Payment page unavailable' },
+      common: { loading: 'Loading…', cancel: 'Cancel', retry: 'Retry', reset: 'Reset', refresh: 'Refresh', activate: 'Activate', deactivate: 'Deactivate', download: 'Download', error: 'Error', done: 'Done', unavailable: 'Unavailable' },
       updater: { ready: 'Update ready to install', install: 'Restart & Install', available: 'Update {{version}} available', downloading: 'Downloading…', download: 'Download' },
       status: { running: 'Running: {{method}}', idle: 'Engine ready', training: 'Training: {{mode}}', separating: 'Separating…', synthesizing: 'Synthesizing ({{mode}})…', saved: 'Saved: {{path}}' },
       training: { title: 'Model Training', description: 'Fine-tune the AI singer\'s timbre using dry vocal recordings.', info: 'Model Info', name: 'Model name *', namePlaceholder: 'e.g. My Singer', epochs: 'Epochs', material: 'Training Material', noFiles: 'No files uploaded; synthetic demo data will be used.', mode: 'Training Mode', start: 'Start Local Training', training: 'Training…', complete: '✓ Training Complete', finalizing: 'Finalizing…', finalizingDesc: 'Training finished. Generating the demo clip and saving the model.', audition: 'Audition', trainAnother: 'Train Another Model', models: 'Your Models ({{count}})', demo: 'Demo', retrain: 'Retrain', delete: 'Delete', standard: 'Standard', professional: 'Professional', gpu: 'GPU', cpu: 'CPU', vram: 'VRAM', epoch: 'Epoch {{current}}/{{total}}', loss: 'Loss {{value}}', eta: 'ETA {{value}}', waiting: 'Waiting for engine…', materialHint: 'Drop clean vocal recordings here.', standardTagline: 'LoRA rank-4 · timbre encoder only', professionalTagline: 'LoRA+ rank-8 · all layers · gradient checkpointing', dropAudio: 'Drop audio files here, or click to browse', audioFormats: 'WAV · FLAC · MP3 · OGG · M4A', fileCount: '{{count}} file(s)', totalDuration: '{{duration}} total', clearAll: 'Clear all', removeFile: 'Remove file', loadingWaveform: 'Loading waveform…', waveform: 'waveform', play: 'Play', pause: 'Pause', volume: 'Volume', noDemo: 'No demo available', lossLabel: 'Loss: {{value}}', pro: 'Pro', trainingGpu: 'GPU', trainingCpu: 'CPU', trainingVram: 'VRAM' },
@@ -262,7 +271,8 @@ const resources = {
         system: {
           updateAvailable: { title: 'Update Available', message: 'Version {{version}} is available to download.' },
           updateReady:     { title: 'Update Ready', message: 'Restart the app to finish installing.' },
-          updateError:     { title: 'Update Check Failed', message: '{{message}}' },
+          // Ticket 37 §1/§4: "Update Check Failed" no longer fires as a
+          // notification — failures surface only inline in Settings → Updates.
           welcome:         { title: 'Welcome to SootheVoice', message: 'Start with Model Training to create your own AI singer.' },
           licenseGrace:    { title: 'License Verification Issue', message: "Couldn't verify your subscription right now — entering grace period. Check your connection." },
           rendererRecovered: { title: 'App Recovered', message: 'The interface recovered from an unexpected error. Restart the app if problems continue.' },
@@ -295,6 +305,11 @@ const resources = {
         photoHint: 'A square image works best — it will be auto-cropped and compressed.', photoInvalid: 'Could not read that image. Please try another.',
         about: {
           title: 'About', version: 'Version {{version}}', developer: 'Developer', developerName: 'The SootheVoice Team',
+        },
+        updates: {
+          title: 'Updates', checkButton: 'Check for Updates', checking: 'Checking…',
+          upToDate: 'You are up to date.', newVersion: 'New version {{version}} is available.',
+          updateNow: 'Update Now', failed: 'Update check failed. Please try again later.',
         },
         notifications: {
           title: 'Notifications', description: 'Manage how task, subscription, and system notifications are shown.', categories: 'Categories',

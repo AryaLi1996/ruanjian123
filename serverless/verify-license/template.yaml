@@ -52,15 +52,22 @@ Parameters:
   # ── Ticket 34: multi-period plans ───────────────────────────────────────────
   BaseMonthlyPrice:
     Type: String
-    Default: '9.99'
+    Default: '99'
     Description: >-
-      Base monthly subscription price (major currency units, e.g. "9.99").
-      Quarterly/semi-annual/annual plans apply a market-standard discount on
-      top of this — see _build_plans() in handler.py.
+      Base monthly subscription price (major currency units, e.g. "99" for
+      RMB 99/month — Ticket 36). Quarterly/semi-annual/annual plans apply a
+      discount on top of this — see _build_plans() in handler.py.
   PlanCurrency:
     Type: String
-    Default: usd
-    Description: ISO 4217 currency code (lowercase) for the computed plans, e.g. usd or cny.
+    Default: cny
+    Description: ISO 4217 currency code (lowercase) for the computed plans, e.g. cny or usd.
+  UsdExchangeRate:
+    Type: String
+    Default: '7.0'
+    Description: >-
+      Ticket 36: fixed CNY→USD rate used only to compute the priceUSD display
+      field on GET /plans for the English UI. Actual payment is always
+      processed in PlanCurrency.
 
   # ── Ticket 28: multi-channel payment ────────────────────────────────────────
   PaymentSuccessUrl:
@@ -108,6 +115,7 @@ Globals:
         EXPIRY_DAYS: !Ref ExpiryDays
         BASE_MONTHLY_PRICE: !Ref BaseMonthlyPrice
         PLAN_CURRENCY: !Ref PlanCurrency
+        USD_EXCHANGE_RATE: !Ref UsdExchangeRate
         ORDERS_TABLE: !Ref OrdersTable
         LICENSES_TABLE: !Ref LicensesTable
         TRIALS_TABLE: !Ref TrialsTable

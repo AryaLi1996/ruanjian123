@@ -71,6 +71,7 @@ contextBridge.exposeInMainWorld('engine', {
     ipcRenderer.invoke('app:warmup-retry'),
 
   // Auto-updater controls
+  updaterCheck:       (): Promise<void> => ipcRenderer.invoke('updater:check'),
   updaterDownload:    (): Promise<void> => ipcRenderer.invoke('updater:download'),
   updaterQuitInstall: (): Promise<void> => ipcRenderer.invoke('updater:quit-install'),
 

@@ -9,7 +9,6 @@
 import { app, BrowserWindow } from 'electron'
 import { autoUpdater }        from 'electron-updater'
 import log                    from 'electron-log'
-import { notifyRenderer }     from './notification-bridge'
 
 autoUpdater.logger = log
 log.transports.file.level = 'info'
@@ -60,25 +59,47 @@ export function setupAutoUpdater(win: BrowserWindow): void {
     send(win, 'updater:downloaded', { version: info.version })
   })
 
+  // Ticket 37 §1: this used to also raise a global notification here via
+  // notifyRenderer (notification.system.updateError) — every network hiccup
+  // or missing update-server config produced an "Update Check Failed" toast
+  // *and* a notification-center entry, which users reported as pure noise
+  // since automatic checks run silently in the background. The
+  // updater:error event is still broadcast below (TopToolbar clears its
+  // "downloading" spinner off it, and SettingsView's Updates section turns
+  // it into an inline "Update check failed" message), but nothing calls
+  // notify()/notifyRenderer() for it any more.
   autoUpdater.on('error', (err) => {
     log.error('Updater error:', err.message)
     send(win, 'updater:error', { message: err.message })
-    // This previously only surfaced in the log file — TopToolbar's
-    // updater:error handler just clears the "downloading" spinner with no
-    // user-visible message. Real example of a main-only event: nothing in
-    // the renderer is awaiting this (the check/download was fire-and-forget
-    // from setTimeout/downloadUpdate below), so there's no promise chain to
-    // hang a notify() call off of the way training/separation/synthesis do.
-    notifyRenderer({
-      category: 'system',
-      titleKey: 'notification.system.updateError.title',
-      messageKey: 'notification.system.updateError.message',
-      messageParams: { message: err.message },
-    })
   })
 
-  // Stagger the check by 3 seconds so it doesn't delay startup
-  setTimeout(() => autoUpdater.checkForUpdates(), 3_000)
+  // Stagger the check by 3 seconds so it doesn't delay startup. Routed
+  // through checkForUpdates() below so the automatic startup check and the
+  // manual "Check for Updates" button in Settings (Ticket 37 §2) share one
+  // implementation.
+  setTimeout(() => checkForUpdates(win), 3_000)
+}
+
+/**
+ * Runs an update check and broadcasts the result over the same updater:*
+ * events setupAutoUpdater() above listens for. Called both by the automatic
+ * startup check and, via IPC, by the manual "Check for Updates" button on
+ * the Settings page (Ticket 37 §2) — one check implementation, two
+ * triggers, neither of which raises a failure notification (Ticket 37 §1).
+ */
+export function checkForUpdates(win: BrowserWindow): void {
+  if (!app.isPackaged) {
+    // No update server is configured for dev builds — resolve immediately
+    // so a manual check from Settings doesn't spin on "Checking…" forever.
+    send(win, 'updater:not-available')
+    return
+  }
+  autoUpdater.checkForUpdates().catch((err) => {
+    // The 'error' listener above already logs + broadcasts updater:error
+    // for this same failure; this catch exists only to avoid an unhandled
+    // promise rejection, not to notify anyone a second time.
+    log.error('checkForUpdates failed:', err instanceof Error ? err.message : err)
+  })
 }
 
 /** Called from IPC when user clicks "Download & Install". */
