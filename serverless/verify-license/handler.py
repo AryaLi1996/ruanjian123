@@ -206,14 +206,25 @@ def _build_plans() -> dict[str, dict[str, Any]]:
     plans: dict[str, dict[str, Any]] = {}
     for plan_id, period, duration_days, months, discount in _PLAN_TIERS:
         price = _plan_price(months, discount)
+        # Pre-discount reference total (0% off the same `months`), for the
+        # client's strikethrough "original price". Computed the same
+        # single-rounding-step way as `price`/`priceUSD` rather than left for
+        # the client to reconstruct by multiplying the monthly plan's own
+        # (already-rounded) unit price by `months` — that would compound two
+        # roundings and could drift a dollar or two from the discount% badge
+        # for the longer plans (e.g. annual: 12 × round(99/7) = $168, vs the
+        # correct round(1188/7) = $170).
+        original_price = _plan_price(months, 0)
         plans[plan_id] = {
-            "period":          period,
-            "durationDays":    duration_days,
-            "discountPercent": discount,
-            "price":           price,                  # major units (e.g. yuan) — display/reference
-            "priceUSD":        _plan_price_usd(price),  # display-only USD equivalent (Ticket 36)
-            "amount":          round(price * 100),      # minor units — what payment providers charge
-            "currency":        PLAN_CURRENCY,
+            "period":           period,
+            "durationDays":     duration_days,
+            "discountPercent":  discount,
+            "price":            price,                          # major units (e.g. yuan) — display/reference
+            "priceUSD":         _plan_price_usd(price),          # display-only USD equivalent (Ticket 36)
+            "originalPrice":    original_price,                  # pre-discount reference total, same currency as `price`
+            "originalPriceUSD": _plan_price_usd(original_price), # display-only USD equivalent of originalPrice
+            "amount":           round(price * 100),              # minor units — what payment providers charge
+            "currency":         PLAN_CURRENCY,
         }
     return plans
 
@@ -835,13 +846,15 @@ def _handle_get_plans(event: dict) -> dict:
     for the English UI — actual payment is always taken in `currency`."""
     plans = [
         {
-            "id":              plan_id,
-            "period":          p["period"],
-            "durationDays":    p["durationDays"],
-            "discountPercent": p["discountPercent"],
-            "price":           p["price"],
-            "priceUSD":        p["priceUSD"],
-            "currency":        p["currency"],
+            "id":               plan_id,
+            "period":           p["period"],
+            "durationDays":     p["durationDays"],
+            "discountPercent":  p["discountPercent"],
+            "price":            p["price"],
+            "priceUSD":         p["priceUSD"],
+            "originalPrice":    p["originalPrice"],
+            "originalPriceUSD": p["originalPriceUSD"],
+            "currency":         p["currency"],
         }
         for plan_id, p in PLANS.items()
     ]

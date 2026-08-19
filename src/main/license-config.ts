@@ -25,14 +25,16 @@ export type PlanId     = 'monthly' | 'quarterly' | 'semi_annual' | 'annual'
 export type PlanPeriod = 'month' | 'quarter' | 'half_year' | 'year'
 
 export interface PlanDef {
-  id:              PlanId
-  period:          PlanPeriod
-  durationDays:    number
-  discountPercent: number
-  price:           number   // major units (e.g. yuan) — display/reference only
-  priceUSD:        number   // display-only USD equivalent (Ticket 36) — never used for billing
-  amount:          number   // minor currency units (e.g. fen for CNY, cents for USD)
-  currency:        string   // ISO 4217, lowercase — must match the serverless PLAN config
+  id:                PlanId
+  period:            PlanPeriod
+  durationDays:      number
+  discountPercent:   number
+  price:             number   // major units (e.g. yuan) — display/reference only
+  priceUSD:          number   // display-only USD equivalent (Ticket 36) — never used for billing
+  originalPrice:     number   // pre-discount reference total (same currency as `price`) — for the strikethrough price
+  originalPriceUSD:  number   // display-only USD equivalent of originalPrice (Ticket 36)
+  amount:            number   // minor currency units (e.g. fen for CNY, cents for USD)
+  currency:          string   // ISO 4217, lowercase — must match the serverless PLAN config
 }
 
 // This whole block is an OFFLINE FALLBACK ONLY, used if a live GET /plans
@@ -63,11 +65,18 @@ function _planPriceUSD(priceMajorUnits: number): number {
 
 function _plan(id: PlanId, period: PlanPeriod, durationDays: number, months: number, discountPercent: number): PlanDef {
   const price = _planPrice(months, discountPercent)
+  // Computed the same single-rounding-step way as `price`/`priceUSD` rather
+  // than derived by multiplying the monthly plan's own (already-rounded)
+  // unit price by `months` — see handler.py's _build_plans() doc comment for
+  // why that would drift a dollar or two from the discount% badge.
+  const originalPrice = _planPrice(months, 0)
   return {
     id, period, durationDays, discountPercent, price,
-    priceUSD: _planPriceUSD(price),
-    amount:   Math.round(price * 100),
-    currency: _FALLBACK_CURRENCY,
+    priceUSD:         _planPriceUSD(price),
+    originalPrice,
+    originalPriceUSD: _planPriceUSD(originalPrice),
+    amount:           Math.round(price * 100),
+    currency:         _FALLBACK_CURRENCY,
   }
 }
 
