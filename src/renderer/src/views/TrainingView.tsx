@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useAppStore } from '../store/useAppStore'
+import { notify } from '../store/useNotificationStore'
 import { AudioDropzone } from '../components/training/AudioDropzone'
 import { ModeSelector, type TrainingMode } from '../components/training/ModeSelector'
 import { TrainingProgress, type ProgressData } from '../components/training/TrainingProgress'
@@ -153,9 +154,25 @@ export function TrainingView(): JSX.Element {
       })
 
       setPhase('done')
+      // Ticket 35 §5: fires even if the user has since navigated away from
+      // Model Training, since it's an app-wide notification, not local state.
+      notify({
+        category: 'taskCompletion',
+        titleKey: 'notification.training.complete.title',
+        messageKey: 'notification.training.complete.message',
+        messageParams: { modelName: modelName.trim() || `Model ${id.slice(0, 6)}` },
+        action: { type: 'view', view: 'training' },
+      })
     } catch (err) {
       setError(String(err))
       setPhase('idle')
+      notify({
+        category: 'taskFailure',
+        titleKey: 'notification.training.failed.title',
+        messageKey: 'notification.training.failed.message',
+        messageParams: { message: String(err) },
+        action: { type: 'view', view: 'training' },
+      })
     } finally {
       setEngineBusy(false)
       setEngineStatus(t('status.idle'))

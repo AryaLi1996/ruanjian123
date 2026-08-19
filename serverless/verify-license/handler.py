@@ -32,6 +32,10 @@ dispatched by request path — no API Gateway needed:
                           7-day free trial for a device. Never resets an
                           existing trial's start/end.
   GET  /trial/status      Ticket 33: look up a device's trial record.
+  GET  /plans             Ticket 34: list the four billing-period plans
+                          (monthly/quarterly/semi_annual/annual) with their
+                          computed prices/discounts, so the client never has
+                          to hardcode amounts. See _build_plans().
 
 Environment variables
 ---------------------
@@ -83,6 +87,12 @@ TRIALS_TABLE            Ticket 33: DynamoDB table name for 7-day free trial
                         records, keyed by deviceId. /trial/activate and
                         /trial/status 501 until this is set.
 TRIAL_DAYS              Ticket 33: trial length in days. Defaults to 7.
+BASE_MONTHLY_PRICE      Ticket 34: base monthly subscription price (major
+                        currency units, e.g. "9.99"). Quarterly/semi-annual/
+                        annual plans apply a market-standard discount on top
+                        of this — see _build_plans(). Defaults to "9.99".
+PLAN_CURRENCY           Ticket 34: ISO 4217 currency code (lowercase) for the
+                        computed plans, e.g. "usd" or "cny". Defaults to "usd".
 
 Swap provider logic in _check_payment_provider() to change monetisation
 without touching any other code.
@@ -123,11 +133,66 @@ if SIGNING_SECRET == _DEFAULT_SIGNING_SECRET and not MOCK_MODE:
     )
 ALLOWED_FEATURES = ["training", "synthesis", "separation", "cover"]
 
-# Keep in sync with PLANS in src/main/license-config.ts.
-PLANS: dict[str, dict[str, Any]] = {
-    "monthly": {"durationDays": 30,  "amount": 2900,  "currency": "cny"},
-    "annual":  {"durationDays": 365, "amount": 29900, "currency": "cny"},
-}
+# ── Multi-period plans (Ticket 34) ──────────────────────────────────────────
+# One configurable base monthly price; quarterly/semi-annual/annual apply a
+# market-standard discount on top of `months * base`. This is the source of
+# truth for pricing — GET /plans (see _handle_get_plans) exposes it so the
+# client never hardcodes amounts (src/main/license-config.ts keeps its own
+# copy of this formula only as an offline fallback — keep the two in sync).
+def _parse_base_monthly_price(raw: str) -> float:
+    """A malformed BASE_MONTHLY_PRICE must not crash the whole function at
+    import time — every route (license verify, orders, trials, ...) shares
+    this module, so an unhandled ValueError here would 500 all of them, not
+    just /plans. Falls back to the default and lets _build_plans() proceed;
+    the bad value is still visible in CloudWatch via the stderr warning."""
+    try:
+        return float(raw)
+    except ValueError:
+        print(f"BASE_MONTHLY_PRICE={raw!r} is not a valid number; falling back to 9.99", file=sys.stderr)
+        return 9.99
+
+
+BASE_MONTHLY_PRICE = _parse_base_monthly_price(os.environ.get("BASE_MONTHLY_PRICE", "9.99"))
+PLAN_CURRENCY      = os.environ.get("PLAN_CURRENCY", "usd").lower()
+
+# (planId, period, durationDays, months, discountPercent)
+_PLAN_TIERS: list[tuple[str, str, int, float, int]] = [
+    ("monthly",     "month",     30,  1,  0),
+    ("quarterly",   "quarter",   90,  3,  10),
+    ("semi_annual", "half_year", 180, 6,  20),
+    ("annual",      "year",      365, 12, 30),
+]
+
+
+def _plan_price(months: float, discount_percent: int) -> float:
+    """Total price for `months` of service at `discount_percent` off the
+    per-month base rate, rounded to 2 decimal places (Ticket 34 §1).
+    Uses Decimal rather than float — float's binary rounding can land a
+    result like 26.965 on the wrong side of the 2-decimal boundary
+    (round-half-down instead of the expected round-half-up), which for money
+    is a real cents-level discrepancy, not a cosmetic one."""
+    raw = decimal.Decimal(str(BASE_MONTHLY_PRICE)) * decimal.Decimal(months) * (1 - decimal.Decimal(discount_percent) / 100)
+    return float(raw.quantize(decimal.Decimal("0.01"), rounding=decimal.ROUND_HALF_UP))
+
+
+def _build_plans() -> dict[str, dict[str, Any]]:
+    plans: dict[str, dict[str, Any]] = {}
+    for plan_id, period, duration_days, months, discount in _PLAN_TIERS:
+        price = _plan_price(months, discount)
+        plans[plan_id] = {
+            "period":          period,
+            "durationDays":    duration_days,
+            "discountPercent": discount,
+            "price":           price,                  # major units (e.g. dollars) — display/reference
+            "amount":          round(price * 100),      # minor units — what payment providers charge
+            "currency":        PLAN_CURRENCY,
+        }
+    return plans
+
+
+# Keep the formula above in sync with PLANS in src/main/license-config.ts
+# (that copy is an offline fallback only — this is the real source of truth).
+PLANS: dict[str, dict[str, Any]] = _build_plans()
 PAYMENT_METHODS = {"wechat_pay", "alipay", "douyin_pay", "card"}
 
 # Ticket 31: methods force-hidden regardless of provider config — see the
@@ -732,6 +797,29 @@ def _handle_payment_methods(event: dict) -> dict:
     return {"statusCode": 200, "headers": _cors_headers(), "body": json.dumps({"methods": methods})}
 
 
+# ── /plans handler (Ticket 34) ──────────────────────────────────────────────
+
+def _handle_get_plans(event: dict) -> dict:
+    """Returns all four billing-period plans with server-computed prices, so
+    the client renders its plan cards without hardcoding any amount. See
+    _build_plans() — BASE_MONTHLY_PRICE/PLAN_CURRENCY env vars control it."""
+    plans = [
+        {
+            "id":              plan_id,
+            "period":          p["period"],
+            "durationDays":    p["durationDays"],
+            "discountPercent": p["discountPercent"],
+            "price":           p["price"],
+            "currency":        p["currency"],
+        }
+        for plan_id, p in PLANS.items()
+    ]
+    return {
+        "statusCode": 200, "headers": _cors_headers(),
+        "body": json.dumps({"plans": plans, "baseMonthlyPrice": BASE_MONTHLY_PRICE}),
+    }
+
+
 # ── /create-order, /order-status, /payment-history handlers ────────────────────
 
 def _handle_create_order(event: dict) -> dict:
@@ -1090,6 +1178,8 @@ def handler(event: dict, context: object) -> dict:
         return _handle_trial_activate(event)
     if path.endswith("/trial/status"):
         return _handle_trial_status(event)
+    if path.endswith("/plans"):
+        return _handle_get_plans(event)
 
     try:
         raw_body    = event.get("body") or "{}"

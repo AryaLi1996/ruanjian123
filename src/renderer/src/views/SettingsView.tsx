@@ -15,6 +15,12 @@ import {
   BackgroundImageError, processBackgroundImage,
   MIN_BLUR_PX, MAX_BLUR_PX, MIN_OVERLAY_OPACITY, MAX_OVERLAY_OPACITY,
 } from '../utils/backgroundImage'
+import {
+  notify,
+  useNotificationStore,
+  type NotificationCategory,
+  TOAST_DURATION_MIN, TOAST_DURATION_MAX,
+} from '../store/useNotificationStore'
 import { BrandLogo } from '../components/brand/BrandLogo'
 
 const APPEARANCE_OPTIONS: { value: Appearance; icon: string }[] = [
@@ -74,6 +80,10 @@ export function SettingsView(): JSX.Element {
   const [bgError, setBgError] = useState<string | null>(null)
   const [bgBusy, setBgBusy] = useState(false)
   const [bgUpdated, setBgUpdated] = useState(false)
+
+  // Notification preferences (Ticket 35 §6)
+  const notifPrefs = useNotificationStore((s) => s.preferences)
+  const setNotifPreferences = useNotificationStore((s) => s.setPreferences)
 
   // About card (Ticket 32 §5)
   const [appVersion, setAppVersion] = useState<string | null>(null)
@@ -146,6 +156,14 @@ export function SettingsView(): JSX.Element {
     } catch (err) {
       const reason = err instanceof BackgroundImageError ? err.message : 'unknown'
       setBgError(reason === 'too-large' ? t('settings.bgTooLarge') : t('settings.bgInvalid'))
+      // Ticket 35 §5: low-priority "custom" category — off by default toggle
+      // lives in the Notifications section below.
+      notify({
+        category: 'custom',
+        titleKey: 'notification.custom.bgUploadFailed.title',
+        messageKey: 'notification.custom.bgUploadFailed.message',
+        action: { type: 'view', view: 'settings' },
+      })
     } finally {
       setBgBusy(false)
     }
@@ -399,6 +417,60 @@ export function SettingsView(): JSX.Element {
             <p className="avatar-hint">{t('settings.photoHint')}</p>
             {photoError && <p className="avatar-error">{photoError}</p>}
           </div>
+        </div>
+      </div>
+
+      {/* ── Notifications (Ticket 35 §6) ────────────────────── */}
+      <div className="card">
+        <div className="card-title">{t('settings.notifications.title')}</div>
+        <p className="view-desc" style={{ marginTop: -6, marginBottom: 14 }}>
+          {t('settings.notifications.description')}
+        </p>
+
+        <div className="settings-subhead">{t('settings.notifications.categories')}</div>
+        <div className="notif-pref-categories">
+          {(['taskCompletion', 'taskFailure', 'subscription', 'system', 'custom'] as NotificationCategory[]).map((cat) => (
+            <label key={cat} className="notif-pref-toggle">
+              <input
+                type="checkbox"
+                checked={notifPrefs.categoriesEnabled[cat]}
+                onChange={(e) => setNotifPreferences({
+                  categoriesEnabled: { ...notifPrefs.categoriesEnabled, [cat]: e.target.checked },
+                })}
+              />
+              <span>{t(`settings.notifications.category.${cat}`)}</span>
+            </label>
+          ))}
+        </div>
+
+        <div className="settings-subhead settings-subhead-spaced">{t('settings.notifications.duration')}</div>
+        <div className="font-size-row">
+          <input
+            type="range"
+            className="font-size-slider"
+            min={TOAST_DURATION_MIN}
+            max={TOAST_DURATION_MAX}
+            step={1}
+            value={notifPrefs.toastDurationSec}
+            onChange={(e) => setNotifPreferences({ toastDurationSec: Number(e.target.value) })}
+            aria-label={t('settings.notifications.duration')}
+          />
+          <span className="font-size-value">{notifPrefs.toastDurationSec}s</span>
+        </div>
+
+        <div className="settings-subhead settings-subhead-spaced">{t('settings.notifications.position')}</div>
+        <div className="appearance-grid">
+          {(['top-right', 'bottom-right'] as const).map((pos) => (
+            <button
+              key={pos}
+              type="button"
+              className={`appearance-option${notifPrefs.position === pos ? ' selected' : ''}`}
+              onClick={() => setNotifPreferences({ position: pos })}
+              aria-pressed={notifPrefs.position === pos}
+            >
+              <span>{t(`settings.notifications.${pos === 'top-right' ? 'positionTopRight' : 'positionBottomRight'}`)}</span>
+            </button>
+          ))}
         </div>
       </div>
 

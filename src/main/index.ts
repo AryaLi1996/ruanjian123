@@ -12,6 +12,7 @@ import {
   saveBackground, saveBackgroundMeta, loadBackground, loadBackgroundSource, removeBackground,
   type SaveBackgroundPayload, type BackgroundMeta,
 } from './background-store'
+import { notifyRenderer } from './notification-bridge'
 import log from 'electron-log'
 // Collect native crash dumps locally so a renderer/GPU crash leaves a trace.
 // Never let telemetry setup stop the app from starting.
@@ -137,6 +138,19 @@ function createWindow(): BrowserWindow {
     if (reloadAttempts < 1 && !win.isDestroyed()) {
       reloadAttempts++
       win.reload()
+      // The other genuine "main process only" case for notification-bridge.ts:
+      // the renderer just crashed, so there is no live promise chain (and no
+      // mounted useNotificationStore) to have called notify() itself — by
+      // definition nothing in the old renderer survives this event. Waits for
+      // the reloaded page to actually finish loading (rather than sending
+      // immediately, into a webContents with no document yet) before pushing.
+      win.webContents.once('did-finish-load', () => {
+        notifyRenderer({
+          category: 'system',
+          titleKey: 'notification.system.rendererRecovered.title',
+          messageKey: 'notification.system.rendererRecovered.message',
+        })
+      })
     }
   })
   win.webContents.on('unresponsive', () => log.error('[renderer] unresponsive'))
@@ -476,6 +490,9 @@ ipcMain.handle('license:get-config',  () => ({
   pollIntervalMs: LICENSE_CONFIG.orderPollIntervalMs,
   pollTimeoutMs:  LICENSE_CONFIG.orderPollTimeoutMs,
 }))
+
+// Ticket 34: server-computed plan pricing — see getPlans() doc.
+ipcMain.handle('payment:get-plans',    ()                   => monitor.getPlans())
 
 // ── Multi-channel payment IPC (Ticket 28) ───────────────────────────────────
 ipcMain.handle('payment:create-order', (_, planId: string, method: string) =>

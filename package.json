@@ -23,6 +23,8 @@
     "build:mac-universal": "npm run package-engine:mac-universal && electron-vite build && electron-builder --mac dmg --universal",
     "preview": "electron-vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "test:engine": "cd engine && python3 _test_suite.py --fast --skip training",
     "bench:engine": "cd engine && python3 _bench.py --iters 1 --dur 5"
   },
@@ -43,7 +45,9 @@
     "electron": "^31.4.0",
     "electron-builder": "^24.13.3",
     "electron-vite": "^2.3.0",
+    "jsdom": "^25.0.1",
     "typescript": "^5.6.3",
-    "vite": "^5.4.10"
+    "vite": "^5.4.10",
+    "vitest": "^2.1.9"
   }
 }

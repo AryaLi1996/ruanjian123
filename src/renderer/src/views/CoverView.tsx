@@ -1,6 +1,7 @@
 import { useState, useRef, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useAppStore } from '../store/useAppStore'
+import { notify } from '../store/useNotificationStore'
 import { StepWizard } from '../components/cover/StepWizard'
 import { StemPlayer, type StemTrack } from '../components/cover/StemPlayer'
 import { MixingConsole, type MixTrack } from '../components/cover/MixingConsole'
@@ -71,8 +72,22 @@ export function CoverView(): JSX.Element {
 
       setSepResult(res)
       complete(1, 2)
+      notify({
+        category: 'taskCompletion',
+        titleKey: 'notification.separation.complete.title',
+        messageKey: 'notification.separation.complete.message',
+        messageParams: { mode: t(`cover.${sepMode}`) },
+        action: { type: 'view', view: 'cover' },
+      })
     } catch (err) {
       setSepError(String(err))
+      notify({
+        category: 'taskFailure',
+        titleKey: 'notification.separation.failed.title',
+        messageKey: 'notification.separation.failed.message',
+        messageParams: { message: String(err) },
+        action: { type: 'view', view: 'cover' },
+      })
     } finally {
       setSeparating(false); setEngineBusy(false); setEngineStatus(t('status.idle'))
     }
@@ -102,8 +117,22 @@ export function CoverView(): JSX.Element {
 
       setCoverResult(res)
       complete(3, 4)
+      notify({
+        category: 'taskCompletion',
+        titleKey: 'notification.synthesis.complete.title',
+        messageKey: 'notification.synthesis.complete.message',
+        messageParams: { mode: algoVer.toUpperCase() },
+        action: { type: 'view', view: 'cover' },
+      })
     } catch (err) {
       setSynthError(String(err))
+      notify({
+        category: 'taskFailure',
+        titleKey: 'notification.synthesis.failed.title',
+        messageKey: 'notification.synthesis.failed.message',
+        messageParams: { message: String(err) },
+        action: { type: 'view', view: 'cover' },
+      })
     } finally {
       setSynthesizing(false); setEngineBusy(false); setEngineStatus(t('status.idle'))
     }

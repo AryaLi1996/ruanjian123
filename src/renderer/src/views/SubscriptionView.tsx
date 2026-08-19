@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useSubscriptionStore } from '../store/useSubscriptionStore'
+import { notify } from '../store/useNotificationStore'
 import { BrandLogo } from '../components/brand/BrandLogo'
 import type {
   ActivationResult,
@@ -10,7 +11,25 @@ import type {
   PaymentOrder,
   PaymentHistoryEntry,
   PlanId,
+  PlanInfo,
 } from '../store/subscription-types'
+
+// Ticket 34: months covered by a plan, used to derive the "original"
+// (pre-discount) price for the strikethrough display and the "for N
+// months" charge summary. Derived from the plan's own durationDays (already
+// server-supplied) rather than a second hardcoded id → months map, so a
+// future plan tier needs no client change to display correctly.
+function monthsFor(plan: PlanInfo): number {
+  return Math.max(1, Math.round(plan.durationDays / 30))
+}
+
+function formatPrice(price: number, currency: string, locale: string): string {
+  try {
+    return new Intl.NumberFormat(locale, { style: 'currency', currency: currency.toUpperCase() }).format(price)
+  } catch {
+    return `${price.toFixed(2)} ${currency.toUpperCase()}`
+  }
+}
 
 async function openManageCheckout(): Promise<void> {
   const { checkoutUrl } = await window.engine.getLicenseConfig()
@@ -107,7 +126,16 @@ export function SubscriptionView(): JSX.Element {
   const [checkoutReady, setCheckoutReady] = useState(false)
 
   const [config, setConfig] = useState<LicenseConfig | null>(null)
-  const [selectedPlan,   setSelectedPlan]   = useState<PlanId>('monthly')
+
+  // ── Plan availability (Ticket 34) ─────────────────────────────────────────
+  // Fetched live from the server (see getPlans) rather than assumed from the
+  // static LicenseConfig.plans list, so pricing/discounts are never
+  // hardcoded on the client — only falls back to the static list if the
+  // live fetch fails. No plan is pre-selected: the user must explicitly
+  // choose one before Subscribe is enabled (Ticket 34 §3).
+  const [plans,        setPlans]        = useState<PlanInfo[]>([])
+  const [plansLoading, setPlansLoading] = useState(true)
+  const [selectedPlan, setSelectedPlan] = useState<PlanId | null>(null)
 
   // ── Payment method availability (Ticket 31) ───────────────────────────────
   // Fetched live from the server (see getPaymentMethods) rather than assumed
@@ -139,6 +167,28 @@ export function SubscriptionView(): JSX.Element {
       })
       .catch(() => setCheckoutReady(false))
   }, [])
+
+  // A fetch failure falls back to the static (offline) plan list from
+  // license-config.ts rather than showing an empty grid — pricing may be
+  // stale, but the user can still subscribe. `config` is set by the effect
+  // above (a synchronous local IPC call), so in practice it's already
+  // populated well before this network call settles.
+  const loadPlans = useCallback(() => {
+    setPlansLoading(true)
+    window.engine.getPlans()
+      .then((list) => {
+        const resolved = list.length > 0 ? list : (config?.plans ?? [])
+        setPlans(resolved)
+        // Same pattern as loadMethods below: drop the selection if the plan
+        // it pointed at is gone from the fresh list, so a stale id can never
+        // leave Subscribe enabled with nothing actually selected.
+        setSelectedPlan((prev) => (prev && resolved.some((p) => p.id === prev) ? prev : null))
+      })
+      .catch(() => setPlans(config?.plans ?? []))
+      .finally(() => setPlansLoading(false))
+  }, [config])
+
+  useEffect(() => { loadPlans() }, [loadPlans])
 
   // A fetch failure and a genuinely-empty response are both treated as "no
   // methods available right now" — same friendly notice + retry either way
@@ -196,6 +246,12 @@ export function SubscriptionView(): JSX.Element {
           window.engine.closeEmbeddedPayment().catch(() => {})
           setOrderPhase('success')
           loadHistory()
+          notify({
+            category: 'subscription',
+            titleKey: 'notification.payment.success.title',
+            messageKey: 'notification.payment.success.message',
+            action: { type: 'view', view: 'subscription' },
+          })
         } else if (res.status === 'failed' || res.status === 'expired') {
           stopPolling()
           clearPendingOrder()
@@ -259,6 +315,12 @@ export function SubscriptionView(): JSX.Element {
             clearPendingOrder()
             setOrderPhase('success')
             loadHistory()
+            notify({
+              category: 'subscription',
+              titleKey: 'notification.payment.success.title',
+              messageKey: 'notification.payment.success.message',
+              action: { type: 'view', view: 'subscription' },
+            })
           } else if (res.status === 'failed' || res.status === 'expired') {
             stopPolling()
             clearPendingOrder()
@@ -281,7 +343,7 @@ export function SubscriptionView(): JSX.Element {
   }, [order, orderPhase, stopPolling, loadHistory, t])
 
   async function handleSubscribe(): Promise<void> {
-    if (!selectedMethod) return
+    if (!selectedPlan || !selectedMethod) return
     setOrderError(null)
     setOrderPhase('creating')
     try {
@@ -343,6 +405,13 @@ export function SubscriptionView(): JSX.Element {
     ? new Intl.DateTimeFormat(i18n.language, { year: 'numeric', month: 'long', day: 'numeric' }).format(new Date(expiresAt))
     : null
 
+  // Ticket 34: derived once per render rather than re-`find()`ing inside the
+  // plan-card map / charge-summary block — cheap either way at 4 plans, but
+  // this keeps each read to one lookup instead of duplicating the same scan.
+  const monthlyPlan      = plans.find((p) => p.id === 'monthly') ?? null
+  const maxPlanDiscount  = plans.reduce((max, p) => Math.max(max, p.discountPercent), 0)
+  const selectedPlanInfo = plans.find((p) => p.id === selectedPlan) ?? null
+
   const waitingHintKey: Record<PaymentMethod, string> = {
     wechat_pay: 'subscription.waitingWechat',
     douyin_pay: 'subscription.waitingDouyin',
@@ -380,7 +449,7 @@ export function SubscriptionView(): JSX.Element {
             <>
               <div className="sub-row">
                 <span>{t('subscription.plan')}</span>
-                <strong>{t(`subscription.${payload.planId}`)}</strong>
+                <strong>{t(`subscription.plans.${payload.planId}`)}</strong>
               </div>
               <div className="sub-row">
                 <span>{t('subscription.validUntil')}</span>
@@ -447,19 +516,63 @@ export function SubscriptionView(): JSX.Element {
             <>
               <div className="sub-plan-picker">
                 <span className="sub-field-label">{t('subscription.choosePlan')}</span>
-                <div className="sub-option-grid">
-                  {config.plans.map((plan) => (
-                    <button
-                      key={plan.id}
-                      type="button"
-                      className={`sub-option${selectedPlan === plan.id ? ' sub-option-selected' : ''}`}
-                      onClick={() => setSelectedPlan(plan.id)}
-                    >
-                      <strong>{t(`subscription.${plan.id}`)}</strong>
-                      <span>{formatAmount(plan.amount, plan.currency, i18n.language)}</span>
+
+                {plansLoading && (
+                  <div className="sub-methods-loading">
+                    <div className="sub-spinner" />
+                    <span>{t('subscription.plansLoading')}</span>
+                  </div>
+                )}
+
+                {!plansLoading && plans.length === 0 && (
+                  <div className="notice-banner">
+                    <span>{t('subscription.plansUnavailable')}</span>
+                    <button type="button" className="btn btn-ghost notice-banner-btn" onClick={loadPlans}>
+                      {t('common.retry')}
                     </button>
-                  ))}
-                </div>
+                  </div>
+                )}
+
+                {!plansLoading && plans.length > 0 && (
+                  <div className="sub-plan-grid">
+                    {plans.map((plan) => {
+                      const months = monthsFor(plan)
+                      const originalTotal = plan.discountPercent > 0 && monthlyPlan ? monthlyPlan.price * months : null
+                      // "Best value" tracks whichever plan(s) carry the steepest
+                      // discount, not a hardcoded 'annual' id — a future 5th
+                      // tier with a bigger cut is highlighted automatically,
+                      // and the client makes no pricing assumption of its own.
+                      const isBestValue = maxPlanDiscount > 0 && plan.discountPercent === maxPlanDiscount
+                      return (
+                        <button
+                          key={plan.id}
+                          type="button"
+                          className={`sub-plan-card${selectedPlan === plan.id ? ' sub-plan-card-selected' : ''}${isBestValue ? ' sub-plan-card-best' : ''}`}
+                          onClick={() => setSelectedPlan(plan.id)}
+                        >
+                          {isBestValue && <span className="sub-plan-ribbon">{t('subscription.bestValue')}</span>}
+                          <strong className="sub-plan-name">{t(`subscription.plans.${plan.id}`)}</strong>
+                          <span className="sub-plan-desc">{t(`subscription.planDesc.${plan.id}`)}</span>
+                          <div className="sub-plan-price-row">
+                            {originalTotal != null && (
+                              <span className="sub-plan-price-original">
+                                {formatPrice(originalTotal, plan.currency, i18n.language)}
+                              </span>
+                            )}
+                            <span className="sub-plan-price-final">
+                              {formatPrice(plan.price, plan.currency, i18n.language)}
+                            </span>
+                          </div>
+                          {plan.discountPercent > 0 && (
+                            <span className="sub-plan-discount-badge">
+                              {t('subscription.discountBadge', { percent: plan.discountPercent })}
+                            </span>
+                          )}
+                        </button>
+                      )
+                    })}
+                  </div>
+                )}
               </div>
 
               <div className="sub-method-picker">
@@ -484,7 +597,12 @@ export function SubscriptionView(): JSX.Element {
                 {/* Exactly one method available: skip the selection step
                     entirely — a single large, direct CTA (Ticket 31 §2/§4). */}
                 {!methodsLoading && methods.length === 1 && (
-                  <button type="button" className="btn btn-primary sub-method-single" onClick={handleSubscribe}>
+                  <button
+                    type="button"
+                    className="btn btn-primary sub-method-single"
+                    onClick={handleSubscribe}
+                    disabled={!selectedPlan}
+                  >
                     <span className="sub-method-badge" style={{ background: badgeFor(methods[0]).color }}>
                       {badgeFor(methods[0]).glyph}
                     </span>
@@ -511,12 +629,23 @@ export function SubscriptionView(): JSX.Element {
                 )}
               </div>
 
+              {/* Ticket 34 §3: total due, shown once a plan is picked —
+                  regardless of the method picker's single-CTA vs. grid shape. */}
+              {selectedPlanInfo && (
+                <p className="sub-charge-summary">
+                  {t('subscription.chargeSummary', {
+                    amount: formatPrice(selectedPlanInfo.price, selectedPlanInfo.currency, i18n.language),
+                    period: t('subscription.periodMonths', { count: monthsFor(selectedPlanInfo) }),
+                  })}
+                </p>
+              )}
+
               {/* The single-method case already has its own CTA above. */}
               {methods.length > 1 && (
                 <button
                   className="btn btn-primary sub-checkout-btn"
                   onClick={handleSubscribe}
-                  disabled={!selectedMethod}
+                  disabled={!selectedMethod || !selectedPlan}
                   style={{ marginTop: 14 }}
                 >
                   💳 {t('subscription.payNow')}
@@ -627,7 +756,7 @@ export function SubscriptionView(): JSX.Element {
                 {history.map((entry) => (
                   <tr key={entry.orderId}>
                     <td>{new Intl.DateTimeFormat(i18n.language, { dateStyle: 'medium' }).format(new Date(entry.createdAt * 1000))}</td>
-                    <td>{t(`subscription.${entry.planId}`)}</td>
+                    <td>{t(`subscription.plans.${entry.planId}`)}</td>
                     <td>{t(`subscription.method.${entry.method}`)}</td>
                     <td>{formatAmount(entry.amount, entry.currency, i18n.language)}</td>
                     <td><OrderStatusBadge status={entry.status} /></td>

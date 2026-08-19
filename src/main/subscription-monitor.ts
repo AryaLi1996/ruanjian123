@@ -11,7 +11,7 @@ import { promises as fs, existsSync }   from 'fs'
 import { join }                          from 'path'
 import { EventEmitter }                  from 'events'
 import { app }                           from 'electron'
-import { LICENSE_CONFIG, PAYMENT_METHODS, type PaymentMethod, type PlanId } from './license-config'
+import { LICENSE_CONFIG, PAYMENT_METHODS, PLANS, type PaymentMethod, type PlanId, type PlanPeriod } from './license-config'
 import { encryptModelBytes, decryptModelBytes } from './model-crypto'
 import { getDeviceId } from './device-id'
 
@@ -129,6 +129,18 @@ export interface PaymentMethodInfo {
   name:    string
   icon:    string
   color:   string | null
+}
+
+// Ticket 34: server-computed plan pricing — see GET /plans in handler.py's
+// _handle_get_plans(). Distinct from the static PLANS in license-config.ts,
+// which is only an offline fallback used when this fetch fails.
+export interface PlanInfo {
+  id:              PlanId
+  period:          PlanPeriod
+  durationDays:    number
+  discountPercent: number
+  price:           number   // major units (e.g. dollars)
+  currency:        string
 }
 
 // ── Token helpers ─────────────────────────────────────────────────────────────
@@ -570,6 +582,27 @@ export class SubscriptionMonitor extends EventEmitter {
       { orders?: PaymentHistoryEntry[]; error?: string }
     if (d.error) throw new Error(d.error)
     return Array.isArray(d.orders) ? d.orders : []
+  }
+
+  /**
+   * Ticket 34: fetches the four billing-period plans and their server-
+   * computed prices from GET /plans, so the client never hardcodes an
+   * amount. Falls back to nothing on error — callers (SubscriptionView) are
+   * expected to fall back to the static PLANS in license-config.ts, same
+   * pattern as a getPaymentMethods() failure falling back to an empty list.
+   * Defensively re-filtered against the known PlanId set, same reasoning as
+   * getPaymentMethods() below: a server response naming a plan id this
+   * build doesn't recognize (e.g. a newer server, older client) must not
+   * reach the UI.
+   */
+  async getPlans(): Promise<PlanInfo[]> {
+    const d = await this._request('GET', 'plans') as { plans?: Partial<PlanInfo>[]; error?: string }
+    if (d.error) throw new Error(d.error)
+    const known = new Set<string>(PLANS.map((p) => p.id))
+    return (Array.isArray(d.plans) ? d.plans : [])
+      .filter((p): p is PlanInfo =>
+        Boolean(p?.id) && known.has(p.id as string) &&
+        typeof p.durationDays === 'number' && typeof p.price === 'number')
   }
 
   /**

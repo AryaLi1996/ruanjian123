@@ -99,6 +99,9 @@ contextBridge.exposeInMainWorld('engine', {
     return () => ipcRenderer.removeListener('license:state-changed', h)
   },
 
+  // Server-computed plan pricing (Ticket 34)
+  getPlans: (): Promise<unknown> => ipcRenderer.invoke('payment:get-plans'),
+
   // Multi-channel payment (Ticket 28)
   createPaymentOrder: (planId: string, method: string): Promise<unknown> =>
     ipcRenderer.invoke('payment:create-order', planId, method),
@@ -123,4 +126,14 @@ contextBridge.exposeInMainWorld('engine', {
   loadBackgroundImage:  (): Promise<unknown> => ipcRenderer.invoke('bg:load'),
   loadBackgroundSource: (): Promise<string | null> => ipcRenderer.invoke('bg:load-source'),
   removeBackgroundImage: (): Promise<void> => ipcRenderer.invoke('bg:remove'),
+
+  // Main-process-originated notifications (Ticket 35 §2/§8) — see
+  // main/notification-bridge.ts. Distinct from onUpdaterEvent/
+  // onLicenseStateChange: those are feature-specific channels the renderer
+  // interprets itself; this one carries an already-shaped notify() payload.
+  onMainNotification: (cb: (payload: unknown) => void): (() => void) => {
+    const handler = (_: Electron.IpcRendererEvent, payload: unknown): void => cb(payload)
+    ipcRenderer.on('notification:push', handler)
+    return () => ipcRenderer.removeListener('notification:push', handler)
+  },
 })
