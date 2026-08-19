@@ -17,21 +17,50 @@ const DEFAULT_SIGNING_SECRET = 'ruanjian-dev-signing-secret-v1-change-in-product
 // This is independent of Stripe's own "subscription" object — the source of
 // truth for expiry is our own signed license token, not Stripe billing state.
 export type PaymentMethod = 'wechat_pay' | 'alipay' | 'douyin_pay' | 'card'
-export type PlanId = 'monthly' | 'annual'
+
+// ── Multi-period plans (Ticket 34) ────────────────────────────────────────────
+// Four billing periods, each a market-standard discount off the per-month
+// base rate: monthly 0%, quarterly 10%, semi-annual 20%, annual 30%.
+export type PlanId     = 'monthly' | 'quarterly' | 'semi_annual' | 'annual'
+export type PlanPeriod = 'month' | 'quarter' | 'half_year' | 'year'
 
 export interface PlanDef {
-  id:           PlanId
-  durationDays: number
-  amount:       number   // minor currency units (e.g. fen for CNY, cents for USD)
-  currency:     string   // ISO 4217, lowercase — must match the serverless PLAN config
+  id:              PlanId
+  period:          PlanPeriod
+  durationDays:    number
+  discountPercent: number
+  price:           number   // major units (e.g. dollars) — display/reference only
+  amount:          number   // minor currency units (e.g. fen for CNY, cents for USD)
+  currency:        string   // ISO 4217, lowercase — must match the serverless PLAN config
 }
 
+// This whole block is an OFFLINE FALLBACK ONLY, used if a live GET /plans
+// fetch fails (see subscription-monitor.ts's getPlans()) — the serverless
+// function's _build_plans() in handler.py is the actual source of truth for
+// pricing (BASE_MONTHLY_PRICE/PLAN_CURRENCY env vars). Keep this formula and
+// the default price in sync with that file's default.
+//
 // NOTE: WeChat Pay / Alipay via Stripe Checkout only support a subset of
 // presentment currencies, and that list can change — confirm the current one
 // in the Stripe docs before choosing `currency` for a real deployment.
+const _FALLBACK_BASE_MONTHLY_PRICE = 9.99
+const _FALLBACK_CURRENCY = 'usd'
+
+function _planPrice(months: number, discountPercent: number): number {
+  const raw = _FALLBACK_BASE_MONTHLY_PRICE * months * (1 - discountPercent / 100)
+  return Math.round((raw + Number.EPSILON) * 100) / 100
+}
+
+function _plan(id: PlanId, period: PlanPeriod, durationDays: number, months: number, discountPercent: number): PlanDef {
+  const price = _planPrice(months, discountPercent)
+  return { id, period, durationDays, discountPercent, price, amount: Math.round(price * 100), currency: _FALLBACK_CURRENCY }
+}
+
 export const PLANS: readonly PlanDef[] = [
-  { id: 'monthly', durationDays: 30,  amount: 2900,  currency: 'cny' },  // ¥29 / mo
-  { id: 'annual',  durationDays: 365, amount: 29900, currency: 'cny' },  // ¥299 / yr
+  _plan('monthly',     'month',     30,  1,  0),   // full price
+  _plan('quarterly',   'quarter',   90,  3,  10),  // 10% off
+  _plan('semi_annual', 'half_year', 180, 6,  20),  // 20% off
+  _plan('annual',      'year',      365, 12, 30),  // 30% off — best value
 ] as const
 
 export const PAYMENT_METHODS: readonly PaymentMethod[] = ['wechat_pay', 'alipay', 'douyin_pay', 'card']

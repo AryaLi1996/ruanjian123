@@ -9,6 +9,7 @@
 import { app, BrowserWindow } from 'electron'
 import { autoUpdater }        from 'electron-updater'
 import log                    from 'electron-log'
+import { notifyRenderer }     from './notification-bridge'
 
 autoUpdater.logger = log
 log.transports.file.level = 'info'
@@ -62,6 +63,18 @@ export function setupAutoUpdater(win: BrowserWindow): void {
   autoUpdater.on('error', (err) => {
     log.error('Updater error:', err.message)
     send(win, 'updater:error', { message: err.message })
+    // This previously only surfaced in the log file — TopToolbar's
+    // updater:error handler just clears the "downloading" spinner with no
+    // user-visible message. Real example of a main-only event: nothing in
+    // the renderer is awaiting this (the check/download was fire-and-forget
+    // from setTimeout/downloadUpdate below), so there's no promise chain to
+    // hang a notify() call off of the way training/separation/synthesis do.
+    notifyRenderer({
+      category: 'system',
+      titleKey: 'notification.system.updateError.title',
+      messageKey: 'notification.system.updateError.message',
+      messageParams: { message: err.message },
+    })
   })
 
   // Stagger the check by 3 seconds so it doesn't delay startup

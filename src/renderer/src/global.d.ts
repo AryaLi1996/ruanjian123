@@ -3,6 +3,7 @@ import type {
   PaymentOrder,
   PaymentHistoryEntry,
   PaymentMethodInfo,
+  PlanInfo,
 } from './store/subscription-types'
 
 export interface PersistedModel {
@@ -86,6 +87,8 @@ declare global {
       refreshLicense:       () => Promise<void>
       getLicenseConfig:     () => Promise<LicenseConfig>
       onLicenseStateChange: (cb: (state: unknown) => void) => () => void
+      // Server-computed plan pricing (Ticket 34)
+      getPlans: () => Promise<PlanInfo[]>
       // Multi-channel payment (Ticket 28)
       createPaymentOrder: (planId: string, method: string) => Promise<PaymentOrder & { error?: string }>
       getOrderStatus:     (orderId: string) => Promise<{ status: string; order?: PaymentOrder; licensed?: boolean; error?: string }>
@@ -100,6 +103,13 @@ declare global {
       loadBackgroundImage:   () => Promise<LoadedBackground | { missing: true } | null>
       loadBackgroundSource:  () => Promise<string | null>
       removeBackgroundImage: () => Promise<void>
+      // Main-process-originated notifications (Ticket 35 §2/§8) — see
+      // main/notification-bridge.ts. Payload shape matches NotifyInput in
+      // useNotificationStore.ts; kept as `unknown` here (rather than
+      // importing that type) so global.d.ts doesn't need to know about the
+      // notification store, matching how the rest of this file treats
+      // main-process payloads (e.g. onLicenseStateChange's `state: unknown`).
+      onMainNotification: (cb: (payload: unknown) => void) => () => void
     }
   }
 }

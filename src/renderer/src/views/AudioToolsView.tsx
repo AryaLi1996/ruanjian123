@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useAppStore } from '../store/useAppStore'
+import { notify } from '../store/useNotificationStore'
 
 type SepMode  = 'standard' | 'enhanced'
 type JobStatus = 'pending' | 'processing' | 'done' | 'error'
@@ -75,9 +76,11 @@ export function AudioToolsView(): JSX.Element {
   }
 
   // ── Process one job ───────────────────────────────────────
-  async function processOne(jobId: string): Promise<void> {
+  // Returns the outcome so runQueue can summarize the whole batch into a
+  // single notification instead of one per file (Ticket 35 §5).
+  async function processOne(jobId: string): Promise<'done' | 'error' | 'skipped'> {
     const job = jobsRef.current.find((j) => j.id === jobId)
-    if (!job || job.status !== 'pending') return
+    if (!job || job.status !== 'pending') return 'skipped'
 
     setJobs((prev) => prev.map((j) => j.id === jobId ? { ...j, status: 'processing' } : j))
     const t0 = Date.now()
@@ -100,10 +103,12 @@ export function AudioToolsView(): JSX.Element {
       setJobs((prev) => prev.map((j) =>
         j.id === jobId ? { ...j, status: 'done', stems: res.stems, elapsed } : j
       ))
+      return 'done'
     } catch (err) {
       setJobs((prev) => prev.map((j) =>
         j.id === jobId ? { ...j, status: 'error', error: String(err) } : j
       ))
+      return 'error'
     } finally {
       clearInterval(timerId)
       setLiveElapsed((prev) => { const n = { ...prev }; delete n[jobId]; return n })
@@ -120,12 +125,38 @@ export function AudioToolsView(): JSX.Element {
       .filter((j) => j.status === 'pending')
       .map((j) => j.id)
 
+    let doneCount = 0
+    let errorCount = 0
     for (const id of pendingIds) {
-      await processOne(id)
+      const outcome = await processOne(id)
+      if (outcome === 'done') doneCount++
+      else if (outcome === 'error') errorCount++
     }
 
     processingRef.current = false
     setRunning(false); setEngineBusy(false); setEngineStatus(t('status.idle'))
+
+    // One summary notification for the whole batch (Ticket 35 §1/§5) rather
+    // than one per file — a 20-file drag-and-drop would otherwise flood the
+    // toast queue.
+    if (doneCount > 0) {
+      notify({
+        category: 'taskCompletion',
+        titleKey: 'notification.separationBatch.complete.title',
+        messageKey: 'notification.separationBatch.complete.message',
+        messageParams: { count: doneCount },
+        action: { type: 'view', view: 'audio-tools' },
+      })
+    }
+    if (errorCount > 0) {
+      notify({
+        category: 'taskFailure',
+        titleKey: 'notification.separationBatch.failed.title',
+        messageKey: 'notification.separationBatch.failed.message',
+        messageParams: { count: errorCount },
+        action: { type: 'view', view: 'audio-tools' },
+      })
+    }
   }
 
   // ── Download helpers ──────────────────────────────────────

@@ -4,7 +4,9 @@ import i18n from '../i18n'
 import { useAppStore, type ActiveView } from '../store/useAppStore'
 import { useSubscriptionStore } from '../store/useSubscriptionStore'
 import { useSettingsStore } from '../store/useSettingsStore'
+import { notify } from '../store/useNotificationStore'
 import { BrandLogo } from './brand/BrandLogo'
+import { NotificationCenter } from './notifications/NotificationCenter'
 
 interface NavItem { view: ActiveView; icon: string; key: string }
 interface UpdateInfo { version?: string }
@@ -40,9 +42,31 @@ export function TopToolbar(): JSX.Element {
 
   useEffect(() => {
     const unsub = window.engine.onUpdaterEvent((event, data) => {
-      if (event === 'updater:available')  setUpdateInfo(data as UpdateInfo)
+      if (event === 'updater:available') {
+        const info = data as UpdateInfo
+        setUpdateInfo(info)
+        // Ticket 35 §5: surface this even if the user is on a different page —
+        // the toolbar banner above only exists while TopToolbar is mounted,
+        // which it always is, but the notification also lands in history.
+        notify({
+          category: 'system',
+          titleKey: 'notification.system.updateAvailable.title',
+          messageKey: 'notification.system.updateAvailable.message',
+          messageParams: { version: info?.version ?? '' },
+          action: { type: 'command', command: 'download-update' },
+        })
+      }
       if (event === 'updater:progress')   setDownloading(true)
-      if (event === 'updater:downloaded') { setDownloading(false); setReady(true) }
+      if (event === 'updater:downloaded') {
+        setDownloading(false)
+        setReady(true)
+        notify({
+          category: 'system',
+          titleKey: 'notification.system.updateReady.title',
+          messageKey: 'notification.system.updateReady.message',
+          action: { type: 'command', command: 'install-update' },
+        })
+      }
       if (event === 'updater:error')      setDownloading(false)
     })
     return unsub
@@ -96,6 +120,8 @@ export function TopToolbar(): JSX.Element {
         >
           💎 {t(STATUS_KEY[subStatus] ?? 'subscription.unlicensed')}
         </button>
+
+        <NotificationCenter />
 
         <label className="tb-language">
           <span className="sr-only">{t('language.label')}</span>

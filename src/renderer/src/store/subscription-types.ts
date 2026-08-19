@@ -44,14 +44,33 @@ export interface ActivationResult {
 // ── Multi-channel payment (Ticket 28) ─────────────────────────────────────────
 
 export type PaymentMethod = 'wechat_pay' | 'alipay' | 'douyin_pay' | 'card'
-export type PlanId = 'monthly' | 'annual'
 export type OrderStatus = 'pending' | 'paid' | 'failed' | 'expired'
+
+// ── Multi-period plans (Ticket 34) ────────────────────────────────────────────
+export type PlanId = 'monthly' | 'quarterly' | 'semi_annual' | 'annual'
+export type PlanPeriod = 'month' | 'quarter' | 'half_year' | 'year'
 
 export interface PlanDef {
   id: PlanId
+  period: PlanPeriod
   durationDays: number
-  amount: number     // minor currency units
+  discountPercent: number
+  price: number       // major units (e.g. dollars) — display/reference only
+  amount: number       // minor currency units
   currency: string   // ISO 4217, lowercase
+}
+
+// Live, server-computed plan pricing — see GET /plans in handler.py's
+// _handle_get_plans(). Distinct from PlanDef/LicenseConfig.plans below,
+// which is only the offline fallback used when this fetch fails (same
+// relationship as PaymentMethodInfo vs. LicenseConfig.paymentMethods).
+export interface PlanInfo {
+  id: PlanId
+  period: PlanPeriod
+  durationDays: number
+  discountPercent: number
+  price: number       // major units (e.g. dollars)
+  currency: string
 }
 
 export interface PaymentOrder {

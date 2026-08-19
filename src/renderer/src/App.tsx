@@ -4,6 +4,13 @@ import { ErrorBoundary }   from './components/ErrorBoundary'
 import { OnboardingFlow, ONBOARDING_DISMISSED_KEY }  from './components/onboarding/OnboardingFlow'
 import { WarmupScreen }    from './components/onboarding/WarmupScreen'
 import { useModelLibrary } from './hooks/useModelLibrary'
+import { notify } from './store/useNotificationStore'
+
+// Ticket 35 §5: a welcome notification once the onboarding modal is closed —
+// guarded separately from ONBOARDING_DISMISSED_KEY (which only gets set when
+// the user checks "don't show again"), so this fires exactly once ever
+// rather than every time the tutorial is shown/dismissed.
+const WELCOME_NOTIFIED_KEY = 'ruanjian.notifications.welcomeShown'
 
 function App(): JSX.Element {
   useModelLibrary()
@@ -74,7 +81,23 @@ function App(): JSX.Element {
           onContinue={finishWarmup}
         />
       )}
-      {startup === 'tutorial' && <OnboardingFlow onClose={() => setStartup('ready')} />}
+      {startup === 'tutorial' && (
+        <OnboardingFlow
+          onClose={() => {
+            setStartup('ready')
+            try {
+              if (localStorage.getItem(WELCOME_NOTIFIED_KEY) !== '1') {
+                localStorage.setItem(WELCOME_NOTIFIED_KEY, '1')
+                notify({
+                  category: 'system',
+                  titleKey: 'notification.system.welcome.title',
+                  messageKey: 'notification.system.welcome.message',
+                })
+              }
+            } catch { /* best-effort */ }
+          }}
+        />
+      )}
     </>
   )
 }
