@@ -47,6 +47,16 @@ function displayPrice(plan: PlanInfo, language: string): { amount: number; curre
     : { amount: plan.price, currency: plan.currency }
 }
 
+// Same currency selection as displayPrice(), but for the pre-discount
+// "original" total shown struck through — see PlanInfo.originalPrice's doc
+// comment for why this reads a plan's own originalPrice/originalPriceUSD
+// rather than multiplying the monthly plan's unit price by the duration.
+function displayOriginalPrice(plan: PlanInfo, language: string): { amount: number; currency: string } {
+  return language.startsWith('en')
+    ? { amount: plan.originalPriceUSD, currency: 'USD' }
+    : { amount: plan.originalPrice, currency: plan.currency }
+}
+
 // Display fallback only — the live picker gets its name/icon/color straight
 // from the server (see PaymentMethodInfo / getPaymentMethods), which is now
 // the source of truth. This stays around for two cases that never go
@@ -414,12 +424,11 @@ export function SubscriptionView(): JSX.Element {
   // Ticket 34: derived once per render rather than re-`find()`ing inside the
   // plan-card map / charge-summary block — cheap either way at 4 plans, but
   // this keeps each read to one lookup instead of duplicating the same scan.
-  const monthlyPlan      = plans.find((p) => p.id === 'monthly') ?? null
   const maxPlanDiscount  = plans.reduce((max, p) => Math.max(max, p.discountPercent), 0)
   const selectedPlanInfo = plans.find((p) => p.id === selectedPlan) ?? null
-  // Ticket 36 §4: the monthly plan's displayed (RMB or USD) unit price,
-  // reused below to derive every plan card's pre-discount "original" total.
-  const monthlyDisplay   = monthlyPlan ? displayPrice(monthlyPlan, i18n.language) : null
+  // Ticket 36 §4: computed once rather than calling displayPrice() twice
+  // (amount + currency) in the charge-summary JSX below.
+  const selectedPlanDisplay = selectedPlanInfo ? displayPrice(selectedPlanInfo, i18n.language) : null
 
   const waitingHintKey: Record<PaymentMethod, string> = {
     wechat_pay: 'subscription.waitingWechat',
@@ -541,12 +550,12 @@ export function SubscriptionView(): JSX.Element {
                 {!plansLoading && plans.length > 0 && (
                   <div className="sub-plan-grid">
                     {plans.map((plan) => {
-                      const months = monthsFor(plan)
                       // Ticket 36 §4: shown in RMB (zh) or its USD equivalent
-                      // (en) — see displayPrice(). Actual billing always
-                      // happens in plan.currency regardless of which is shown.
+                      // (en) — see displayPrice()/displayOriginalPrice().
+                      // Actual billing always happens in plan.currency
+                      // regardless of which one is shown.
                       const planDisplay = displayPrice(plan, i18n.language)
-                      const originalTotal = plan.discountPercent > 0 && monthlyDisplay ? monthlyDisplay.amount * months : null
+                      const originalDisplay = plan.discountPercent > 0 ? displayOriginalPrice(plan, i18n.language) : null
                       // "Best value" tracks whichever plan(s) carry the steepest
                       // discount, not a hardcoded 'annual' id — a future 5th
                       // tier with a bigger cut is highlighted automatically,
@@ -563,9 +572,9 @@ export function SubscriptionView(): JSX.Element {
                           <strong className="sub-plan-name">{t(`subscription.plans.${plan.id}`)}</strong>
                           <span className="sub-plan-desc">{t(`subscription.planDesc.${plan.id}`)}</span>
                           <div className="sub-plan-price-row">
-                            {originalTotal != null && (
+                            {originalDisplay != null && (
                               <span className="sub-plan-price-original">
-                                {formatPrice(originalTotal, planDisplay.currency, i18n.language)}
+                                {formatPrice(originalDisplay.amount, originalDisplay.currency, i18n.language)}
                               </span>
                             )}
                             <span className="sub-plan-price-final">
@@ -642,14 +651,10 @@ export function SubscriptionView(): JSX.Element {
                   picked — regardless of the method picker's single-CTA vs.
                   grid shape. Shown in RMB or its USD equivalent per language;
                   the actual charge is always in selectedPlanInfo.currency. */}
-              {selectedPlanInfo && (
+              {selectedPlanInfo && selectedPlanDisplay && (
                 <p className="sub-charge-summary">
                   {t('subscription.chargeSummary', {
-                    amount: formatPrice(
-                      displayPrice(selectedPlanInfo, i18n.language).amount,
-                      displayPrice(selectedPlanInfo, i18n.language).currency,
-                      i18n.language,
-                    ),
+                    amount: formatPrice(selectedPlanDisplay.amount, selectedPlanDisplay.currency, i18n.language),
                     period: t('subscription.periodMonths', { count: monthsFor(selectedPlanInfo) }),
                   })}
                 </p>

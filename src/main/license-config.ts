@@ -65,11 +65,18 @@ function _planPriceUSD(priceMajorUnits: number): number {
 
 function _plan(id: PlanId, period: PlanPeriod, durationDays: number, months: number, discountPercent: number): PlanDef {
   const price = _planPrice(months, discountPercent)
+  // Computed the same single-rounding-step way as `price`/`priceUSD` rather
+  // than derived by multiplying the monthly plan's own (already-rounded)
+  // unit price by `months` — see handler.py's _build_plans() doc comment for
+  // why that would drift a dollar or two from the discount% badge.
+  const originalPrice = _planPrice(months, 0)
   return {
     id, period, durationDays, discountPercent, price,
-    priceUSD: _planPriceUSD(price),
-    amount:   Math.round(price * 100),
-    currency: _FALLBACK_CURRENCY,
+    priceUSD:         _planPriceUSD(price),
+    originalPrice,
+    originalPriceUSD: _planPriceUSD(originalPrice),
+    amount:           Math.round(price * 100),
+    currency:         _FALLBACK_CURRENCY,
   }
 }
 
