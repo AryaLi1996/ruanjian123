@@ -18,6 +18,13 @@ const NAV_ITEMS: NavItem[] = [
   { view: 'playback',    icon: '🎚️', key: 'playback' },
 ]
 
+// Ticket 37 §4 improvement: persisted (not just an in-memory ref) so a
+// version the user already saw and dismissed stays silent across app
+// restarts too — "does not reappear until a newer version is detected"
+// shouldn't reset itself just because the user quit and relaunched before
+// updating.
+const NOTIFIED_UPDATE_VERSION_KEY = 'ruanjian.lastNotifiedUpdateVersion'
+
 const STATUS_KEY: Record<string, string> = {
   active:       'subscription.active',
   grace_period: 'subscription.grace',
@@ -46,8 +53,10 @@ export function TopToolbar(): JSX.Element {
   // once per check. A ref (not state) survives across those repeated
   // updater:available events without itself triggering a re-render, and
   // isn't reset when the user dismisses the toast, so a re-check for the
-  // same version stays silent until a newer one is actually detected.
-  const notifiedVersionRef = useRef<string | null>(null)
+  // same version stays silent until a newer one is actually detected. Seeded
+  // from localStorage so that holds across app restarts too, not just the
+  // current session.
+  const notifiedVersionRef = useRef<string | null>(localStorage.getItem(NOTIFIED_UPDATE_VERSION_KEY))
 
   useEffect(() => {
     const unsub = window.engine.onUpdaterEvent((event, data) => {
@@ -57,6 +66,7 @@ export function TopToolbar(): JSX.Element {
         const version = info?.version ?? ''
         if (version && notifiedVersionRef.current !== version) {
           notifiedVersionRef.current = version
+          localStorage.setItem(NOTIFIED_UPDATE_VERSION_KEY, version)
           // Ticket 35 §5: surface this even if the user is on a different
           // page — the toolbar banner above only exists while TopToolbar is
           // mounted, which it always is, but the notification also lands in

@@ -74,6 +74,8 @@ contextBridge.exposeInMainWorld('engine', {
   updaterCheck:       (): Promise<void> => ipcRenderer.invoke('updater:check'),
   updaterDownload:    (): Promise<void> => ipcRenderer.invoke('updater:download'),
   updaterQuitInstall: (): Promise<void> => ipcRenderer.invoke('updater:quit-install'),
+  updaterGetLastResult: (): Promise<{ event: string; payload?: unknown } | null> =>
+    ipcRenderer.invoke('updater:get-last-result'),
 
   onUpdaterEvent: (cb: (event: string, data: unknown) => void): (() => void) => {
     const events = [

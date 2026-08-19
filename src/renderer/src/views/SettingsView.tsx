@@ -99,7 +99,7 @@ export function SettingsView(): JSX.Element {
   const [latestVersion, setLatestVersion] = useState<string | null>(null)
 
   useEffect(() => {
-    const unsub = window.engine.onUpdaterEvent((event, data) => {
+    function applyUpdaterEvent(event: string, data: unknown): void {
       if (event === 'updater:checking')     setUpdateStatus('checking')
       if (event === 'updater:not-available') setUpdateStatus('up-to-date')
       if (event === 'updater:available') {
@@ -109,7 +109,26 @@ export function SettingsView(): JSX.Element {
       // Ticket 37 §1: shown only here, inline — never as a toast or
       // notification-center entry (see auto-updater.ts's 'error' handler).
       if (event === 'updater:error') setUpdateStatus('failed')
+    }
+
+    // Subscribe first so no live event is missed while the query below is
+    // in flight, then guard against the query's answer landing *after* a
+    // live event already arrived (e.g. Settings opens mid-check) — in that
+    // race the live event is newer and must win, not the stale snapshot.
+    let receivedLiveEvent = false
+    const unsub = window.engine.onUpdaterEvent((event, data) => {
+      receivedLiveEvent = true
+      applyUpdaterEvent(event, data)
     })
+
+    // Improvement over the initial cut: without this, opening Settings any
+    // time after the automatic startup check already ran left the card on
+    // "idle" until the user clicked "Check for Updates" again, even though
+    // main already knew the answer.
+    window.engine.updaterGetLastResult()
+      .then((last) => { if (last && !receivedLiveEvent) applyUpdaterEvent(last.event, last.payload) })
+      .catch(() => {})
+
     return unsub
   }, [])
 

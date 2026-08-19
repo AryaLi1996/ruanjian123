@@ -135,13 +135,15 @@ export interface PaymentMethodInfo {
 // _handle_get_plans(). Distinct from the static PLANS in license-config.ts,
 // which is only an offline fallback used when this fetch fails.
 export interface PlanInfo {
-  id:              PlanId
-  period:          PlanPeriod
-  durationDays:    number
-  discountPercent: number
-  price:           number   // major units (e.g. yuan)
-  priceUSD:        number   // display-only USD equivalent (Ticket 36) — never used for billing
-  currency:        string
+  id:                PlanId
+  period:            PlanPeriod
+  durationDays:      number
+  discountPercent:   number
+  price:             number   // major units (e.g. yuan)
+  priceUSD:          number   // display-only USD equivalent (Ticket 36) — never used for billing
+  originalPrice:     number   // pre-discount reference total (same currency as `price`) — for the strikethrough price
+  originalPriceUSD:  number   // display-only USD equivalent of originalPrice (Ticket 36)
+  currency:          string
 }
 
 // ── Token helpers ─────────────────────────────────────────────────────────────
@@ -604,12 +606,24 @@ export class SubscriptionMonitor extends EventEmitter {
       .filter((p): p is PlanInfo =>
         Boolean(p?.id) && known.has(p.id as string) &&
         typeof p.durationDays === 'number' && typeof p.price === 'number')
-      // Ticket 36: an older server build might not send priceUSD yet —
-      // derive it from `price` rather than let the English UI show nothing.
-      .map((p) => ({
-        ...p,
-        priceUSD: typeof p.priceUSD === 'number' ? p.priceUSD : Math.round(p.price / FALLBACK_USD_EXCHANGE_RATE),
-      }))
+      // Ticket 36: an older server build might not send priceUSD/
+      // originalPrice*/ yet — derive them rather than let the English UI (or
+      // the plan cards' strikethrough price) show nothing. originalPrice is
+      // approximated from the fallback monthly rate here (not `price`
+      // reversed via the discount%, which would reintroduce the same
+      // compounded-rounding drift this field exists to avoid) — this path
+      // only matters for the brief window before the server picks up the
+      // matching handler.py change.
+      .map((p) => {
+        const priceUSD = typeof p.priceUSD === 'number' ? p.priceUSD : Math.round(p.price / FALLBACK_USD_EXCHANGE_RATE)
+        const months = Math.max(1, Math.round(p.durationDays / 30))
+        const fallbackMonthlyPrice = PLANS.find((fp) => fp.id === 'monthly')?.price ?? p.price
+        const originalPrice = typeof p.originalPrice === 'number' ? p.originalPrice : fallbackMonthlyPrice * months
+        const originalPriceUSD = typeof p.originalPriceUSD === 'number'
+          ? p.originalPriceUSD
+          : Math.round(originalPrice / FALLBACK_USD_EXCHANGE_RATE)
+        return { ...p, priceUSD, originalPrice, originalPriceUSD }
+      })
   }
 
   /**

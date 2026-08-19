@@ -4,7 +4,7 @@ import { existsSync } from 'fs'
 import { promises as fs } from 'fs'
 import { callPythonEngine, callPythonEngineStreaming } from './python-bridge'
 import { encryptModelFile, decryptModelFile } from './model-crypto'
-import { setupAutoUpdater, checkForUpdates, downloadUpdate, quitAndInstall } from './auto-updater'
+import { setupAutoUpdater, checkForUpdates, getLastUpdateResult, downloadUpdate, quitAndInstall } from './auto-updater'
 import { SubscriptionMonitor } from './subscription-monitor'
 import { LICENSE_CONFIG, usingDefaultSigningSecret } from './license-config'
 import { loadModels, saveModels, type PersistedModel } from './model-registry'
@@ -477,6 +477,10 @@ ipcMain.handle('updater:check', (event) => {
   const win = BrowserWindow.fromWebContents(event.sender)
   if (win) checkForUpdates(win)
 })
+// Lets SettingsView show the outcome of a check that already ran (the
+// startup timer, or an earlier manual click) instead of sitting blank
+// until the user clicks "Check for Updates" again.
+ipcMain.handle('updater:get-last-result', () => getLastUpdateResult())
 
 // ── Subscription / license IPC ────────────────────────────────────────────────
 const monitor = SubscriptionMonitor.getInstance()

@@ -25,12 +25,33 @@ type UpdaterEvent =
   | 'updater:downloaded'
   | 'updater:error'
 
+// Last event broadcast, if any — lets a freshly-opened Settings page
+// (Ticket 37 §2) show the outcome of a check that already ran (e.g. the
+// automatic startup check) instead of sitting blank until the user clicks
+// "Check for Updates" themselves.
+let lastResult: { event: UpdaterEvent; payload?: unknown } | null = null
+
 function send(win: BrowserWindow, event: UpdaterEvent, payload?: unknown): void {
+  lastResult = { event, payload }
   if (!win.isDestroyed()) win.webContents.send(event, payload)
+}
+
+/** See `lastResult` above. Read via IPC (`updater:get-last-result`). */
+export function getLastUpdateResult(): { event: UpdaterEvent; payload?: unknown } | null {
+  return lastResult
 }
 
 export function setupAutoUpdater(win: BrowserWindow): void {
   if (!app.isPackaged) return   // skip in dev
+
+  // createWindow() calls this again if the app is reactivated on macOS
+  // after every window was closed — without this, that second call would
+  // stack a fresh set of listeners on top of the old set on this singleton
+  // autoUpdater instead of replacing it. The old set still targets the
+  // now-destroyed window (send() no-ops on it), so it wasn't a
+  // double-broadcast bug, just a leaked closure per reactivation — clearing
+  // first keeps it at exactly one live set targeting the current window.
+  autoUpdater.removeAllListeners()
 
   autoUpdater.on('checking-for-update', () => send(win, 'updater:checking'))
 

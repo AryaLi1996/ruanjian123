@@ -80,6 +80,7 @@ declare global {
       updaterCheck:       () => Promise<void>
       updaterDownload:    () => Promise<void>
       updaterQuitInstall: () => Promise<void>
+      updaterGetLastResult: () => Promise<{ event: string; payload?: unknown } | null>
       onUpdaterEvent:    (cb: (event: string, data: unknown) => void) => () => void
       // Subscription
       getLicenseState:      () => Promise<unknown>
