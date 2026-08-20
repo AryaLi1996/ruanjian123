@@ -635,11 +635,18 @@ def _apply_trial_duration_cap(trial: dict[str, Any]) -> dict[str, Any]:
             table.update_item(
                 Key={"deviceId": trial["deviceId"]},
                 UpdateExpression="SET trialEnd = :capped",
+                # Guards against a get/update race with a (hypothetical —
+                # nothing deletes trial records today) concurrent delete: an
+                # unconditional update_item would otherwise upsert a partial
+                # item carrying only deviceId/trialEnd, silently dropping
+                # trialStart/createdAt/lastSeen.
+                ConditionExpression="attribute_exists(deviceId)",
                 ExpressionAttributeValues={":capped": capped_end},
             )
         except Exception:  # noqa: BLE001
             # Best-effort — still return the corrected value to the caller
-            # this request even if the write didn't stick; the next read
+            # this request even if the write didn't stick (including the
+            # ConditionalCheckFailedException case above); the next read
             # will retry the correction.
             pass
     return {**trial, "trialEnd": capped_end}
@@ -719,6 +726,13 @@ def _handle_trial_activate(event: dict) -> dict:
         "statusCode": 200, "headers": _cors_headers(),
         "body": json.dumps({
             "success": True, "trialStart": trial["trialStart"], "trialEnd": trial["trialEnd"],
+            # Ticket 42: lets the client cache the *server's* current trial
+            # length instead of trusting only its own hardcoded
+            # LICENSE_CONFIG.trial.durationDays for later offline fallback —
+            # the exact two-independently-hardcoded-constants split that let
+            # the client and server disagree (7 vs 3 days) in the first
+            # place. See subscription-monitor.ts's LocalTrialRecord.durationDays.
+            "trialDurationDays": TRIAL_DAYS,
         }),
     }
 
@@ -734,7 +748,10 @@ def _handle_trial_status(event: dict) -> dict:
     if not trial:
         return {
             "statusCode": 200, "headers": _cors_headers(),
-            "body": json.dumps({"trialUsed": False, "trialStart": None, "trialEnd": None, "expired": False}),
+            "body": json.dumps({
+                "trialUsed": False, "trialStart": None, "trialEnd": None, "expired": False,
+                "trialDurationDays": TRIAL_DAYS,  # Ticket 42 — see _handle_trial_activate
+            }),
         }
 
     _touch_trial_last_seen(device_id)
@@ -743,6 +760,7 @@ def _handle_trial_status(event: dict) -> dict:
         "body": json.dumps({
             "trialUsed": True, "trialStart": trial["trialStart"], "trialEnd": trial["trialEnd"],
             "expired": int(time.time()) > trial["trialEnd"],
+            "trialDurationDays": TRIAL_DAYS,  # Ticket 42 — see _handle_trial_activate
         }),
     }
 
