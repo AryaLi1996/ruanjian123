@@ -116,7 +116,7 @@ export const LICENSE_CONFIG = {
   // ── Demo / CI key ───────────────────────────────────────────────────────────
   // Activating this key in dev mode creates a local 30-day token without
   // hitting the server — safe for automated tests and first-launch demos.
-  demoKey: 'RUANJIAN-DEMO-2026',
+  demoKey: 'SOOTHEVOICE-DEMO-2026',
 
   // ── Plans & payment methods (Ticket 28) ─────────────────────────────────────
   plans:          PLANS,

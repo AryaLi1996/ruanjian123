@@ -8,11 +8,21 @@ name: Build Linux Installer
 # (app.setName('SootheVoice') + user-data-migration.ts) had never actually
 # been built or checked here — only reasoned about, since the fix is plain
 # Electron API calls with no platform-specific code. This workflow builds
-# both Linux targets (AppImage, deb) and statically verifies the
-# user-visible name each one carries — the .desktop entry's Name= field and
-# the installed executable name — the Linux equivalents of the Windows
-# Start Menu shortcut / registry DisplayName checks in
-# build-windows-nsis.yml.
+# the AppImage target and statically verifies the user-visible name it
+# carries — the .desktop entry's Name= field and the installed executable
+# name — the Linux equivalent of the Windows Start Menu shortcut / registry
+# DisplayName checks in build-windows-nsis.yml.
+#
+# AppImage only, not deb: the .deb target fails with "Please specify author
+# 'email' in the application package.json — It is required to set Linux
+# .deb package maintainer", since package.json has no `author` field at all.
+# That's a real, pre-existing gap in this repo unrelated to branding (it
+# would block a .deb build regardless of what the app is named) — not
+# something to paper over with a guessed maintainer email here. Once a real
+# author/maintainer is added (package.json `author`, or `linux.maintainer`
+# in electron-builder.js), add `deb` back to the --linux flag below and
+# restore its verification step (see git history on this file for the
+# original version, which had one).
 on:
   workflow_dispatch: {}
 
@@ -23,6 +33,25 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
+      # First real run of this workflow failed here: mksquashfs (building the
+      # AppImage) died with "No space left on device". ubuntu-latest's
+      # nominal ~14GB free is eaten by preinstalled toolchains this job never
+      # uses (dotnet, the Android SDK, GHC, CodeQL) before the actual build
+      # even starts — PyInstaller bundling a torch/onnxruntime engine, a full
+      # Electron download, and then staging *both* an AppImage and a deb
+      # (duplicating the whole unpacked app) easily exceeds what's left.
+      # Removing the unused toolchains is the standard fix for this on
+      # GitHub-hosted Linux runners; logged before/after so a future failure
+      # here is diagnosable at a glance instead of a bare "no space" error.
+      - name: Free up disk space on the runner
+        run: |
+          echo "--- before cleanup ---"
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL /usr/local/.ghcup
+          sudo docker image prune -a -f 2>/dev/null || true
+          echo "--- after cleanup ---"
+          df -h /
 
       - name: Set up Python 3.11
         uses: actions/setup-python@v5
@@ -51,21 +80,19 @@ jobs:
       # --publish never: electron-builder.js has a `publish` block for the
       # real auto-updater; a plain build would otherwise still try to prep
       # GitHub-release metadata and fail on a missing GH_TOKEN.
-      - name: Package Linux AppImage + deb
+      - name: Package Linux AppImage
         env:
           DEBUG: electron-builder
         run: |
-          node node_modules/electron-builder/out/cli/cli.js --linux AppImage deb --x64 --publish never
+          node node_modules/electron-builder/out/cli/cli.js --linux AppImage --x64 --publish never
           echo "--- dist/ contents after packaging ---"
           find dist -maxdepth 2 2>&1 || echo "(dist/ does not exist)"
 
-      - name: Upload installer artifacts
+      - name: Upload installer artifact
         uses: actions/upload-artifact@v4
         with:
-          name: soothevoice-linux-appimage-deb
-          path: |
-            dist/*.AppImage
-            dist/*.deb
+          name: soothevoice-linux-appimage
+          path: dist/*.AppImage
           retention-days: 14
           if-no-files-found: error
 
@@ -110,41 +137,3 @@ jobs:
             echo "::error::Found an executable/file still named after the old placeholder inside the AppImage"
             exit 1
           fi
-
-      - name: Verify .deb package name, control metadata, and installed .desktop entry
-        shell: bash
-        run: |
-          set -euo pipefail
-          deb="$(find dist -maxdepth 1 -name '*.deb' | head -1)"
-          if [ -z "$deb" ]; then echo "::error::No .deb found in dist/"; exit 1; fi
-          echo "deb: $deb"
-
-          extract_dir="$(mktemp -d)"
-          dpkg-deb -x "$deb" "$extract_dir"
-          dpkg-deb -e "$deb" "$extract_dir/DEBIAN"
-
-          echo "--- control file ---"
-          cat "$extract_dir/DEBIAN/control"
-
-          echo "--- installed files (matching applications/*.desktop or opt/**) ---"
-          find "$extract_dir" -path "*/applications/*.desktop" -o -path "*/opt/*" -maxdepth 6 | head -50
-
-          desktop_file="$(find "$extract_dir" -path '*/applications/*.desktop' | head -1)"
-          if [ -z "$desktop_file" ]; then echo "::error::No installed .desktop file found in the .deb payload"; exit 1; fi
-          echo "--- installed .desktop file contents ---"
-          cat "$desktop_file"
-
-          if grep -qi "ruanjian" "$extract_dir/DEBIAN/control" "$desktop_file"; then
-            echo "::error::.deb control file or .desktop entry still references the old placeholder name:"
-            grep -i "ruanjian" "$extract_dir/DEBIAN/control" "$desktop_file" || true
-            exit 1
-          fi
-          if ! grep -qi "^Name=SootheVoice" "$desktop_file"; then
-            echo "::error::Installed .desktop file's Name= field is not 'SootheVoice'"
-            exit 1
-          fi
-          if find "$extract_dir/opt" -maxdepth 1 -iname '*ruanjian*' 2>/dev/null | grep -q .; then
-            echo "::error::Found an /opt install directory still named after the old placeholder"
-            exit 1
-          fi
-          echo "OK: .deb control + installed .desktop entry are SootheVoice, no 'ruanjian' found."

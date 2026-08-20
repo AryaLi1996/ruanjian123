@@ -1,6 +1,6 @@
 import { app, BrowserWindow, shell, ipcMain, dialog, crashReporter, Menu } from 'electron'
 import { join, resolve, sep, dirname } from 'path'
-import { existsSync } from 'fs'
+import { existsSync, renameSync } from 'fs'
 import { promises as fs } from 'fs'
 import { callPythonEngine, callPythonEngineStreaming } from './python-bridge'
 import { encryptModelFile, decryptModelFile } from './model-crypto'
@@ -14,7 +14,59 @@ import {
 } from './background-store'
 import { notifyRenderer } from './notification-bridge'
 import { createSplashWindow, closeSplashWindow } from './splash'
+import { migrateUserData } from './user-data-migration'
 import log from 'electron-log'
+
+// ── App identity fix + userData migration (Ticket 40) ───────────────────────
+// Electron's default userData path is "<app data dir>/<app.getName()>".
+// app.getName() is *supposed* to read package.json's `productName` (falling
+// back to `name`) per Electron's own docs — but electron-builder strips
+// `productName` out of the package.json it actually bundles into app.asar
+// (confirmed by extracting a packaged build), leaving only `name`. So even
+// with electron-builder.js's `productName: 'SootheVoice'` (which is real and
+// correctly drives the Dock/Finder/menu-bar name via Info.plist — Ticket 32)
+// and this ticket's package.json `productName` addition (which only reaches
+// dev/unpackaged runs), every *packaged* build's app.getName() has still
+// quietly resolved to the old placeholder, "ruanjian" — and so has its
+// userData path. app.setName() is the one mechanism that reliably overrides
+// this in every run mode, packaged or not; it's used here for the first time
+// specifically because it's now paired with the migration below, which is
+// what makes it safe — flipping the userData path without one would silently
+// orphan every existing install's license, trial state, saved models, and
+// training data behind an empty new profile.
+app.setName('SootheVoice')
+
+// Set below if the migration fails, and surfaced to the user once a window
+// can actually show a dialog (see the app.whenReady() handler) — this runs
+// far too early in startup for BrowserWindow-based UI (notifyRenderer would
+// be a silent no-op here; there is no window yet). A failure here previously
+// only went to electron-log, a file the user would never open — meaning
+// their license/trial/models could appear to have vanished with no
+// explanation. The old directory is never touched on failure (see
+// user-data-migration.ts), so this is purely about making that recoverable
+// state visible instead of silent.
+let userDataMigrationFailure: { oldDir: string; newDir: string } | null = null
+
+function runUserDataMigration(): void {
+  // Deliberately NOT app.getPath('userData') here: Electron materializes
+  // (mkdir -p's) that directory as a side effect of computing it, which
+  // would make it "already exist" by the time we checked — a genuine bug hit
+  // while testing this fix, where the migration silently no-op'd because the
+  // very act of asking for the new path had just created it empty. Building
+  // the same default path ourselves from 'appData' + the app name avoids
+  // touching the filesystem before the migration decision is made.
+  const newDir = join(app.getPath('appData'), app.getName())
+  const oldDir = join(app.getPath('appData'), 'ruanjian')
+  const outcome = migrateUserData(oldDir, newDir, { exists: existsSync, rename: renameSync, join })
+  if (outcome.status === 'migrated') {
+    log.info(`[migrate] moved userData "${oldDir}" -> "${newDir}"`)
+  } else if (outcome.status === 'failed') {
+    log.error('[migrate] failed to move userData dir', outcome.error)
+    userDataMigrationFailure = { oldDir, newDir }
+  }
+}
+runUserDataMigration()
+
 // Collect native crash dumps locally so a renderer/GPU crash leaves a trace.
 // Never let telemetry setup stop the app from starting.
 try {
@@ -98,16 +150,15 @@ function markInitialized(): void {
 
 // macOS's auto-generated default menu (used whenever nobody calls
 // Menu.setApplicationMenu) hard-codes app.getName() into its labels —
-// "About ruanjian", "Hide ruanjian", "Quit ruanjian" — which is the raw
-// package.json `name` field, not productName, so it kept the old
-// placeholder even after the SootheVoice rebrand (Ticket 32). Building an
-// explicit template instead lets the standard macOS roles (about/hide/
-// quit) pick up the real bundle name from the packaged app's Info.plist
-// (CFBundleName, generated from electron-builder's productName) — the
-// *correct* mechanism, unlike app.setName(), which would also silently
-// relocate app.getPath('userData') and orphan existing users' license/
-// model data. Scoped to darwin only: Windows/Linux keep Electron's
-// existing default menu untouched.
+// "About ruanjian", "Hide ruanjian", "Quit ruanjian" — which used to keep
+// showing the old placeholder even after the SootheVoice rebrand (Ticket 32)
+// and the app.setName() fix above (Ticket 40), because at the time this was
+// written that call didn't exist yet (see the comment above it for why).
+// Now that app.setName('SootheVoice') runs at startup, app.getName() itself
+// is correct — but this explicit template is left in place as a
+// belt-and-suspenders: it hardcodes the label directly rather than
+// depending on app.getName() staying right in the future. Scoped to darwin
+// only: Windows/Linux keep Electron's existing default menu untouched.
 function setupAppMenu(): void {
   if (process.platform !== 'darwin') return
   const template: Electron.MenuItemConstructorOptions[] = [
@@ -179,7 +230,7 @@ function createWindow(onFirstShow?: () => void): BrowserWindow {
   const showFallback = setTimeout(() => { if (!win.isDestroyed()) win.show(); fireFirstShow() }, 5_000)
   win.once('ready-to-show', () => { clearTimeout(showFallback); win.show(); fireFirstShow() })
 
-  // Log renderer failures to the main-process log so they're visible in %AppData%\Ruanjian\logs
+  // Log renderer failures to the main-process log so they're visible in %AppData%\SootheVoice\logs
   let reloadAttempts = 0
   win.webContents.on('render-process-gone', (_e, details) => {
     log.error('[renderer] process gone', details)
@@ -339,6 +390,31 @@ app.whenReady().then(() => {
     )
     app.quit()
     return
+  }
+
+  // Ticket 40 follow-up: the rebrand's userData migration (see
+  // runUserDataMigration() above) failed for this user — unlike the DLL
+  // check above, this is never fatal (the app still starts up fine under an
+  // empty profile), so this is an informational, non-blocking notice rather
+  // than an app.quit(). The old directory itself was never touched by a
+  // failed migration attempt, so pointing at it is a real, safe recovery
+  // path rather than just an apology.
+  if (userDataMigrationFailure) {
+    const { oldDir, newDir } = userDataMigrationFailure
+    dialog.showMessageBox({
+      type:    'warning',
+      title:   '数据未能自动迁移 / Data Not Automatically Migrated',
+      message: '未能自动迁移你的历史数据 / Could not automatically migrate your existing data',
+      detail:
+        `舒音已更名，但未能自动迁移你的许可证、模型与训练数据。你的原始数据仍完好保存在：\n${oldDir}\n\n` +
+        `应用现在使用一个新的空白数据目录：\n${newDir}\n\n` +
+        '如需恢复，请退出应用，将上方旧目录中的文件手动移动到新目录，然后重新启动。\n\n' +
+        `SootheVoice was renamed, but couldn't automatically move your license, models, and training ` +
+        `data. Your original data is still intact at:\n${oldDir}\n\n` +
+        `The app is now using a fresh, empty data directory:\n${newDir}\n\n` +
+        'To recover it, quit the app, manually move the files from the old directory above into the ' +
+        'new one, then relaunch.',
+    }).catch(() => { /* best-effort — a failed dialog must not block startup */ })
   }
 
   // Shown synchronously, before any of the async work below even starts —

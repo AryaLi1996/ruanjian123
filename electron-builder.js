@@ -1,6 +1,7 @@
 /** @type {import('electron-builder').Configuration} */
 
 const path = require('path')
+const fs = require('fs')
 const { execFileSync } = require('child_process')
 
 // A real Developer ID must be supplied explicitly; auto-discovered self-signed
@@ -109,6 +110,14 @@ const config = {
     gatekeeperAssess:   false,
     entitlements:       'build/entitlements.mac.plist',
     entitlementsInherit:'build/entitlements.mac.plist',
+    // Declares which locales the app actually ships display-name overrides
+    // for (afterPack below writes the matching <lang>.lproj/InfoPlist.strings
+    // files) — Ticket 40 §6. Info.plist itself only has one top-level
+    // CFBundleDisplayName ("SootheVoice", from productName above); this is
+    // what lets macOS show "舒音" instead for zh_CN system-language users.
+    extendInfo: {
+      CFBundleLocalizations: ['en', 'zh_CN'],
+    },
   },
 
   // electron-builder 24.x does not fall back to ad-hoc signing when no
@@ -132,6 +141,31 @@ const config = {
       return
     }
     const appPath = path.join(context.appOutDir, `${context.packager.appInfo.productFilename}.app`)
+
+    // Ticket 40 §6: CFBundleDisplayName in the top-level Info.plist
+    // (electron-builder sets it from productName, "SootheVoice") is a single
+    // fixed string — Info.plist has no per-locale variants of its own. macOS
+    // *does* support localizing it via a `<lang>.lproj/InfoPlist.strings`
+    // override placed next to Info.plist: when present for the user's active
+    // system language, its CFBundleDisplayName wins over the top-level one
+    // for Dock/Finder/menu-bar display, matching mac.extendInfo's
+    // CFBundleLocalizations above. Written here — before signing below —
+    // since adding files to an already-signed bundle invalidates its
+    // signature; this ordering is what makes that safe.
+    //
+    // NOTE: this only runs in the ad-hoc path (this whole function returns
+    // early above when hasSigningCert is true). If real Developer ID signing
+    // is wired up later, whatever does that signing needs to run *after*
+    // this step too, or the signed app will be missing these overrides.
+    const resourcesDir = path.join(appPath, 'Contents', 'Resources')
+    const localizedDisplayNames = { en: 'SootheVoice', zh_CN: '舒音' }
+    for (const [lang, displayName] of Object.entries(localizedDisplayNames)) {
+      const lprojDir = path.join(resourcesDir, `${lang}.lproj`)
+      fs.mkdirSync(lprojDir, { recursive: true })
+      fs.writeFileSync(path.join(lprojDir, 'InfoPlist.strings'), `CFBundleDisplayName = "${displayName}";\n`, 'utf8')
+    }
+    console.log(`[afterPack] wrote localized CFBundleDisplayName for: ${Object.keys(localizedDisplayNames).join(', ')}`)
+
     console.log(`[afterPack] ad-hoc signing ${appPath}`)
     execFileSync('codesign', ['--force', '--deep', '--sign', '-', appPath], { stdio: 'inherit' })
   },
@@ -171,6 +205,15 @@ const config = {
     target:   ['AppImage', 'deb'],
     icon:     'build/icon.png',
     category: 'Audio',
+    // Unlike mac/win, electron-builder's Linux target does NOT default this
+    // from productName — it defaults to package.json's bare `name` field,
+    // "ruanjian" — confirmed directly in a real CI build's logged
+    // configuration (Ticket 40 follow-up): the generated .desktop entry came
+    // out with `Icon=ruanjian` and `"executableName":"ruanjian"` even though
+    // productName is "SootheVoice" everywhere else. Set explicitly so the
+    // installed binary and the .desktop file's Icon= key (which must match
+    // an actually-installed icon name to resolve) both say SootheVoice.
+    executableName: 'SootheVoice',
     // Same rationale as win.extraResources above.
     extraResources: [
       {
