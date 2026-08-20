@@ -1677,6 +1677,18 @@ html, body, #root {
 }
 .pbm-lyrics-empty.drag-over { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 5%, transparent); }
 
+/* ── Automatic lyrics recognition status (Ticket 43) ─────── */
+.pbm-lyrics-auto-status {
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+  color: var(--text-muted); font-size: 13px;
+}
+.pbm-lyrics-auto-status .pbm-lyrics-auto-spinner { width: 14px; height: 14px; border-width: 2px; margin-bottom: 0; }
+.pbm-lyrics-auto-banner {
+  font-size: 12px; color: var(--accent); text-align: center;
+  padding: 6px 10px; margin-bottom: 8px; border-radius: var(--radius);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
 .pbm-lyrics.theme-light:not(.has-backdrop) { background: #f4f5f8; color: #1a1d27; }
 .pbm-lyrics.theme-light:not(.has-backdrop) .pbm-lyrics-line { color: #64748b; }
 .pbm-lyrics.theme-light:not(.has-backdrop) .pbm-lyrics-line.active { color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }

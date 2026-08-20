@@ -63,6 +63,8 @@ export function SettingsView(): JSX.Element {
   const setBackgroundImage = useSettingsStore((s) => s.setBackgroundImage)
   const setBackgroundOverlayOpacity = useSettingsStore((s) => s.setBackgroundOverlayOpacity)
   const setBackgroundBlurPx = useSettingsStore((s) => s.setBackgroundBlurPx)
+  const autoLyricsEnabled  = useSettingsStore((s) => s.autoLyricsEnabled)
+  const setAutoLyricsEnabled = useSettingsStore((s) => s.setAutoLyricsEnabled)
 
   const isCustomAccent = accentColor.startsWith('#')
   // Recomputed on every render that touches accentColor/resolvedAppearance
@@ -521,6 +523,23 @@ export function SettingsView(): JSX.Element {
             </button>
           ))}
         </div>
+      </div>
+
+      {/* ── Lyrics (Ticket 43 §5) ────────────────────────────── */}
+      <div className="card">
+        <div className="card-title">{t('settings.lyrics.title')}</div>
+        <p className="view-desc" style={{ marginTop: -6, marginBottom: 14 }}>
+          {t('settings.lyrics.description')}
+        </p>
+        <label className="notif-pref-toggle">
+          <input
+            type="checkbox"
+            checked={autoLyricsEnabled}
+            onChange={(e) => setAutoLyricsEnabled(e.target.checked)}
+          />
+          <span>{t('settings.lyrics.autoFetch')}</span>
+        </label>
+        <p className="bg-hint" style={{ marginTop: 6 }}>{t('settings.lyrics.autoFetchHint')}</p>
       </div>
 
       {/* ── Updates (Ticket 37) ─────────────────────────────── */}

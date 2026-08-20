@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useAppStore } from '../store/useAppStore'
+import { useSettingsStore } from '../store/useSettingsStore'
 import { useSubscriptionStore } from '../store/useSubscriptionStore'
 import { formatDuration, pcmToWavBlob } from '../utils/audio'
 import { computePeaks, drawWaveform, crossCorrelateOffset } from '../utils/waveform'
 import { parseLRC, findLyricIndex, extractEmbeddedLyrics, type LyricLine } from '../utils/lrc'
-import { extractEmbeddedMetadata } from '../utils/metadata'
+import { extractEmbeddedMetadata, parseArtistTitleFromFilename } from '../utils/metadata'
 import { LyricsPanel } from '../components/playback/LyricsPanel'
 import { SongList } from '../components/playback/SongList'
 import { NowPlayingCard } from '../components/playback/NowPlayingCard'
@@ -120,6 +121,7 @@ export function PlaybackMonitorView(): JSX.Element {
 
   const subStatus = useSubscriptionStore((s) => s.status)
   const onlineSearchAllowed = subStatus === 'active' || subStatus === 'grace_period'
+  const autoLyricsEnabled = useSettingsStore((s) => s.autoLyricsEnabled)
 
   const activeSong = songs.find((s) => s.id === activeSongId) ?? null
   const tracks = activeSong?.tracks ?? []
@@ -333,10 +335,13 @@ export function PlaybackMonitorView(): JSX.Element {
       const buf = await file.arrayBuffer()
       const dir = await window.engine.saveTrainingFiles([{ name: file.name, buffer: buf }])
 
+      // Song identification (Ticket 43 §1): embedded tags first, filename
+      // pattern ("Artist - Title.ext") as the fallback when a tag is missing.
+      const filenameGuess = parseArtistTitleFromFilename(file.name)
       const song: Song = {
         id: crypto.randomUUID(),
-        name: meta.title ?? file.name.replace(/\.[^.]+$/, ''),
-        artist: meta.artist,
+        name: meta.title ?? filenameGuess.title ?? file.name.replace(/\.[^.]+$/, ''),
+        artist: meta.artist ?? filenameGuess.artist,
         duration: buffer.duration,
         tracks: [track],
         lyrics: embedded ?? [],
@@ -653,8 +658,12 @@ export function PlaybackMonitorView(): JSX.Element {
               onSeek={seek}
               onImportFile={(file) => void importLyricsFile(file)}
               onImportLyrics={(parsed) => applySearchedLyrics(parsed)}
+              songId={activeSong?.id ?? null}
               songTitle={activeSong?.name ?? ''}
+              songArtist={activeSong?.artist ?? null}
+              songDuration={activeSong?.duration ?? 0}
               onlineSearchAllowed={onlineSearchAllowed}
+              autoLyricsEnabled={autoLyricsEnabled}
               coverArtUrl={activeSong?.coverArtUrl ?? null}
             />
           </div>

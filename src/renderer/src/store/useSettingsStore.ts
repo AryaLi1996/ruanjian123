@@ -67,6 +67,7 @@ const BG_IMAGE_KEY    = 'ruanjian.backgroundImage'
 const BG_PREVIEW_KEY  = 'ruanjian.backgroundImagePreview'
 const BG_OVERLAY_KEY  = 'ruanjian.backgroundOverlayOpacity'
 const BG_BLUR_KEY     = 'ruanjian.backgroundBlurPx'
+const AUTO_LYRICS_KEY = 'ruanjian.autoLyricsEnabled'
 
 function resolveSystemAppearance(): 'light' | 'dark' {
   const mq = window.matchMedia?.('(prefers-color-scheme: light)')
@@ -202,6 +203,9 @@ interface SettingsState {
   backgroundBlurPx:        number
   backgroundBrightWarning: boolean // last upload/adjustment was auto-corrected for brightness (Ticket 30 §7)
   backgroundImageMissing:  boolean // meta says an image should exist but its disk file is gone (Ticket 30 §4)
+  // Automatic online lyrics matching on the Playback/Monitor page (Ticket 43 §5) —
+  // on by default; users who prefer manual-only import can turn it off here.
+  autoLyricsEnabled:       boolean
 
   setAppearance:            (appearance: Appearance) => void
   setAccentColor:           (idOrHex: string) => void
@@ -211,6 +215,7 @@ interface SettingsState {
   setBackgroundImage:       (processed: ProcessedBackground | null) => void
   setBackgroundOverlayOpacity: (opacity: number) => void
   setBackgroundBlurPx:      (px: number) => Promise<void>
+  setAutoLyricsEnabled:     (enabled: boolean) => void
 }
 
 const savedAppearanceRaw = readPersisted(APPEARANCE_KEY)
@@ -238,6 +243,12 @@ const savedBlurPx = Number.isFinite(savedBlurRaw) && savedBlurRaw >= MIN_BLUR_PX
   ? savedBlurRaw
   : DEFAULT_BLUR_PX
 
+// Defaults on — automatic lyrics fetching only ever kicks in for a song with
+// no embedded lyrics, so opting everyone in by default costs nothing for
+// users who never touch this setting (Ticket 43 §5).
+const savedAutoLyricsRaw = readPersisted(AUTO_LYRICS_KEY)
+const savedAutoLyricsEnabled = savedAutoLyricsRaw === null ? true : savedAutoLyricsRaw === 'true'
+
 // Applied synchronously at module load (before React mounts) so the first
 // paint already has the right palette/accent/font/background instead of
 // flashing defaults. currentAccentValue must be set before applyAppearance
@@ -262,6 +273,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   backgroundBlurPx:         savedBlurPx,
   backgroundBrightWarning:  false,
   backgroundImageMissing:   false,
+  autoLyricsEnabled:        savedAutoLyricsEnabled,
 
   setAppearance: (appearance) => {
     persist(APPEARANCE_KEY, appearance)
@@ -360,6 +372,10 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     applyOverlayOpacity(overlayOpacity)
     set({ backgroundImage: blurredDataUrl, backgroundOverlayOpacity: overlayOpacity, backgroundBrightWarning: brightWarning })
     void window.engine?.saveBackgroundMeta?.({ overlayOpacity, blurPx: clamped, brightWarning }).catch(() => {})
+  },
+  setAutoLyricsEnabled: (enabled) => {
+    persist(AUTO_LYRICS_KEY, String(enabled))
+    set({ autoLyricsEnabled: enabled })
   },
 }))
 

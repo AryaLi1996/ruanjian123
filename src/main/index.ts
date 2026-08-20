@@ -8,6 +8,7 @@ import { setupAutoUpdater, checkForUpdates, getLastUpdateResult, downloadUpdate,
 import { SubscriptionMonitor } from './subscription-monitor'
 import { LICENSE_CONFIG, usingDefaultSigningSecret } from './license-config'
 import { loadModels, saveModels, type PersistedModel } from './model-registry'
+import { loadLyricsCache, saveLyricsCache, type LyricsCache } from './lyrics-cache'
 import {
   saveBackground, saveBackgroundMeta, loadBackground, loadBackgroundSource, removeBackground,
   type SaveBackgroundPayload, type BackgroundMeta,
@@ -620,6 +621,12 @@ ipcMain.handle('model:decrypt-verify', async (_event, encPath: string) => {
 
 ipcMain.handle('models:load', () => loadModels())
 ipcMain.handle('models:save', (_event, models: PersistedModel[]) => saveModels(models))
+
+// ── Automatic lyrics-match cache (Ticket 43 §4) ─────────────────────────────
+// See lyrics-cache.ts — durable so a song matched once doesn't re-query
+// lrclib.org on every subsequent load.
+ipcMain.handle('lyrics:cache-load', () => loadLyricsCache())
+ipcMain.handle('lyrics:cache-save', (_event, cache: LyricsCache) => saveLyricsCache(cache))
 
 // ── Custom background image persistence (Ticket 27/30) ─────────────────────────
 // See background-store.ts — durable disk copy backing the renderer's

@@ -64,6 +64,10 @@ declare global {
         syncedLyrics: string | null
         plainLyrics: string | null
       }>>
+      // Automatic lyrics-match cache (Ticket 43 §4) — keyed by utils/autoLyrics.ts's
+      // lyricsCacheKey(); durable copy lives at userData/lyrics-cache.json (main/lyrics-cache.ts).
+      lyricsCacheLoad: () => Promise<Record<string, { raw: string; source: string; cachedAt: number }>>
+      lyricsCacheSave: (cache: Record<string, { raw: string; source: string; cachedAt: number }>) => Promise<void>
       logRendererError:  (payload: unknown) => Promise<void>
       showInFolder:      (filePath: string) => Promise<void>
       encryptModel:      (modelPath: string) => Promise<{ encPath: string; sizeBytes: number }>
