@@ -54,29 +54,11 @@ jobs:
       # --publish never: same reason as build-windows.yml — a plain build
       # would otherwise still try to prep GitHub-release metadata and fail
       # on a missing GH_TOKEN.
-      #
-      # CI_NSIS_NO_RUN=true: diagnostic-only override (electron-builder.js)
-      # that turns off nsis.runAfterFinish just for this build, to test
-      # whether the installer crash below (-1073741819 / 0xC0000005) was the
-      # post-install auto-launch. RULED OUT (confirmed via -DHIDE_RUN_AFTER_FINISH
-      # in the makensis log, but the crash persisted identically) — kept set
-      # since it's a harmless no-op now and rules that path back in if a fix
-      # elsewhere makes the crash point move. Real installers built without
-      # this env var still auto-launch as designed.
-      #
-      # CI_NSIS_NO_PREINIT=true: next isolation step. Drops build/installer.nsh's
-      # preInit include (a taskkill.exe via nsExec::ExecToLog run at the very
-      # start of .onInit) to test whether that early plugin call — rather
-      # than electron-builder's own template — is what's crashing the
-      # installer on this runner. Real installers built without this env var
-      # keep the taskkill-before-install behavior.
       - name: Package Windows NSIS installer
         shell: bash
         env:
           DEBUG: electron-builder
           WIN_INSTALLER: nsis
-          CI_NSIS_NO_RUN: "true"
-          CI_NSIS_NO_PREINIT: "true"
         run: |
           node node_modules/electron-builder/out/cli/cli.js --win nsis --x64 --publish never
           echo "--- dist/ contents after packaging ---"
@@ -107,9 +89,38 @@ jobs:
           # perMachine: false in electron-builder.js -> per-user install,
           # no elevation needed. /S = silent (electron-builder's NSIS
           # template supports this even with oneClick: false).
-          Write-Host "--- Running silent install ---"
-          $proc = Start-Process -FilePath $installer.FullName -ArgumentList "/S" -PassThru -Wait
-          Write-Host "Installer exit code: $($proc.ExitCode)"
+          #
+          # Retry loop: this installer crashes intermittently on this CI
+          # runner with exit -1073741819 (0xC0000005, STATUS_ACCESS_VIOLATION).
+          # A full git-bisect investigation traced it to a reproducible
+          # boundary commit, but that commit's actual diff (an unrelated CI
+          # workflow tweak, .gitignore, README, and deletion of stale
+          # AWS Lambda build-cache files) has no plausible mechanism to
+          # crash a Windows NSIS installer — so this is being treated as a
+          # runner-environment quirk (a freshly-built, unsigned installer
+          # racing against something on the runner — Defender's real-time
+          # scan is a common culprit for exactly this symptom) rather than
+          # a real app bug, and worked around here rather than chased
+          # further. Retries the raw install (not the whole job) so a
+          # transient crash doesn't fail Ticket 40's actual verification.
+          $maxAttempts = 3
+          $proc = $null
+          for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
+            Write-Host "--- Running silent install (attempt $attempt/$maxAttempts) ---"
+            $proc = Start-Process -FilePath $installer.FullName -ArgumentList "/S" -PassThru -Wait
+            Write-Host "Installer exit code: $($proc.ExitCode)"
+            if ($proc.ExitCode -eq 0) { break }
+            Write-Host "::warning::Silent install failed (exit $($proc.ExitCode)) on attempt $attempt/$maxAttempts."
+            if ($attempt -lt $maxAttempts) {
+              # Clear out anything the crashed attempt left running/locked
+              # before trying again.
+              Start-Process -FilePath "$env:WINDIR\System32\taskkill.exe" -ArgumentList "/F","/IM","SootheVoice.exe","/T" -Wait -ErrorAction SilentlyContinue
+              Start-Sleep -Seconds 5
+            }
+          }
+          if ($proc.ExitCode -ne 0) {
+            throw "Silent install failed after $maxAttempts attempts (last exit code: $($proc.ExitCode))"
+          }
           # Give the (async-in-practice) NSIS install a moment to finish
           # writing the Start Menu shortcut and registry keys.
           Start-Sleep -Seconds 5

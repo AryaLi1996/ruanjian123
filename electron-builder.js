@@ -195,28 +195,10 @@ const config = {
     allowToChangeInstallationDirectory: true,
     createDesktopShortcut:             true,
     createStartMenuShortcut:           true,
-    // Diagnostic escape hatch for build-windows-nsis.yml (Ticket 40 CI):
-    // the workflow's silent install has been crashing the installer itself
-    // (exit code -1073741819 / 0xC0000005 STATUS_ACCESS_VIOLATION) before
-    // it gets as far as creating the Start Menu shortcut the workflow
-    // checks for. CI_NSIS_NO_RUN, set only by that workflow, was step one
-    // of isolating where: it disables runAfterFinish (the post-install
-    // auto-launch) to rule that path in or out. RULED OUT — the same run
-    // with CI_NSIS_NO_RUN=true (confirmed via -DHIDE_RUN_AFTER_FINISH in
-    // the makensis invocation) crashed identically, so the crash is earlier,
-    // in the install itself. Real users' installers are unaffected (env
-    // var unset). See CI_NSIS_NO_PREINIT below for the next isolation step.
-    runAfterFinish:                    process.env.CI_NSIS_NO_RUN !== 'true',
+    runAfterFinish:                    true,
     perMachine:                        false,
-    // preInit macro in this file (see build/installer.nsh) runs a
-    // taskkill.exe via nsExec::ExecToLog at the very start of .onInit,
-    // before NSIS's own file-lock checks or MultiUser.nsh's elevation
-    // logic run. CI_NSIS_NO_PREINIT (build-windows-nsis.yml diagnostic,
-    // step two — see CI_NSIS_NO_RUN above) drops this include entirely, to
-    // test whether that early plugin call is what's crashing the installer
-    // on this CI runner, independent of electron-builder's own template
-    // logic. Real users' installers are unaffected (env var unset).
-    include: process.env.CI_NSIS_NO_PREINIT === 'true' ? undefined : 'build/installer.nsh',
+    // preInit macro in this file kills any running instance before NSIS checks file locks.
+    include: 'build/installer.nsh',
   },
 
   linux: {
