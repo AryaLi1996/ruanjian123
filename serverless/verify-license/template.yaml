@@ -48,6 +48,17 @@ Parameters:
     Default: 30
     MinValue: 1
     MaxValue: 366
+  TrialDays:
+    Type: Number
+    Default: 3
+    MinValue: 1
+    MaxValue: 366
+    Description: >-
+      Free trial length in days (Ticket 33, revised from 7 to 3 by Ticket 42).
+      Existing trial records longer than this are truncated down to
+      TrialDays from their original trialStart the next time they're read,
+      as long as they haven't already expired — see
+      _apply_trial_duration_cap() in handler.py.
 
   # ── Ticket 34: multi-period plans ───────────────────────────────────────────
   BaseMonthlyPrice:
@@ -113,6 +124,7 @@ Globals:
         SES_SENDER_EMAIL: !Ref SesSenderEmail
         MOCK_MODE: !Ref MockMode
         EXPIRY_DAYS: !Ref ExpiryDays
+        TRIAL_DAYS: !Ref TrialDays
         BASE_MONTHLY_PRICE: !Ref BaseMonthlyPrice
         PLAN_CURRENCY: !Ref PlanCurrency
         USD_EXCHANGE_RATE: !Ref UsdExchangeRate
@@ -163,7 +175,7 @@ Resources:
         - AttributeName: userId
           KeyType: HASH
 
-  # ── Ticket 33: 7-day free trial ─────────────────────────────────────────────
+  # ── Ticket 33: free trial (3 days — Ticket 42) ──────────────────────────────
   TrialsTable:
     Type: AWS::DynamoDB::Table
     Properties:

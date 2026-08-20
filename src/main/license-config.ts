@@ -125,9 +125,9 @@ export const LICENSE_CONFIG = {
   orderPollIntervalMs: 3_000,
   orderPollTimeoutMs:  10 * 60_000,
 
-  // ── Free trial (Ticket 33) ──────────────────────────────────────────────────
+  // ── Free trial (Ticket 33, duration revised to 3 days by Ticket 42) ────────
   trial: {
-    durationDays: 7,
+    durationDays: 3,
     // How often the background timer retries syncing an unsynced/local-only
     // trial with the backend (e.g. after a fully-offline first launch).
     syncIntervalHours: 6,

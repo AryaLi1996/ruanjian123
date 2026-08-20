@@ -1,5 +1,5 @@
 import { spawn } from 'child_process'
-import { join } from 'path'
+import { join, dirname } from 'path'
 import { existsSync } from 'fs'
 import { app }   from 'electron'
 import log from 'electron-log'
@@ -86,8 +86,14 @@ function resolveEngine(): EngineTarget {
   return cachedTarget
 }
 
-/** Spawn environment for the Python engine — restricts network and user-site access. */
-function sandboxEnv(): NodeJS.ProcessEnv {
+/**
+ * Spawn environment for the Python engine — restricts network and user-site
+ * access.
+ *
+ * `target` is the already-resolved EngineTarget (see resolveEngine() above)
+ * for the process about to be spawned.
+ */
+function sandboxEnv(target: EngineTarget): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...process.env }
   // Remove proxy vars so the engine cannot route network traffic
   for (const k of ['HTTP_PROXY', 'HTTPS_PROXY', 'FTP_PROXY', 'ALL_PROXY',
@@ -101,6 +107,20 @@ function sandboxEnv(): NodeJS.ProcessEnv {
   // The packaged engine directory is read-only (DMG / Program Files), so give
   // the engine a writable location for models, exports and training scratch.
   env['RUANJIAN_DATA_DIR']  = join(app.getPath('userData'), 'engine-data')
+
+  // Ticket 41: on Windows, a spawned child process resolves its own DLL
+  // search path from (among other things) its own PATH at spawn time — it
+  // does NOT automatically inherit "next to whichever .exe launched it" the
+  // way the OS loader does for the parent process itself. Make sure the
+  // directory the engine executable lives in (which carries its own
+  // PyInstaller-bundled onnxruntime/torch DLLs) and the directory holding
+  // this app's own executable (where Electron's runtime DLLs, including
+  // ffmpeg.dll, live) are always on PATH for the child, regardless of
+  // what's on the parent's PATH in a given environment.
+  if (process.platform === 'win32') {
+    const dirs = [dirname(target.executable), dirname(process.execPath)]
+    env['PATH'] = [...dirs, env['PATH'] ?? ''].join(';')
+  }
   return env
 }
 
@@ -135,7 +155,7 @@ export function callPythonEngine(method: string, args: unknown[], timeoutMs = 30
     const payload    = JSON.stringify({ method, args })
     const spawnArgs  = [...target.scriptArgs, payload]
     const proc = spawn(target.executable, spawnArgs, {
-      env:         sandboxEnv(),
+      env:         sandboxEnv(target),
       shell:       false,
       windowsHide: true,
     })
@@ -201,7 +221,7 @@ export function callPythonEngineStreaming(
     const payload    = JSON.stringify({ method, args })
     const spawnArgs  = [...target.scriptArgs, payload]
     const proc       = spawn(target.executable, spawnArgs, {
-      env:         sandboxEnv(),
+      env:         sandboxEnv(target),
       shell:       false,
       windowsHide: true,
     })
