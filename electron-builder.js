@@ -195,7 +195,16 @@ const config = {
     allowToChangeInstallationDirectory: true,
     createDesktopShortcut:             true,
     createStartMenuShortcut:           true,
-    runAfterFinish:                    true,
+    // Diagnostic escape hatch for build-windows-nsis.yml (Ticket 40 CI): a
+    // silent install's finish page auto-launches the freshly installed app
+    // even with no UI, and on the CI runner's headless/already-elevated
+    // session that has been crashing the installer itself (exit code
+    // -1073741819 / 0xC0000005 STATUS_ACCESS_VIOLATION) before it gets as
+    // far as creating the Start Menu shortcut this workflow checks for.
+    // CI_NSIS_NO_RUN, set only by that workflow, isolates whether the crash
+    // is in the post-install auto-launch path or earlier in the install
+    // itself — real users' installers are unaffected (env var unset).
+    runAfterFinish:                    process.env.CI_NSIS_NO_RUN !== 'true',
     perMachine:                        false,
     // preInit macro in this file kills any running instance before NSIS checks file locks.
     include: 'build/installer.nsh',
