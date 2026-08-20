@@ -14,6 +14,7 @@ import { app }                           from 'electron'
 import { LICENSE_CONFIG, PAYMENT_METHODS, PLANS, FALLBACK_USD_EXCHANGE_RATE, type PaymentMethod, type PlanId, type PlanPeriod } from './license-config'
 import { encryptModelBytes, decryptModelBytes } from './model-crypto'
 import { getDeviceId } from './device-id'
+import { capTrialDuration } from './trial-duration'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -58,13 +59,26 @@ export interface TrialState {
   source:        'none' | 'local' | 'server'
 }
 
-interface LocalTrialRecord { trialStart: number; trialEnd: number }
+interface LocalTrialRecord {
+  trialStart: number
+  trialEnd:   number
+  // Ticket 42: the trial length (in days) the server reported as of the last
+  // successful sync — cached locally so a later fully-offline stretch caps
+  // against the *last known-good server value* rather than only ever
+  // trusting this build's LICENSE_CONFIG.trial.durationDays, which is what
+  // let the client and server disagree (7 vs 3 days) in the first place.
+  // Absent on a record created before this field existed, or on a true
+  // first-launch-while-offline trial that's never reached the server.
+  durationDays?: number
+}
 
 interface TrialStatusResponse {
   trialUsed:  boolean
   trialStart: number | null
   trialEnd:   number | null
   expired:    boolean
+  // Ticket 42: the server's current TRIAL_DAYS — see LocalTrialRecord.durationDays.
+  trialDurationDays?: number
   error?:     string
 }
 
@@ -72,6 +86,8 @@ interface TrialActivateResponse {
   success:    boolean
   trialStart: number
   trialEnd:   number
+  // Ticket 42: the server's current TRIAL_DAYS — see LocalTrialRecord.durationDays.
+  trialDurationDays?: number
   error?:     string
 }
 
@@ -466,32 +482,42 @@ export class SubscriptionMonitor extends EventEmitter {
       const plain = await decryptModelBytes(enc)
       const rec   = JSON.parse(plain.toString('utf8')) as Partial<LocalTrialRecord>
       if (typeof rec.trialStart === 'number' && typeof rec.trialEnd === 'number') {
-        return await this._capLocalTrialDuration({ trialStart: rec.trialStart, trialEnd: rec.trialEnd })
+        return await this._capLocalTrialDuration({
+          trialStart: rec.trialStart, trialEnd: rec.trialEnd,
+          ...(typeof rec.durationDays === 'number' ? { durationDays: rec.durationDays } : {}),
+        })
       }
       return null
     } catch { return null }
   }
 
   /**
-   * Ticket 42 migration: a local trial record created back when
-   * LICENSE_CONFIG.trial.durationDays was 7 (or any longer value) must not
-   * keep granting that old duration just because it predates the config
-   * change. Only rewrites the file when a correction is actually needed —
-   * a record already within the current cap is returned unchanged. A trial
-   * still active under the new, shorter cap is truncated (and will
-   * therefore read as expired if `now` has already passed the capped end);
-   * one that's already lapsed under its *stored* trialEnd is left alone,
-   * since it reads as expired either way. Backend-sourced records go
-   * through the same correction here as an offline-safety net, but the
-   * server's own trial/status response — via _apply_trial_duration_cap() in
-   * handler.py — is what actually stays authoritative once reachable.
+   * Ticket 42 migration: a local trial record created back when the trial
+   * duration was longer (whether that was this build's
+   * LICENSE_CONFIG.trial.durationDays, or a since-lowered server TRIAL_DAYS
+   * this device last synced against) must not keep granting that old
+   * duration just because it predates the change. Only rewrites the file
+   * when a correction is actually needed — a record already within the
+   * current cap is returned unchanged. A trial still active under the new,
+   * shorter cap is truncated (and will therefore read as expired if `now`
+   * has already passed the capped end); one that's already lapsed under its
+   * *stored* trialEnd is left alone, since it reads as expired either way.
+   *
+   * Caps against `rec.durationDays` (the last value the *server* reported —
+   * see LocalTrialRecord.durationDays) when known, falling back to this
+   * build's LICENSE_CONFIG.trial.durationDays only for a record that's never
+   * synced with the server. Backend-sourced records go through the same
+   * correction here as an offline-safety net, but the server's own
+   * trial/status response — via _apply_trial_duration_cap() in handler.py —
+   * is what actually stays authoritative once reachable.
    */
   private async _capLocalTrialDuration(rec: LocalTrialRecord): Promise<LocalTrialRecord> {
-    const cappedEnd = rec.trialStart + LICENSE_CONFIG.trial.durationDays * 86400
-    const now       = Math.floor(Date.now() / 1000)
-    if (rec.trialEnd <= cappedEnd || now >= rec.trialEnd) return rec
+    const durationDays  = rec.durationDays ?? LICENSE_CONFIG.trial.durationDays
+    const now           = Math.floor(Date.now() / 1000)
+    const { window, changed } = capTrialDuration(rec, durationDays, now)
+    if (!changed) return rec
 
-    const capped = { trialStart: rec.trialStart, trialEnd: cappedEnd }
+    const capped: LocalTrialRecord = { ...window, durationDays }
     await this._saveLocalTrial(capped)
     return capped
   }
@@ -520,6 +546,11 @@ export class SubscriptionMonitor extends EventEmitter {
    */
   private async _resolveTrial(): Promise<{ rec: LocalTrialRecord | null; source: TrialState['source'] }> {
     const local    = await this._loadLocalTrial()
+    // Captured before the `if (local) return` below — TS narrows `local`
+    // itself to `never` (not `null`) in the code that follows an early
+    // return on a truthy check like that, so `local?.durationDays` read
+    // afterward doesn't typecheck even though it's logically fine.
+    const localDurationDays = local?.durationDays
     const deviceId = await getDeviceId()
 
     try {
@@ -535,25 +566,38 @@ export class SubscriptionMonitor extends EventEmitter {
       if (status.error) throw new Error(status.error)
 
       if (status.trialUsed && status.trialStart != null && status.trialEnd != null) {
-        const rec = { trialStart: status.trialStart, trialEnd: status.trialEnd }
+        const rec = this._recordFromServer(status.trialStart, status.trialEnd, status.trialDurationDays)
         await this._saveLocalTrial(rec)
         return { rec, source: 'server' }
       }
 
       const activation = await this._request<TrialActivateResponse>('POST', 'trial/activate', { deviceId }, 5_000)
       if (activation.error) throw new Error(activation.error)
-      const rec = { trialStart: activation.trialStart, trialEnd: activation.trialEnd }
+      const rec = this._recordFromServer(activation.trialStart, activation.trialEnd, activation.trialDurationDays)
       await this._saveLocalTrial(rec)
       return { rec, source: 'server' }
     } catch {
       // Offline, or the backend isn't configured for trials yet — use
-      // whatever's local, or start a fresh local-only trial.
+      // whatever's local, or start a fresh local-only trial. Caps the fresh
+      // trial against the last server-reported duration this device knows
+      // about (local?.durationDays), falling back to this build's config
+      // only when there's no prior sync to go on at all (Ticket 33 §1: a
+      // true first-launch-while-offline trial).
       if (local) return { rec: local, source: 'local' }
-      const now = Math.floor(Date.now() / 1000)
-      const rec = { trialStart: now, trialEnd: now + LICENSE_CONFIG.trial.durationDays * 86400 }
+      const now          = Math.floor(Date.now() / 1000)
+      const durationDays = localDurationDays ?? LICENSE_CONFIG.trial.durationDays
+      const rec: LocalTrialRecord = { trialStart: now, trialEnd: now + durationDays * 86400, durationDays }
       await this._saveLocalTrial(rec)
       return { rec, source: 'local' }
     }
+  }
+
+  /** Ticket 42: builds a LocalTrialRecord from a trial/status or trial/activate
+   * response, caching trialDurationDays when the server sent one (an older
+   * server build might not) so a later offline stretch caps against it —
+   * see LocalTrialRecord.durationDays / _capLocalTrialDuration(). */
+  private _recordFromServer(trialStart: number, trialEnd: number, durationDays: number | undefined): LocalTrialRecord {
+    return { trialStart, trialEnd, ...(typeof durationDays === 'number' ? { durationDays } : {}) }
   }
 
   private async _computeTrialState(rec: LocalTrialRecord | null, source: TrialState['source']): Promise<TrialState> {
