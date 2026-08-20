@@ -56,6 +56,10 @@ jobs:
             --fast \
             --output ../test-report-${{ matrix.os }}-py${{ matrix.python }}.json
 
+      - name: Run security test suite (watermark, encryption, sandbox)
+        working-directory: engine
+        run: python _test_security.py
+
       - name: Run benchmark (short duration)
         working-directory: engine
         run: |
