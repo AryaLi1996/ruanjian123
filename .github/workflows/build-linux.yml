@@ -1,0 +1,150 @@
+name: Build Linux Installer
+
+# Manual trigger only, same reasoning as build-windows.yml: PyInstaller can't
+# cross-compile the Python engine, so this has to run on a real Linux
+# machine (a GitHub-hosted ubuntu-latest runner stands in for that).
+#
+# Ticket 40 follow-up: this platform's userData migration fix
+# (app.setName('SootheVoice') + user-data-migration.ts) had never actually
+# been built or checked here — only reasoned about, since the fix is plain
+# Electron API calls with no platform-specific code. This workflow builds
+# both Linux targets (AppImage, deb) and statically verifies the
+# user-visible name each one carries — the .desktop entry's Name= field and
+# the installed executable name — the Linux equivalents of the Windows
+# Start Menu shortcut / registry DisplayName checks in
+# build-windows-nsis.yml.
+on:
+  workflow_dispatch: {}
+
+jobs:
+  build-and-verify-linux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Build the Python engine (PyInstaller)
+        run: bash scripts/package-engine.sh --force
+
+      - name: Build renderer + main
+        run: npx electron-vite build
+
+      # Same npx-on-CI-runner flakiness workaround as build-windows.yml
+      # (that one was Windows-specific npx path resolution, but bypassing
+      # npx for electron-builder's CLI entry point directly is harmless and
+      # consistent here too — no reason to trust npx more on Linux).
+      # --publish never: electron-builder.js has a `publish` block for the
+      # real auto-updater; a plain build would otherwise still try to prep
+      # GitHub-release metadata and fail on a missing GH_TOKEN.
+      - name: Package Linux AppImage + deb
+        env:
+          DEBUG: electron-builder
+        run: |
+          node node_modules/electron-builder/out/cli/cli.js --linux AppImage deb --x64 --publish never
+          echo "--- dist/ contents after packaging ---"
+          find dist -maxdepth 2 2>&1 || echo "(dist/ does not exist)"
+
+      - name: Upload installer artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: soothevoice-linux-appimage-deb
+          path: |
+            dist/*.AppImage
+            dist/*.deb
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: Verify AppImage .desktop entry and executable name
+        shell: bash
+        run: |
+          set -euo pipefail
+          appimage="$(find dist -maxdepth 1 -name '*.AppImage' | head -1)"
+          if [ -z "$appimage" ]; then echo "::error::No .AppImage found in dist/"; exit 1; fi
+          echo "AppImage: $appimage"
+          chmod +x "$appimage"
+
+          extract_dir="$(mktemp -d)"
+          pushd "$extract_dir" >/dev/null
+          "$OLDPWD/$appimage" --appimage-extract >/dev/null
+          popd >/dev/null
+
+          echo "--- squashfs-root contents (top level) ---"
+          find "$extract_dir/squashfs-root" -maxdepth 1
+
+          desktop_file="$(find "$extract_dir/squashfs-root" -maxdepth 1 -name '*.desktop' | head -1)"
+          if [ -z "$desktop_file" ]; then echo "::error::No .desktop file found inside the AppImage"; exit 1; fi
+          echo "--- .desktop file contents ---"
+          cat "$desktop_file"
+
+          if grep -qi "ruanjian" "$desktop_file"; then
+            echo "::error::.desktop file still references the old placeholder name:"
+            grep -i "ruanjian" "$desktop_file"
+            exit 1
+          fi
+          if ! grep -qi "^Name=SootheVoice" "$desktop_file"; then
+            echo "::error::.desktop file's Name= field is not 'SootheVoice'"
+            exit 1
+          fi
+          echo "OK: AppImage .desktop Name=SootheVoice, no 'ruanjian' found."
+
+          # AppRun/binary naming inside the extracted image — the actual
+          # executable electron-builder produced, sanitized from productName.
+          echo "--- top-level executables ---"
+          find "$extract_dir/squashfs-root" -maxdepth 1 -type f -perm -u+x
+          if find "$extract_dir/squashfs-root" -maxdepth 1 -type f -iname '*ruanjian*' | grep -q .; then
+            echo "::error::Found an executable/file still named after the old placeholder inside the AppImage"
+            exit 1
+          fi
+
+      - name: Verify .deb package name, control metadata, and installed .desktop entry
+        shell: bash
+        run: |
+          set -euo pipefail
+          deb="$(find dist -maxdepth 1 -name '*.deb' | head -1)"
+          if [ -z "$deb" ]; then echo "::error::No .deb found in dist/"; exit 1; fi
+          echo "deb: $deb"
+
+          extract_dir="$(mktemp -d)"
+          dpkg-deb -x "$deb" "$extract_dir"
+          dpkg-deb -e "$deb" "$extract_dir/DEBIAN"
+
+          echo "--- control file ---"
+          cat "$extract_dir/DEBIAN/control"
+
+          echo "--- installed files (matching applications/*.desktop or opt/**) ---"
+          find "$extract_dir" -path "*/applications/*.desktop" -o -path "*/opt/*" -maxdepth 6 | head -50
+
+          desktop_file="$(find "$extract_dir" -path '*/applications/*.desktop' | head -1)"
+          if [ -z "$desktop_file" ]; then echo "::error::No installed .desktop file found in the .deb payload"; exit 1; fi
+          echo "--- installed .desktop file contents ---"
+          cat "$desktop_file"
+
+          if grep -qi "ruanjian" "$extract_dir/DEBIAN/control" "$desktop_file"; then
+            echo "::error::.deb control file or .desktop entry still references the old placeholder name:"
+            grep -i "ruanjian" "$extract_dir/DEBIAN/control" "$desktop_file" || true
+            exit 1
+          fi
+          if ! grep -qi "^Name=SootheVoice" "$desktop_file"; then
+            echo "::error::Installed .desktop file's Name= field is not 'SootheVoice'"
+            exit 1
+          fi
+          if find "$extract_dir/opt" -maxdepth 1 -iname '*ruanjian*' 2>/dev/null | grep -q .; then
+            echo "::error::Found an /opt install directory still named after the old placeholder"
+            exit 1
+          fi
+          echo "OK: .deb control + installed .desktop entry are SootheVoice, no 'ruanjian' found."
