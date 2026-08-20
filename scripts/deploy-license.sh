@@ -48,6 +48,24 @@ fi
 
 cd "$TEMPLATE_DIR"
 sam build --template-file template.yaml
+
+# Always-present overrides first. The optional secrets below are appended
+# only when actually set: `sam deploy --parameter-overrides` shorthand
+# syntax (KeyN=ValueN, space-separated) rejects an explicitly-empty value
+# like "StripeApiKey=" outright — "is not a valid format" — before any AWS
+# call happens, even though an *omitted* key is perfectly fine and just
+# leaves template.yaml's own Default: '' in effect (the same end state).
+overrides=(
+  "LicenseSigningSecret=$LICENSE_SIGNING_SECRET"
+  "PaymentProvider=${PAYMENT_PROVIDER:-custom}"
+  "MockMode=${MOCK_MODE:-false}"
+  "ExpiryDays=${EXPIRY_DAYS:-30}"
+)
+[[ -n "${STRIPE_API_KEY:-}" ]]        && overrides+=("StripeApiKey=$STRIPE_API_KEY")
+[[ -n "${STRIPE_WEBHOOK_SECRET:-}" ]] && overrides+=("StripeWebhookSecret=$STRIPE_WEBHOOK_SECRET")
+[[ -n "${LEMON_API_KEY:-}" ]]         && overrides+=("LemonApiKey=$LEMON_API_KEY")
+[[ -n "${SES_SENDER_EMAIL:-}" ]]      && overrides+=("SesSenderEmail=$SES_SENDER_EMAIL")
+
 if ! sam deploy \
   --template-file .aws-sam/build/template.yaml \
   --stack-name "$STACK_NAME" \
@@ -55,15 +73,7 @@ if ! sam deploy \
   --resolve-s3 \
   --capabilities CAPABILITY_NAMED_IAM \
   --no-confirm-changeset \
-  --parameter-overrides \
-    "LicenseSigningSecret=$LICENSE_SIGNING_SECRET" \
-    "PaymentProvider=${PAYMENT_PROVIDER:-custom}" \
-    "MockMode=${MOCK_MODE:-false}" \
-    "ExpiryDays=${EXPIRY_DAYS:-30}" \
-    "StripeApiKey=${STRIPE_API_KEY:-}" \
-    "StripeWebhookSecret=${STRIPE_WEBHOOK_SECRET:-}" \
-    "LemonApiKey=${LEMON_API_KEY:-}" \
-    "SesSenderEmail=${SES_SENDER_EMAIL:-}"; then
+  --parameter-overrides "${overrides[@]}"; then
   echo "Deployment failed. Recent CloudFormation events:" >&2
   aws cloudformation describe-stack-events \
     --stack-name "$STACK_NAME" \
