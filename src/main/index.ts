@@ -14,6 +14,7 @@ import {
 } from './background-store'
 import { notifyRenderer } from './notification-bridge'
 import { createSplashWindow, closeSplashWindow } from './splash'
+import { migrateUserData } from './user-data-migration'
 import log from 'electron-log'
 
 // ── App identity fix + userData migration (Ticket 40) ───────────────────────
@@ -35,7 +36,18 @@ import log from 'electron-log'
 // training data behind an empty new profile.
 app.setName('SootheVoice')
 
-function migrateUserDataDir(): void {
+// Set below if the migration fails, and surfaced to the user once a window
+// can actually show a dialog (see the app.whenReady() handler) — this runs
+// far too early in startup for BrowserWindow-based UI (notifyRenderer would
+// be a silent no-op here; there is no window yet). A failure here previously
+// only went to electron-log, a file the user would never open — meaning
+// their license/trial/models could appear to have vanished with no
+// explanation. The old directory is never touched on failure (see
+// user-data-migration.ts), so this is purely about making that recoverable
+// state visible instead of silent.
+let userDataMigrationFailure: { oldDir: string; newDir: string } | null = null
+
+function runUserDataMigration(): void {
   // Deliberately NOT app.getPath('userData') here: Electron materializes
   // (mkdir -p's) that directory as a side effect of computing it, which
   // would make it "already exist" by the time we checked — a genuine bug hit
@@ -45,17 +57,15 @@ function migrateUserDataDir(): void {
   // touching the filesystem before the migration decision is made.
   const newDir = join(app.getPath('appData'), app.getName())
   const oldDir = join(app.getPath('appData'), 'ruanjian')
-  if (oldDir === newDir || !existsSync(oldDir) || existsSync(newDir)) return
-  try {
-    renameSync(oldDir, newDir)
+  const outcome = migrateUserData(oldDir, newDir, { exists: existsSync, rename: renameSync, join })
+  if (outcome.status === 'migrated') {
     log.info(`[migrate] moved userData "${oldDir}" -> "${newDir}"`)
-  } catch (err) {
-    // Best-effort: if this fails the app just starts fresh under the new
-    // name rather than crashing on launch. Logged so it's diagnosable.
-    log.error('[migrate] failed to move userData dir', err)
+  } else if (outcome.status === 'failed') {
+    log.error('[migrate] failed to move userData dir', outcome.error)
+    userDataMigrationFailure = { oldDir, newDir }
   }
 }
-migrateUserDataDir()
+runUserDataMigration()
 
 // Collect native crash dumps locally so a renderer/GPU crash leaves a trace.
 // Never let telemetry setup stop the app from starting.
@@ -380,6 +390,31 @@ app.whenReady().then(() => {
     )
     app.quit()
     return
+  }
+
+  // Ticket 40 follow-up: the rebrand's userData migration (see
+  // runUserDataMigration() above) failed for this user — unlike the DLL
+  // check above, this is never fatal (the app still starts up fine under an
+  // empty profile), so this is an informational, non-blocking notice rather
+  // than an app.quit(). The old directory itself was never touched by a
+  // failed migration attempt, so pointing at it is a real, safe recovery
+  // path rather than just an apology.
+  if (userDataMigrationFailure) {
+    const { oldDir, newDir } = userDataMigrationFailure
+    dialog.showMessageBox({
+      type:    'warning',
+      title:   '数据未能自动迁移 / Data Not Automatically Migrated',
+      message: '未能自动迁移你的历史数据 / Could not automatically migrate your existing data',
+      detail:
+        `舒音已更名，但未能自动迁移你的许可证、模型与训练数据。你的原始数据仍完好保存在：\n${oldDir}\n\n` +
+        `应用现在使用一个新的空白数据目录：\n${newDir}\n\n` +
+        '如需恢复，请退出应用，将上方旧目录中的文件手动移动到新目录，然后重新启动。\n\n' +
+        `SootheVoice was renamed, but couldn't automatically move your license, models, and training ` +
+        `data. Your original data is still intact at:\n${oldDir}\n\n` +
+        `The app is now using a fresh, empty data directory:\n${newDir}\n\n` +
+        'To recover it, quit the app, manually move the files from the old directory above into the ' +
+        'new one, then relaunch.',
+    }).catch(() => { /* best-effort — a failed dialog must not block startup */ })
   }
 
   // Shown synchronously, before any of the async work below even starts —
