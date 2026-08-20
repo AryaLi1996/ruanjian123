@@ -54,13 +54,41 @@ assume it:
           "token.actions.githubusercontent.com:aud": "sts.amazonaws.com"
         },
         "StringLike": {
-          "token.actions.githubusercontent.com:sub": "repo:AryaLi1996/ruanjian123:ref:refs/heads/main"
+          "token.actions.githubusercontent.com:sub": "repo:AryaLi1996@82909467/ruanjian123@1335383385:ref:refs/heads/main"
         }
       }
     }
   ]
 }
 ```
+
+**Do not use the plain `repo:AryaLi1996/ruanjian123:ref:refs/heads/main` form**
+— it will never match. This repo (or its owner account) has been renamed at
+some point, and GitHub permanently stamps the stable numeric owner/repo IDs
+into every OIDC `sub` claim it issues afterward
+(`AryaLi1996@82909467`/`ruanjian123@1335383385` above) instead of the plain
+names. This isn't a one-time transitional thing that reverts — it's what
+every token from this repo will say going forward. The ID-stamped form above
+is confirmed correct: it's copied directly from a real CloudTrail
+`AssumeRoleWithWebIdentity` event's `userIdentity.userName`, not guessed. If
+you ever need to re-derive it yourself (e.g. after another rename, or for a
+different repo), the fastest way is to deliberately trigger a failing OIDC
+assume-role attempt (any placeholder trust policy) and then read the actual
+claim back out of CloudTrail:
+
+```bash
+aws cloudtrail lookup-events --region us-east-1 \
+  --lookup-attributes AttributeKey=EventName,AttributeValue=AssumeRoleWithWebIdentity \
+  --max-results 5 --query 'Events[*].Username' --output text
+```
+
+**Also do not add `environment: <name>` to the workflow's job** without
+updating this trust policy to match — see the big comment at the top of
+`.github/workflows/deploy-license.yml` for why: it changes the `sub` claim
+shape from `...:ref:refs/heads/main` to `...:environment:<name>` even with
+zero protection rules configured on that environment, silently breaking the
+condition above. This exact mistake shipped once already and broke every
+deploy until caught.
 
 Permissions policy — what `sam build`/`sam deploy` actually needs for this
 template: CloudFormation on the `ruanjian-license` stack, the SAM-managed S3
@@ -145,7 +173,17 @@ format` failure this workflow was built to stop happening again.
 
 ## 4. Optional: require manual approval before deploying
 
-The workflow already targets a GitHub Environment named `production`
-(`environment: production`). With no protection rules configured for it,
-that's a no-op. To require a human click before every deploy: Settings →
-Environments → New environment → `production` → add required reviewers.
+The workflow does **not** target a GitHub Environment today — see the
+comment at the top of `.github/workflows/deploy-license.yml` for why one
+was deliberately removed (it broke OIDC role assumption, see §2 above). To
+add a manual-approval gate:
+
+1. Settings → Environments → New environment → e.g. `production` → add
+   required reviewers.
+2. Add `environment: production` back to the `deploy` job in
+   `.github/workflows/deploy-license.yml`.
+3. Add a second entry to the trust policy's `sub` condition (IAM
+   `StringLike` accepts a list, matched with OR semantics) for the
+   environment form of the claim, alongside the `ref:refs/heads/main` one:
+   `"repo:AryaLi1996@82909467/ruanjian123@1335383385:environment:production"`.
+   Skipping this step reproduces the exact breakage described in §2.
