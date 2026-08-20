@@ -549,19 +549,39 @@ Applied in `engine/main.py` at the very top, before other imports.
 
 ## 11. CI / CD Pipeline
 
-`.github/workflows/ci.yml` defines two jobs:
+Two workflows cover the two halves of the app: `ci.yml` for the Python
+engine, `app-check.yml` for the Electron/React application. `ci.yml` is
+scoped to `engine/**` changes and needs heavy Python/ML deps;
+`app-check.yml` runs on every push/PR regardless of what changed, since a
+broken TypeScript build or failing unit test can land in any commit.
 
-### `test` (runs on every push/PR)
+### `.github/workflows/ci.yml` — engine (triggers on `engine/**` changes)
+
+#### `test` (runs on every push/PR)
 - Matrix: `ubuntu-22.04` × `macos-14` × Python `3.11/3.12`
 - Installs CPU-only PyTorch
 - Runs `python engine/_test_suite.py --fast --skip training`
+- Runs `python engine/_test_security.py` (watermark round-trip, model
+  encryption, sandbox network block — see T09/T10 below plus the sandbox
+  check)
 - Uploads JSON report artifacts
 
-### `benchmark-full` (main branch pushes only)
+#### `benchmark-full` (main branch pushes only)
 - Ubuntu 22.04, Python 3.11
 - Runs full test suite + benchmark (30-second audio)
 - Uploads reports with 90-day retention
 - Prints performance summary table
+
+### `.github/workflows/app-check.yml` — application (runs on every push/PR)
+- Ubuntu, Node 24
+- `npm ci`
+- `npm run typecheck` — main/preload (`tsconfig.node.json`) + renderer (`tsconfig.web.json`)
+- `npm test` — vitest unit suite (`src/renderer/src/**/*.test.{ts,tsx}`)
+- `npx electron-vite build` — compiles main/preload/renderer to catch build breakage
+
+It does not run `electron-builder` packaging (code signing/installers) —
+see `build-windows.yml` / `build-windows-nsis.yml` / `build-macos-dmg.yml`
+(all manually triggered) for that.
 
 ### Test IDs and Coverage
 
