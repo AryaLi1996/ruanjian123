@@ -205,6 +205,15 @@ const config = {
     target:   ['AppImage', 'deb'],
     icon:     'build/icon.png',
     category: 'Audio',
+    // Unlike mac/win, electron-builder's Linux target does NOT default this
+    // from productName — it defaults to package.json's bare `name` field,
+    // "ruanjian" — confirmed directly in a real CI build's logged
+    // configuration (Ticket 40 follow-up): the generated .desktop entry came
+    // out with `Icon=ruanjian` and `"executableName":"ruanjian"` even though
+    // productName is "SootheVoice" everywhere else. Set explicitly so the
+    // installed binary and the .desktop file's Icon= key (which must match
+    // an actually-installed icon name to resolve) both say SootheVoice.
+    executableName: 'SootheVoice',
     // Same rationale as win.extraResources above.
     extraResources: [
       {
