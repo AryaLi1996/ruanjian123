@@ -54,11 +54,29 @@ jobs:
       # --publish never: same reason as build-windows.yml — a plain build
       # would otherwise still try to prep GitHub-release metadata and fail
       # on a missing GH_TOKEN.
+      #
+      # CI_NSIS_NO_RUN=true: diagnostic-only override (electron-builder.js)
+      # that turns off nsis.runAfterFinish just for this build, to test
+      # whether the installer crash below (-1073741819 / 0xC0000005) was the
+      # post-install auto-launch. RULED OUT (confirmed via -DHIDE_RUN_AFTER_FINISH
+      # in the makensis log, but the crash persisted identically) — kept set
+      # since it's a harmless no-op now and rules that path back in if a fix
+      # elsewhere makes the crash point move. Real installers built without
+      # this env var still auto-launch as designed.
+      #
+      # CI_NSIS_NO_PREINIT=true: next isolation step. Drops build/installer.nsh's
+      # preInit include (a taskkill.exe via nsExec::ExecToLog run at the very
+      # start of .onInit) to test whether that early plugin call — rather
+      # than electron-builder's own template — is what's crashing the
+      # installer on this runner. Real installers built without this env var
+      # keep the taskkill-before-install behavior.
       - name: Package Windows NSIS installer
         shell: bash
         env:
           DEBUG: electron-builder
           WIN_INSTALLER: nsis
+          CI_NSIS_NO_RUN: "true"
+          CI_NSIS_NO_PREINIT: "true"
         run: |
           node node_modules/electron-builder/out/cli/cli.js --win nsis --x64 --publish never
           echo "--- dist/ contents after packaging ---"
