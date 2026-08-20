@@ -385,7 +385,27 @@ export class SubscriptionMonitor extends EventEmitter {
   // ── Server call ─────────────────────────────────────────────────────────────
   // Every route (license verify, order creation/status, payment history) lives
   // on the same Function URL, dispatched server-side by path — see handler.py.
-  private async _request<T = unknown>(method: 'GET' | 'POST', path: string, body?: Record<string, unknown>): Promise<T> {
+  // Ticket 38 §3: this had no timeout at all — a connection that stalls
+  // after the TCP handshake (captive portal, firewall silently dropping
+  // packets, a slow mobile connection) would leave the returned promise
+  // pending indefinitely. Every caller either awaits this during startup
+  // (_resolveTrial, raced by index.ts's initializeMonitorWithTimeout — but
+  // that race only stops *awaiting*, it doesn't cancel the request itself,
+  // so the underlying socket stayed open forever) or from a user-triggered
+  // action (activate/createOrder/etc.) where a hang would spin a "loading"
+  // UI forever with no way out but restarting the app.
+  //
+  // 15s is the default here deliberately — *not* the ticket's 5s startup
+  // budget. Most callers (activate, createOrder, getPaymentHistory, ...) are
+  // interactive: the user clicked something and the renderer already shows
+  // its own loading state, so there's no "frozen app" risk, and a 5s cutoff
+  // would turn a legitimate slow response (e.g. a cold Lambda start on
+  // verify-license) into a spurious failure. Only _resolveTrial() — the one
+  // call that actually runs during startup — passes the tighter 5s
+  // explicitly, matching the ticket's requirement for *that* path.
+  private async _request<T = unknown>(
+    method: 'GET' | 'POST', path: string, body?: Record<string, unknown>, timeoutMs = 15_000,
+  ): Promise<T> {
     if (!LICENSE_CONFIG.verificationUrl) {
       throw new Error(
         'License verification URL is not configured. Set LICENSE_URL to the deployed Lambda Function URL.',
@@ -395,14 +415,30 @@ export class SubscriptionMonitor extends EventEmitter {
     const base = LICENSE_CONFIG.verificationUrl.replace(/\/+$/, '')
     const req  = net.request({ method, url: `${base}/${path}` })
     return new Promise((resolve, reject) => {
+      let settled = false
+      const timer = setTimeout(() => {
+        if (settled) return
+        settled = true
+        req.abort()
+        reject(new Error(`Request to ${path || '/'} timed out after ${timeoutMs}ms`))
+      }, timeoutMs)
+
       let respBody = ''
       req.on('response', (res) => {
         res.on('data', (c: Buffer) => { respBody += c.toString() })
         res.on('end', () => {
+          if (settled) return
+          settled = true
+          clearTimeout(timer)
           try { resolve(JSON.parse(respBody)) } catch { reject(new Error('Invalid server response')) }
         })
       })
-      req.on('error', (e: Error) => reject(e))
+      req.on('error', (e: Error) => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        reject(e)
+      })
       if (body !== undefined) {
         req.setHeader('Content-Type', 'application/json')
         req.write(JSON.stringify(body))
@@ -463,8 +499,14 @@ export class SubscriptionMonitor extends EventEmitter {
     const deviceId = await getDeviceId()
 
     try {
+      // Ticket 38 §3: this pair is the one _request() call site that actually
+      // runs during app startup (via initialize() → _syncTrial()), so it gets
+      // the ticket's tighter 5s budget explicitly rather than the general
+      // 15s default above — an unreachable/slow trial backend on first
+      // launch should fall back to local/offline quickly, not eat most of
+      // the startup timeout budget on its own.
       const status = await this._request<TrialStatusResponse>(
-        'GET', `trial/status?deviceId=${encodeURIComponent(deviceId)}`,
+        'GET', `trial/status?deviceId=${encodeURIComponent(deviceId)}`, undefined, 5_000,
       )
       if (status.error) throw new Error(status.error)
 
@@ -474,7 +516,7 @@ export class SubscriptionMonitor extends EventEmitter {
         return { rec, source: 'server' }
       }
 
-      const activation = await this._request<TrialActivateResponse>('POST', 'trial/activate', { deviceId })
+      const activation = await this._request<TrialActivateResponse>('POST', 'trial/activate', { deviceId }, 5_000)
       if (activation.error) throw new Error(activation.error)
       const rec = { trialStart: activation.trialStart, trialEnd: activation.trialEnd }
       await this._saveLocalTrial(rec)

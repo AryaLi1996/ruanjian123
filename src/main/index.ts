@@ -13,6 +13,7 @@ import {
   type SaveBackgroundPayload, type BackgroundMeta,
 } from './background-store'
 import { notifyRenderer } from './notification-bridge'
+import { createSplashWindow, closeSplashWindow } from './splash'
 import log from 'electron-log'
 // Collect native crash dumps locally so a renderer/GPU crash leaves a trace.
 // Never let telemetry setup stop the app from starting.
@@ -34,6 +35,13 @@ if (process.platform === 'win32') {
   app.commandLine.appendSwitch('use-angle', 'swiftshader')
 }
 
+// Set once the main window is created (see app.whenReady() below) so
+// second-instance can target it directly instead of guessing from window
+// creation order — with the splash window (Ticket 38) now created first,
+// BrowserWindow.getAllWindows()[0] would resolve to the splash, not the
+// app, for as long as the splash is on screen.
+let mainWindow: BrowserWindow | null = null
+
 // ── Single-instance lock ─────────────────────────────────────────────────────
 // Quit immediately if another instance is already running; focus that window instead.
 // This ensures the NSIS installer (and taskkill) only ever sees one process to close.
@@ -42,7 +50,9 @@ if (!_gotLock) {
   app.quit()
 } else {
   app.on('second-instance', () => {
-    const existing = BrowserWindow.getAllWindows()[0]
+    const existing = mainWindow && !mainWindow.isDestroyed()
+      ? mainWindow
+      : BrowserWindow.getAllWindows()[0]
     if (existing) {
       if (existing.isMinimized()) existing.restore()
       existing.focus()
@@ -102,7 +112,18 @@ function setupAppMenu(): void {
   })
 }
 
-function createWindow(): BrowserWindow {
+// onFirstShow fires exactly once, the first time this window actually becomes
+// visible (either via 'ready-to-show' or the 5s fallback below) — used by
+// app.whenReady() to close the splash window at the right moment instead of
+// on a fixed timer of its own.
+function createWindow(onFirstShow?: () => void): BrowserWindow {
+  let shown = false
+  const fireFirstShow = (): void => {
+    if (shown) return
+    shown = true
+    onFirstShow?.()
+  }
+
   const win = new BrowserWindow({
     width:           1200,
     height:          800,
@@ -127,8 +148,11 @@ function createWindow(): BrowserWindow {
   })
 
   // Fallback: show after 5 s if ready-to-show never fires (GPU crash in VM).
-  const showFallback = setTimeout(() => { if (!win.isDestroyed()) win.show() }, 5_000)
-  win.once('ready-to-show', () => { clearTimeout(showFallback); win.show() })
+  // This is also the hard upper bound on how long the splash window (Ticket
+  // 38) stays on screen — whatever is slow, the user sees *some* window
+  // within 5s rather than a frozen splash.
+  const showFallback = setTimeout(() => { if (!win.isDestroyed()) win.show(); fireFirstShow() }, 5_000)
+  win.once('ready-to-show', () => { clearTimeout(showFallback); win.show(); fireFirstShow() })
 
   // Log renderer failures to the main-process log so they're visible in %AppData%\Ruanjian\logs
   let reloadAttempts = 0
@@ -154,9 +178,25 @@ function createWindow(): BrowserWindow {
     }
   })
   win.webContents.on('unresponsive', () => log.error('[renderer] unresponsive'))
-  win.webContents.on('did-fail-load', (_e, code, desc) =>
-    log.error('[renderer] load failed', code, desc)
-  )
+  // A failed initial load (as opposed to a later crash, handled above) would
+  // otherwise leave the user staring at a blank window forever with no
+  // window-shown event ever firing to reveal why. Surface it instead of
+  // silently sitting there — the 5s fallback above still guarantees *a*
+  // window appears, but this tells the user (and the log) what happened.
+  win.webContents.on('did-fail-load', (_e, code, desc, url, isMainFrame) => {
+    // ERR_ABORTED (-3) fires for routine, non-error navigation cancellations —
+    // most commonly the window itself closing mid-load (e.g. app quit during
+    // startup) — not an actual load failure. Treating it as one would pop a
+    // spurious "failed to start" dialog during ordinary shutdown.
+    if (code === -3) return
+    log.error('[renderer] load failed', code, desc, url)
+    if (isMainFrame && !win.isDestroyed()) {
+      dialog.showErrorBox(
+        'SootheVoice failed to start',
+        `The app UI could not be loaded (${desc || code}). Please reinstall the app or contact support if this persists.`,
+      )
+    }
+  })
 
   win.webContents.setWindowOpenHandler(({ url }) => {
     shell.openExternal(url)
@@ -257,13 +297,30 @@ if (app.isPackaged && usingDefaultSigningSecret) {
   )
 }
 
-app.whenReady().then(async () => {
-  await initializeMonitorWithTimeout(3_000)   // load local license before showing window
+app.whenReady().then(() => {
+  // Shown synchronously, before any of the async work below even starts —
+  // this is the user's very first feedback that launch is in progress
+  // (Ticket 38). It has no dependency on the renderer bundle, IPC, or
+  // userData/network state, so it paints immediately regardless of how long
+  // anything else takes.
+  const splash = createSplashWindow()
 
   setupAppMenu()
-  const win = createWindow()
+  // Main window starts loading its renderer immediately, in parallel with
+  // license/trial state below — it no longer waits on that network-bound
+  // work to even begin. The splash window covers the gap either way, and is
+  // closed the moment this window is first shown (ready-to-show, or the 5s
+  // fallback inside createWindow — see there for why that bound exists).
+  const win = createWindow(() => closeSplashWindow(splash))
+  mainWindow = win
+  win.on('closed', () => { if (mainWindow === win) mainWindow = null })
   // Warm-up never gates window creation or UI access.
   void warmUpEngine()
+  // License/trial state also never gates window creation or UI access — the
+  // renderer already reacts to it asynchronously via the 'state-change' →
+  // 'license:state-changed' IPC push (see monitor.on('state-change', ...)
+  // below), so there's nothing to await here before creating the window.
+  void initializeMonitorWithTimeout(3_000)
 
   // Pass first-launch flag to renderer via IPC
   ipcMain.handle('app:is-first-launch', () => isFirstLaunch())
@@ -287,7 +344,11 @@ app.whenReady().then(async () => {
   })
 
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow()
+    if (BrowserWindow.getAllWindows().length === 0) {
+      const reopened = createWindow()
+      mainWindow = reopened
+      reopened.on('closed', () => { if (mainWindow === reopened) mainWindow = null })
+    }
   })
 })
 
