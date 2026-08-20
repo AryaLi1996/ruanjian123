@@ -418,6 +418,10 @@ sam deploy --guided --capabilities CAPABILITY_NAMED_IAM
 
 `samconfig.toml` is intentionally not committed because it may contain environment-specific values.
 
+### 2.7.1 CI deployment
+
+[`.github/workflows/deploy-license.yml`](.github/workflows/deploy-license.yml) runs the same `scripts/deploy-license.sh` automatically on every push to `main` that touches `serverless/verify-license/**`, authenticating to AWS via GitHub OIDC (no long-lived keys stored in GitHub). It needs one-time AWS IAM + GitHub secrets setup first — see [`serverless/verify-license/CI_DEPLOY_SETUP.md`](serverless/verify-license/CI_DEPLOY_SETUP.md) for the exact trust policy, permissions policy, and which secrets to add. Until that's configured, the workflow runs and fails cleanly at the credentials step rather than silently deploying nothing.
+
 ---
 
 ## 3. Testing
