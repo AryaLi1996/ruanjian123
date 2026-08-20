@@ -206,26 +206,38 @@ export function callPythonEngineStreaming(
       windowsHide: true,
     })
 
-    let stderr   = ''
+    let stderr    = ''
     let lastData: unknown = null
-    let partial  = ''
-    let settled  = false
+    let partial   = ''
+    let settled   = false
+    // Distinguish "never even got going" from "legitimately busy". A stuck
+    // spawn — antivirus holding the exe, a missing native dependency that
+    // blocks before the engine can print anything (Ticket 39 root cause #5)
+    // — should fail fast; a training run that's gone quiet *after* it has
+    // already proven it started should get the full stall budget.
+    let hasOutput = false
+    const startupTimeoutMs = Math.min(15_000, stallTimeoutMs)
 
     let stallTimer: ReturnType<typeof setTimeout>
     const resetStallTimer = (): void => {
       clearTimeout(stallTimer)
+      const ms = hasOutput ? stallTimeoutMs : startupTimeoutMs
       stallTimer = setTimeout(() => {
         if (settled) return
         settled = true
         proc.kill()
         reject(new Error(
-          `Python engine produced no output for ${stallTimeoutMs} ms and was killed (likely hung)`,
+          hasOutput
+            ? `Python engine produced no output for ${stallTimeoutMs} ms and was killed (likely hung)`
+            : `Python engine failed to start within ${startupTimeoutMs} ms — no output was produced. ` +
+              'It may be blocked by antivirus software or missing a required file; try reinstalling the application.',
         ))
-      }, stallTimeoutMs)
+      }, ms)
     }
     resetStallTimer()
 
     proc.stdout.on('data', (chunk: Buffer) => {
+      hasOutput = true
       resetStallTimer()
       partial += chunk.toString()
       const lines = partial.split('\n')
@@ -240,7 +252,11 @@ export function callPythonEngineStreaming(
       }
     })
 
-    proc.stderr.on('data', (chunk: Buffer) => { resetStallTimer(); stderr += chunk.toString() })
+    proc.stderr.on('data', (chunk: Buffer) => {
+      hasOutput = true
+      resetStallTimer()
+      stderr += chunk.toString()
+    })
 
     proc.on('close', (code) => {
       if (settled) return
