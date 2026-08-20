@@ -17,5 +17,14 @@ npx electron-vite build
 echo "[build] Step 4/4 — Package installer (electron-builder)..."
 npx electron-builder
 
+# Ticket 41: catch a Windows build that's missing Electron-runtime files
+# (ffmpeg.dll in particular) before it ships — see
+# scripts/verify-win-package.mjs for why. No-op when this build didn't
+# target Windows (dist/win-unpacked won't exist).
+if [ -d dist/win-unpacked ]; then
+  echo "[build] Verifying packaged Windows runtime files..."
+  node scripts/verify-win-package.mjs dist/win-unpacked
+fi
+
 echo "[build] Done. Artifacts are in dist/"
 ls -lh dist/*.{dmg,exe,AppImage,deb} 2>/dev/null || true

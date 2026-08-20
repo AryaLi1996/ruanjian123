@@ -64,6 +64,14 @@ jobs:
           echo "--- dist/ contents after packaging ---"
           find dist -maxdepth 2 2>&1 || echo "(dist/ does not exist)"
 
+      # Ticket 41: fail this run loudly if the packaged app is missing
+      # Electron-runtime files (ffmpeg.dll in particular) rather than
+      # uploading a build that will fail to launch on a clean Windows
+      # machine — see scripts/verify-win-package.mjs.
+      - name: Verify packaged Windows runtime files
+        shell: bash
+        run: node scripts/verify-win-package.mjs dist/win-unpacked
+
       - name: Upload installer artifact
         uses: actions/upload-artifact@v4
         with:
