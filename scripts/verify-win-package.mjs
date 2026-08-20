@@ -27,14 +27,19 @@
 
 import { existsSync, readdirSync } from 'node:fs'
 import { join, dirname, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 
 // electron-builder.js is a CommonJS module (`module.exports = config`) —
 // dynamic import() of a CJS file from ESM hands back its exports under
-// `.default`.
-const { default: builderConfig } = await import(join(ROOT, 'electron-builder.js'))
+// `.default`. Node's ESM loader requires a file:// URL for absolute paths on
+// Windows — passing a bare "D:\..." path is parsed as a URL with scheme
+// "d:" and throws ERR_UNSUPPORTED_ESM_URL_SCHEME (this actually broke the
+// very first run of this script in CI, on build-windows.yml — see PR
+// history). pathToFileURL() handles the conversion correctly on every
+// platform, so use it instead of a raw path unconditionally.
+const { default: builderConfig } = await import(pathToFileURL(join(ROOT, 'electron-builder.js')).href)
 const productName = builderConfig.productName
 
 const outDir = process.argv[2] ? resolve(process.cwd(), process.argv[2]) : join(ROOT, 'dist', 'win-unpacked')
