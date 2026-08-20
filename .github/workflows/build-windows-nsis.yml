@@ -1,0 +1,219 @@
+name: Build Windows NSIS Installer
+
+# Manual trigger only, same reasoning as build-windows.yml: PyInstaller can't
+# cross-compile the Python engine, so this has to run on a real Windows
+# machine (a GitHub-hosted windows-latest runner stands in for that).
+#
+# Unlike build-windows.yml (which builds the portable .exe — no installer,
+# no Start Menu shortcut, nothing to verify there), this workflow builds the
+# actual NSIS installer and then *runs* it silently on the runner to verify
+# what Ticket 40 specifically cares about: the Start Menu shortcut, the
+# Windows "installed programs" (registry Uninstall) entry, and the
+# uninstaller all show "SootheVoice" — and none of them show the old
+# "ruanjian"/"Ruanjian" placeholder. Then it uninstalls and verifies cleanup.
+on:
+  workflow_dispatch: {}
+
+jobs:
+  build-and-verify-nsis:
+    runs-on: windows-latest
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      # scripts/package-engine.sh is a bash script; windows-latest runners
+      # ship Git for Windows, which provides the bash used here.
+      - name: Build the Python engine (PyInstaller)
+        shell: bash
+        run: bash scripts/package-engine.sh --force
+
+      - name: Build renderer + main
+        run: npx electron-vite build
+
+      # Same npx-on-Windows flakiness workaround as build-windows.yml: invoke
+      # electron-builder's CLI entry point with `node` directly rather than
+      # through npx. WIN_INSTALLER=nsis + --win nsis both set (redundant but
+      # matches the project's own `build:win-nsis` npm script exactly) since
+      # electron-builder.js's `win.target` branches on the env var, and the
+      # CLI flag makes the intent explicit regardless.
+      # --publish never: same reason as build-windows.yml — a plain build
+      # would otherwise still try to prep GitHub-release metadata and fail
+      # on a missing GH_TOKEN.
+      - name: Package Windows NSIS installer
+        shell: bash
+        env:
+          DEBUG: electron-builder
+          WIN_INSTALLER: nsis
+        run: |
+          node node_modules/electron-builder/out/cli/cli.js --win nsis --x64 --publish never
+          echo "--- dist/ contents after packaging ---"
+          find dist -maxdepth 2 2>&1 || echo "(dist/ does not exist)"
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: soothevoice-windows-nsis-installer
+          path: dist/*.exe
+          retention-days: 14
+          if-no-files-found: error
+
+      # Real end-to-end verification (Ticket 40 acceptance criteria): run
+      # the installer silently, then check the artifacts a real user would
+      # actually see — Start Menu shortcut and the registry entry that
+      # backs Windows' "installed programs" list and its uninstaller — for
+      # "SootheVoice" and the absence of "ruanjian"/"Ruanjian" anywhere.
+      - name: Install silently and verify Start Menu + registry entries
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $installer = Get-ChildItem -Path dist -Filter "*.exe" | Select-Object -First 1
+          if (-not $installer) { throw "No installer .exe found in dist/" }
+          Write-Host "Installer: $($installer.FullName)"
+
+          # perMachine: false in electron-builder.js -> per-user install,
+          # no elevation needed. /S = silent (electron-builder's NSIS
+          # template supports this even with oneClick: false).
+          Write-Host "--- Running silent install ---"
+          $proc = Start-Process -FilePath $installer.FullName -ArgumentList "/S" -PassThru -Wait
+          Write-Host "Installer exit code: $($proc.ExitCode)"
+          # Give the (async-in-practice) NSIS install a moment to finish
+          # writing the Start Menu shortcut and registry keys.
+          Start-Sleep -Seconds 5
+
+          Write-Host "--- Searching Start Menu shortcuts (per-user + per-machine) ---"
+          $shortcutDirs = @(
+            "$env:APPDATA\Microsoft\Windows\Start Menu\Programs",
+            "$env:ProgramData\Microsoft\Windows\Start Menu\Programs"
+          )
+          $shortcuts = foreach ($dir in $shortcutDirs) {
+            if (Test-Path $dir) { Get-ChildItem -Path $dir -Filter "*.lnk" -Recurse }
+          }
+          $shortcuts | ForEach-Object { Write-Host "  found: $($_.FullName)" }
+
+          $badShortcuts = $shortcuts | Where-Object { $_.Name -match "(?i)ruanjian" }
+          $goodShortcuts = $shortcuts | Where-Object { $_.Name -match "(?i)soothevoice" }
+
+          if ($badShortcuts) {
+            Write-Host "::error::Found Start Menu shortcut still named after the old placeholder:"
+            $badShortcuts | ForEach-Object { Write-Host "  $($_.FullName)" }
+            exit 1
+          }
+          if (-not $goodShortcuts) {
+            Write-Host "::error::No 'SootheVoice' Start Menu shortcut found after install."
+            exit 1
+          }
+          Write-Host "OK: Start Menu shortcut is 'SootheVoice', no 'ruanjian' shortcut found."
+
+          Write-Host "--- Searching registry Uninstall entries (HKCU + HKLM, 32/64-bit view) ---"
+          $uninstallRoots = @(
+            "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall",
+            "HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall",
+            "HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall"
+          )
+          $entries = foreach ($root in $uninstallRoots) {
+            if (Test-Path $root) {
+              Get-ChildItem $root | ForEach-Object {
+                $p = Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue
+                if ($p.DisplayName) { $p }
+              }
+            }
+          }
+          $entries | ForEach-Object { Write-Host "  DisplayName: $($_.DisplayName)  |  Key: $($_.PSPath)" }
+
+          $badEntries = $entries | Where-Object { $_.DisplayName -match "(?i)ruanjian" }
+          $goodEntries = $entries | Where-Object { $_.DisplayName -match "(?i)soothevoice" }
+
+          if ($badEntries) {
+            Write-Host "::error::Found an 'installed programs' entry still named after the old placeholder:"
+            $badEntries | ForEach-Object { Write-Host "  $($_.DisplayName)" }
+            exit 1
+          }
+          if (-not $goodEntries) {
+            Write-Host "::error::No 'SootheVoice' entry found in the installed-programs registry after install."
+            exit 1
+          }
+          Write-Host "OK: installed-programs entry is 'SootheVoice', no 'ruanjian' entry found."
+
+          # Stash the uninstall string for the next step (registry key may
+          # differ in casing/GUID per run, so hand off the resolved value
+          # rather than re-deriving it).
+          $uninstallEntry = $goodEntries | Select-Object -First 1
+          "UNINSTALL_STRING=$($uninstallEntry.UninstallString)" >> $env:GITHUB_ENV
+          "INSTALL_LOCATION=$($uninstallEntry.InstallLocation)" >> $env:GITHUB_ENV
+
+      - name: Uninstall silently and verify cleanup
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          Write-Host "Uninstall string from registry: $env:UNINSTALL_STRING"
+          if (-not $env:UNINSTALL_STRING) { throw "No uninstall string captured from previous step." }
+
+          # UninstallString is typically `"C:\path\Uninstall SootheVoice.exe"`
+          # (quoted, no args). Split executable path from any trailing args,
+          # then append /S for a silent uninstall.
+          if ($env:UNINSTALL_STRING -match '^\s*"([^"]+)"\s*(.*)$') {
+            $exePath = $matches[1]
+            $existingArgs = $matches[2]
+          } else {
+            $parts = $env:UNINSTALL_STRING -split ' ', 2
+            $exePath = $parts[0]
+            $existingArgs = if ($parts.Length -gt 1) { $parts[1] } else { "" }
+          }
+          Write-Host "Uninstaller exe: $exePath"
+
+          $proc = Start-Process -FilePath $exePath -ArgumentList "$existingArgs /S".Trim() -PassThru -Wait
+          Write-Host "Uninstaller exit code: $($proc.ExitCode)"
+          Start-Sleep -Seconds 5
+
+          Write-Host "--- Verifying Start Menu shortcut removed ---"
+          $shortcutDirs = @(
+            "$env:APPDATA\Microsoft\Windows\Start Menu\Programs",
+            "$env:ProgramData\Microsoft\Windows\Start Menu\Programs"
+          )
+          $remainingShortcuts = foreach ($dir in $shortcutDirs) {
+            if (Test-Path $dir) { Get-ChildItem -Path $dir -Filter "*SootheVoice*.lnk" -Recurse }
+          }
+          if ($remainingShortcuts) {
+            Write-Host "::error::Start Menu shortcut still present after uninstall:"
+            $remainingShortcuts | ForEach-Object { Write-Host "  $($_.FullName)" }
+            exit 1
+          }
+          Write-Host "OK: Start Menu shortcut removed."
+
+          Write-Host "--- Verifying registry Uninstall entry removed ---"
+          $uninstallRoots = @(
+            "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall",
+            "HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall",
+            "HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall"
+          )
+          $remainingEntries = foreach ($root in $uninstallRoots) {
+            if (Test-Path $root) {
+              Get-ChildItem $root | ForEach-Object {
+                $p = Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue
+                if ($p.DisplayName -match "(?i)soothevoice") { $p }
+              }
+            }
+          }
+          if ($remainingEntries) {
+            Write-Host "::error::Installed-programs entry still present after uninstall:"
+            $remainingEntries | ForEach-Object { Write-Host "  $($_.DisplayName)" }
+            exit 1
+          }
+          Write-Host "OK: installed-programs entry removed. Uninstall verified clean."
