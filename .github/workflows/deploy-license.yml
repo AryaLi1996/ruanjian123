@@ -28,11 +28,21 @@ name: Deploy License Backend
 # deploy nobody notices never happened.
 #
 # Deploys automatically on every push to main that touches the license
-# backend — there's no manual approval step baked in. If you want one, add
-# required reviewers to a "production" GitHub Environment (Settings →
-# Environments); the `environment: production` line below already targets
-# it, and an Environment with no protection rules configured is a no-op, so
-# this works with or without that extra gate.
+# backend — there's no manual approval step baked in.
+#
+# Deliberately does NOT set `environment: production` (or any `environment:`)
+# on the job below, even as an inert placeholder for a future manual-approval
+# gate: naming a GitHub Environment on a job changes the OIDC `sub` claim
+# GitHub issues from `repo:OWNER/REPO:ref:refs/heads/BRANCH` to
+# `repo:OWNER/REPO:environment:ENV_NAME` — *even with zero protection rules
+# configured on that environment* — which breaks IAM role trust policies
+# written for the `ref:` form. That's exactly what happened here: this
+# workflow shipped with `environment: production` as a "no-op until you add
+# reviewers" convenience, and it broke every OIDC role-assumption attempt
+# until removed. If you want that manual-approval gate later, add
+# `environment: production` back *and* add a matching
+# `repo:OWNER/REPO:environment:production` entry to the trust policy's `sub`
+# condition (see CI_DEPLOY_SETUP.md) — don't assume it's a no-op.
 
 on:
   push:
@@ -58,7 +68,6 @@ jobs:
     name: Test & Deploy License Backend
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    environment: production
 
     steps:
       - uses: actions/checkout@v4
