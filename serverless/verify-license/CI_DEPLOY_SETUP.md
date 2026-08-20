@@ -91,12 +91,14 @@ condition above. This exact mistake shipped once already and broke every
 deploy until caught.
 
 Permissions policy — what `sam build`/`sam deploy` actually needs for this
-template: CloudFormation on the `ruanjian-license` stack, the SAM-managed S3
-bucket (`--resolve-s3`), the Lambda function + its execution role
-(`CAPABILITY_NAMED_IAM` — see `LicenseVerifierRole` in `template.yaml`), the
-three DynamoDB tables, and CloudWatch Logs. Start narrow and widen only if a
-deploy fails on a missing permission — this list is a starting point, not a
-guarantee of completeness for every future template change:
+template: CloudFormation on the `ruanjian-license` stack, the SAM transform
+macro that expands `Transform: AWS::Serverless-2016-10-31` into raw
+CloudFormation, the SAM-managed S3 bucket (`--resolve-s3`), the Lambda
+function + its execution role (`CAPABILITY_NAMED_IAM` — see
+`LicenseVerifierRole` in `template.yaml`), the three DynamoDB tables, and
+CloudWatch Logs. Start narrow and widen only if a deploy fails on a missing
+permission — this list is a starting point, not a guarantee of completeness
+for every future template change:
 
 ```json
 {
@@ -113,6 +115,12 @@ guarantee of completeness for every future template change:
       "Effect": "Allow",
       "Action": ["cloudformation:ValidateTemplate", "cloudformation:DescribeStacks"],
       "Resource": "*"
+    },
+    {
+      "Sid": "SamTransform",
+      "Effect": "Allow",
+      "Action": "cloudformation:CreateChangeSet",
+      "Resource": "arn:aws:cloudformation:us-east-1:aws:transform/Serverless-2016-10-31"
     },
     {
       "Sid": "SamManagedBucket",
@@ -148,6 +156,28 @@ guarantee of completeness for every future template change:
   ]
 }
 ```
+
+**Don't drop the `SamTransform` statement, and note its `Resource` is in
+account `aws`, not `641628981129`** — easy to typo away since every other
+statement here is scoped to this account. Without it, `sam deploy` fails
+with a confirmed-real error once it actually reaches the changeset step
+(everything before that — OIDC auth, `sam build`, the S3 upload — succeeds
+fine without it, so this one is easy to miss until you get that far):
+
+```
+Error: Failed to create changeset for the stack: ruanjian-license, ex: Waiter ChangeSetCreateComplete
+failed: ... Reason: User: .../github-deploy-license-for-smooth-voice/GitHubActions is not authorized
+to perform: cloudformation:CreateChangeSet on resource:
+arn:aws:cloudformation:us-east-1:aws:transform/Serverless-2016-10-31 because no identity-based policy
+allows the cloudformation:CreateChangeSet action
+```
+
+Any template using `Transform: AWS::Serverless-2016-10-31` (this one does,
+line 2 of `template.yaml`) needs `cloudformation:CreateChangeSet` granted
+separately on that AWS-owned transform macro ARN — granting it only on your
+own stack ARN (the `CloudFormationStack` statement above) isn't enough,
+because expanding the transform is a distinct permission check against a
+resource CloudFormation doesn't own on your behalf.
 
 Adjust the `ruanjian-license-*` / `ruanjian-license/*` prefixes if you
 override `STACK_NAME` away from the script's default.
