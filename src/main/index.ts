@@ -1,6 +1,6 @@
 import { app, BrowserWindow, shell, ipcMain, dialog, crashReporter, Menu } from 'electron'
 import { join, resolve, sep } from 'path'
-import { existsSync } from 'fs'
+import { existsSync, renameSync } from 'fs'
 import { promises as fs } from 'fs'
 import { callPythonEngine, callPythonEngineStreaming } from './python-bridge'
 import { encryptModelFile, decryptModelFile } from './model-crypto'
@@ -15,6 +15,48 @@ import {
 import { notifyRenderer } from './notification-bridge'
 import { createSplashWindow, closeSplashWindow } from './splash'
 import log from 'electron-log'
+
+// ── App identity fix + userData migration (Ticket 40) ───────────────────────
+// Electron's default userData path is "<app data dir>/<app.getName()>".
+// app.getName() is *supposed* to read package.json's `productName` (falling
+// back to `name`) per Electron's own docs — but electron-builder strips
+// `productName` out of the package.json it actually bundles into app.asar
+// (confirmed by extracting a packaged build), leaving only `name`. So even
+// with electron-builder.js's `productName: 'SootheVoice'` (which is real and
+// correctly drives the Dock/Finder/menu-bar name via Info.plist — Ticket 32)
+// and this ticket's package.json `productName` addition (which only reaches
+// dev/unpackaged runs), every *packaged* build's app.getName() has still
+// quietly resolved to the old placeholder, "ruanjian" — and so has its
+// userData path. app.setName() is the one mechanism that reliably overrides
+// this in every run mode, packaged or not; it's used here for the first time
+// specifically because it's now paired with the migration below, which is
+// what makes it safe — flipping the userData path without one would silently
+// orphan every existing install's license, trial state, saved models, and
+// training data behind an empty new profile.
+app.setName('SootheVoice')
+
+function migrateUserDataDir(): void {
+  // Deliberately NOT app.getPath('userData') here: Electron materializes
+  // (mkdir -p's) that directory as a side effect of computing it, which
+  // would make it "already exist" by the time we checked — a genuine bug hit
+  // while testing this fix, where the migration silently no-op'd because the
+  // very act of asking for the new path had just created it empty. Building
+  // the same default path ourselves from 'appData' + the app name avoids
+  // touching the filesystem before the migration decision is made.
+  const newDir = join(app.getPath('appData'), app.getName())
+  const oldDir = join(app.getPath('appData'), 'ruanjian')
+  if (oldDir === newDir || !existsSync(oldDir) || existsSync(newDir)) return
+  try {
+    renameSync(oldDir, newDir)
+    log.info(`[migrate] moved userData "${oldDir}" -> "${newDir}"`)
+  } catch (err) {
+    // Best-effort: if this fails the app just starts fresh under the new
+    // name rather than crashing on launch. Logged so it's diagnosable.
+    log.error('[migrate] failed to move userData dir', err)
+  }
+}
+migrateUserDataDir()
+
 // Collect native crash dumps locally so a renderer/GPU crash leaves a trace.
 // Never let telemetry setup stop the app from starting.
 try {
@@ -73,16 +115,15 @@ function markInitialized(): void {
 
 // macOS's auto-generated default menu (used whenever nobody calls
 // Menu.setApplicationMenu) hard-codes app.getName() into its labels —
-// "About ruanjian", "Hide ruanjian", "Quit ruanjian" — which is the raw
-// package.json `name` field, not productName, so it kept the old
-// placeholder even after the SootheVoice rebrand (Ticket 32). Building an
-// explicit template instead lets the standard macOS roles (about/hide/
-// quit) pick up the real bundle name from the packaged app's Info.plist
-// (CFBundleName, generated from electron-builder's productName) — the
-// *correct* mechanism, unlike app.setName(), which would also silently
-// relocate app.getPath('userData') and orphan existing users' license/
-// model data. Scoped to darwin only: Windows/Linux keep Electron's
-// existing default menu untouched.
+// "About ruanjian", "Hide ruanjian", "Quit ruanjian" — which used to keep
+// showing the old placeholder even after the SootheVoice rebrand (Ticket 32)
+// and the app.setName() fix above (Ticket 40), because at the time this was
+// written that call didn't exist yet (see the comment above it for why).
+// Now that app.setName('SootheVoice') runs at startup, app.getName() itself
+// is correct — but this explicit template is left in place as a
+// belt-and-suspenders: it hardcodes the label directly rather than
+// depending on app.getName() staying right in the future. Scoped to darwin
+// only: Windows/Linux keep Electron's existing default menu untouched.
 function setupAppMenu(): void {
   if (process.platform !== 'darwin') return
   const template: Electron.MenuItemConstructorOptions[] = [
@@ -154,7 +195,7 @@ function createWindow(onFirstShow?: () => void): BrowserWindow {
   const showFallback = setTimeout(() => { if (!win.isDestroyed()) win.show(); fireFirstShow() }, 5_000)
   win.once('ready-to-show', () => { clearTimeout(showFallback); win.show(); fireFirstShow() })
 
-  // Log renderer failures to the main-process log so they're visible in %AppData%\Ruanjian\logs
+  // Log renderer failures to the main-process log so they're visible in %AppData%\SootheVoice\logs
   let reloadAttempts = 0
   win.webContents.on('render-process-gone', (_e, details) => {
     log.error('[renderer] process gone', details)

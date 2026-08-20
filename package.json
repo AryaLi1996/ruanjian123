@@ -1,5 +1,6 @@
 {
   "name": "ruanjian",
+  "productName": "SootheVoice",
   "version": "0.1.0",
   "description": "Desktop AI application",
   "private": true,
