@@ -307,12 +307,25 @@ interface WarmupResult {
 // fresh run when the user clicks Retry.
 let warmupPromise: Promise<WarmupResult> | null = null
 
+// test_inference's own matmul run is sub-millisecond (see engine/inference.py)
+// — nearly the entire wall-clock cost here is spawning the process itself:
+// unpacking the PyInstaller bundle, `import onnxruntime`, and initializing
+// the execution provider. On Windows that provider is usually DirectML,
+// whose first-ever session init compiles/caches shaders and can easily run
+// several seconds; a freshly-written, unsigned .exe can also get held up by
+// Windows Defender scanning it before it's even allowed to run. This is the
+// *coldest* engine invocation of the app's lifetime, so it needs at least as
+// much budget as every other callPythonEngine() call gets by default — a
+// tighter timeout here just turns a slow-but-healthy machine into a bogus
+// "warm-up failed" on every launch.
+const WARMUP_TIMEOUT_MS = 30_000
+
 function warmUpEngine(): Promise<WarmupResult> {
   if (!warmupPromise) {
     warmupPromise = (async () => {
       const started = Date.now()
       try {
-        const result = await callPythonEngine('test_inference', [], 5_000) as {
+        const result = await callPythonEngine('test_inference', [], WARMUP_TIMEOUT_MS) as {
           passed?: boolean
           ep?: string
           elapsed_ms?: number
