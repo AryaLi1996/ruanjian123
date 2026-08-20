@@ -29,8 +29,8 @@ dispatched by request path — no API Gateway needed:
                           must never be offered a method that would just
                           fail at checkout. See _available_payment_methods().
   POST /trial/activate    Ticket 33: idempotently create (or fetch) the
-                          7-day free trial for a device. Never resets an
-                          existing trial's start/end.
+                          free trial for a device (3 days — Ticket 42). Never
+                          resets an existing trial's start/end.
   GET  /trial/status      Ticket 33: look up a device's trial record.
   GET  /plans             Ticket 34: list the four billing-period plans
                           (monthly/quarterly/semi_annual/annual) with their
@@ -83,10 +83,15 @@ DISABLED_PAYMENT_METHODS
                         credentials are configured — e.g. "douyin_pay" while
                         the Douyin merchant business-verification is still
                         pending. Example: "douyin_pay,card".
-TRIALS_TABLE            Ticket 33: DynamoDB table name for 7-day free trial
+TRIALS_TABLE            Ticket 33: DynamoDB table name for free trial
                         records, keyed by deviceId. /trial/activate and
                         /trial/status 501 until this is set.
-TRIAL_DAYS              Ticket 33: trial length in days. Defaults to 7.
+TRIAL_DAYS              Ticket 33: trial length in days. Defaults to 3
+                        (Ticket 42 — was 7). Existing trial records longer
+                        than this are truncated to TRIAL_DAYS from their
+                        original trialStart the next time they're read, as
+                        long as they haven't already expired — see
+                        _apply_trial_duration_cap().
 BASE_MONTHLY_PRICE      Ticket 34/36: base monthly subscription price (major
                         currency units, e.g. "99"). Quarterly/semi-annual/
                         annual plans apply a discount on top of this — see
@@ -121,7 +126,7 @@ SIGNING_SECRET  = os.environ.get("LICENSE_SIGNING_SECRET", _DEFAULT_SIGNING_SECR
 MOCK_MODE       = os.environ.get("MOCK_MODE", "false").lower() == "true"
 PROVIDER        = os.environ.get("PAYMENT_PROVIDER", "custom")
 EXPIRY_DAYS     = int(os.environ.get("EXPIRY_DAYS", "30"))
-TRIAL_DAYS      = int(os.environ.get("TRIAL_DAYS", "7"))  # Ticket 33
+TRIAL_DAYS      = int(os.environ.get("TRIAL_DAYS", "3"))  # Ticket 33 (was 7 — Ticket 42)
 
 # This string is public (it ships in the Electron app's source at
 # src/main/license-config.ts), so a real deployment still using it means
@@ -609,12 +614,46 @@ def _trials_table():  # noqa: ANN201
     return _ddb_table(os.environ.get("TRIALS_TABLE", ""))
 
 
+def _apply_trial_duration_cap(trial: dict[str, Any]) -> dict[str, Any]:
+    """Ticket 42 migration: a trial record created back when TRIAL_DAYS was 7
+    (or any value longer than the current TRIAL_DAYS) must not keep granting
+    the old, longer duration just because it predates the config change. If
+    the record is still active (hasn't already lapsed under its *stored*
+    trialEnd) and spans more than TRIAL_DAYS from its original trialStart,
+    truncate trialEnd down to trialStart + TRIAL_DAYS. A trial that's already
+    expired is left alone — it reads as expired either way, so there's
+    nothing to correct. Idempotent: a record already within the cap is
+    returned unchanged and no write happens."""
+    now       = int(time.time())
+    capped_end = trial["trialStart"] + TRIAL_DAYS * 86400
+    if trial["trialEnd"] <= capped_end or now >= trial["trialEnd"]:
+        return trial
+
+    table = _trials_table()
+    if table is not None:
+        try:
+            table.update_item(
+                Key={"deviceId": trial["deviceId"]},
+                UpdateExpression="SET trialEnd = :capped",
+                ExpressionAttributeValues={":capped": capped_end},
+            )
+        except Exception:  # noqa: BLE001
+            # Best-effort — still return the corrected value to the caller
+            # this request even if the write didn't stick; the next read
+            # will retry the correction.
+            pass
+    return {**trial, "trialEnd": capped_end}
+
+
 def _get_trial(device_id: str) -> dict[str, Any] | None:
     table = _trials_table()
     if table is None:
         return None
-    resp = table.get_item(Key={"deviceId": device_id})
-    return _from_decimal(resp.get("Item"))
+    resp  = table.get_item(Key={"deviceId": device_id})
+    trial = _from_decimal(resp.get("Item"))
+    if trial is None:
+        return None
+    return _apply_trial_duration_cap(trial)
 
 
 def _create_trial_if_absent(device_id: str) -> dict[str, Any]:

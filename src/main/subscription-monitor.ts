@@ -466,10 +466,34 @@ export class SubscriptionMonitor extends EventEmitter {
       const plain = await decryptModelBytes(enc)
       const rec   = JSON.parse(plain.toString('utf8')) as Partial<LocalTrialRecord>
       if (typeof rec.trialStart === 'number' && typeof rec.trialEnd === 'number') {
-        return { trialStart: rec.trialStart, trialEnd: rec.trialEnd }
+        return await this._capLocalTrialDuration({ trialStart: rec.trialStart, trialEnd: rec.trialEnd })
       }
       return null
     } catch { return null }
+  }
+
+  /**
+   * Ticket 42 migration: a local trial record created back when
+   * LICENSE_CONFIG.trial.durationDays was 7 (or any longer value) must not
+   * keep granting that old duration just because it predates the config
+   * change. Only rewrites the file when a correction is actually needed —
+   * a record already within the current cap is returned unchanged. A trial
+   * still active under the new, shorter cap is truncated (and will
+   * therefore read as expired if `now` has already passed the capped end);
+   * one that's already lapsed under its *stored* trialEnd is left alone,
+   * since it reads as expired either way. Backend-sourced records go
+   * through the same correction here as an offline-safety net, but the
+   * server's own trial/status response — via _apply_trial_duration_cap() in
+   * handler.py — is what actually stays authoritative once reachable.
+   */
+  private async _capLocalTrialDuration(rec: LocalTrialRecord): Promise<LocalTrialRecord> {
+    const cappedEnd = rec.trialStart + LICENSE_CONFIG.trial.durationDays * 86400
+    const now       = Math.floor(Date.now() / 1000)
+    if (rec.trialEnd <= cappedEnd || now >= rec.trialEnd) return rec
+
+    const capped = { trialStart: rec.trialStart, trialEnd: cappedEnd }
+    await this._saveLocalTrial(capped)
+    return capped
   }
 
   private async _saveLocalTrial(rec: LocalTrialRecord): Promise<void> {
