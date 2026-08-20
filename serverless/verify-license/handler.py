@@ -774,7 +774,7 @@ def _create_stripe_order(order_id: str, user_id: str, plan_id: str, method: str)
         "payment_method_types[0]": method,  # 'card' | 'wechat_pay' | 'alipay'
         "line_items[0][price_data][currency]":                 plan["currency"],
         "line_items[0][price_data][unit_amount]":               str(plan["amount"]),
-        "line_items[0][price_data][product_data][name]":        f"Ruanjian {plan_id} subscription",
+        "line_items[0][price_data][product_data][name]":        f"SootheVoice {plan_id} subscription",
         "line_items[0][quantity]":                               "1",
         "metadata[orderId]": order_id,
         "metadata[userId]":  user_id,
@@ -835,7 +835,7 @@ def _create_douyin_order(order_id: str, user_id: str, plan_id: str) -> dict[str,
         "out_order_no": order_id,
         "total_amount": str(plan["amount"]),
         "currency":     plan["currency"].upper(),
-        "subject":      f"Ruanjian {plan_id} subscription",
+        "subject":      f"SootheVoice {plan_id} subscription",
         "notify_url":   notify_url,
         "timestamp":    str(int(time.time())),
     }
@@ -1065,7 +1065,7 @@ def _generate_license_key() -> str:
     import secrets, string  # noqa: PLC0415
     alphabet = string.ascii_uppercase + string.digits
     groups   = ("".join(secrets.choice(alphabet) for _ in range(4)) for _ in range(3))
-    return "RUANJIAN-" + "-".join(groups)
+    return "SOOTHEVOICE-" + "-".join(groups)
 
 
 def _set_subscription_license_key(subscription_id: str, license_key: str) -> None:
@@ -1102,7 +1102,7 @@ def _send_license_key_email(to_email: str, license_key: str) -> bool:
 
     region = os.environ.get("SES_REGION") or os.environ.get("AWS_REGION", "us-east-1")
     body = (
-        "Thanks for subscribing to Ruanjian!\n\n"
+        "Thanks for subscribing to SootheVoice!\n\n"
         f"Your license key: {license_key}\n\n"
         "Enter it in the app under Subscription -> Activate License to unlock your plan.\n"
     )
@@ -1111,7 +1111,7 @@ def _send_license_key_email(to_email: str, license_key: str) -> bool:
             Source=sender,
             Destination={"ToAddresses": [to_email]},
             Message={
-                "Subject": {"Data": "Your Ruanjian license key"},
+                "Subject": {"Data": "Your SootheVoice license key"},
                 "Body":    {"Text": {"Data": body}},
             },
         )
