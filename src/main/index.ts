@@ -1,5 +1,5 @@
 import { app, BrowserWindow, shell, ipcMain, dialog, crashReporter, Menu } from 'electron'
-import { join, resolve, sep } from 'path'
+import { join, resolve, sep, dirname } from 'path'
 import { existsSync } from 'fs'
 import { promises as fs } from 'fs'
 import { callPythonEngine, callPythonEngineStreaming } from './python-bridge'
@@ -58,6 +58,31 @@ if (!_gotLock) {
       existing.focus()
     }
   })
+}
+
+// ── Windows runtime DLL preflight (Ticket 41) ───────────────────────────────
+// Electron's own Chromium distribution ships a handful of native DLLs next
+// to the packaged .exe — ffmpeg.dll (media decode) among them — which this
+// app never asks for directly: there is no ffmpeg-static/fluent-ffmpeg/
+// imageio-ffmpeg anywhere in package.json, and the Python engine only uses
+// `soundfile` (libsndfile) for audio I/O, never ffmpeg/pydub/librosa/
+// audioread. So "ffmpeg.dll not found" on Windows means the Electron
+// runtime itself shipped incomplete — most commonly antivirus quarantining
+// it out of the installed/extracted app directory (a well-known false
+// positive on ffmpeg.dll) or a corrupted install/extraction — not a missing
+// dependency this app's own code controls.
+//
+// If ffmpeg.dll is a hard load-time import of the main executable, the
+// Windows loader fails before this file ever runs and no amount of JS can
+// intercept it — scripts/verify-win-package.mjs guards against *shipping*
+// that build in the first place. But since some of Chromium's media
+// pipeline only touches ffmpeg.dll lazily (first audio/video decode), a
+// half-broken install can still reach this point; catch that case here with
+// a clear, actionable dialog instead of a silent failure deeper in the app.
+function findMissingWindowsRuntimeDlls(): string[] {
+  if (process.platform !== 'win32' || !app.isPackaged) return []
+  const runtimeDir = dirname(process.execPath)
+  return ['ffmpeg.dll'].filter((name) => !existsSync(join(runtimeDir, name)))
 }
 
 // ── First-launch marker ───────────────────────────────────────────────────────
@@ -298,6 +323,24 @@ if (app.isPackaged && usingDefaultSigningSecret) {
 }
 
 app.whenReady().then(() => {
+  // Ticket 41: bail out with a clear, actionable dialog rather than letting
+  // the app limp forward into a broken/blank window (or a later, more
+  // confusing crash the first time something tries to decode audio).
+  const missingDlls = findMissingWindowsRuntimeDlls()
+  if (missingDlls.length > 0) {
+    log.error(`[startup] missing Windows runtime file(s) next to executable: ${missingDlls.join(', ')}`)
+    dialog.showErrorBox(
+      '启动失败 / Failed to Start',
+      `应用缺少必要的运行库文件（${missingDlls.join('、')}），安装包可能已损坏，或被杀毒软件拦截/删除。` +
+      '请临时关闭杀毒软件后重新下载并安装应用。\n\n' +
+      `Missing required runtime file(s): ${missingDlls.join(', ')}. This usually means the installer ` +
+      'was corrupted, or antivirus software quarantined a file during install/extraction. Please ' +
+      'temporarily disable your antivirus, then re-download and reinstall the application.',
+    )
+    app.quit()
+    return
+  }
+
   // Shown synchronously, before any of the async work below even starts —
   // this is the user's very first feedback that launch is in progress
   // (Ticket 38). It has no dependency on the renderer bundle, IPC, or
