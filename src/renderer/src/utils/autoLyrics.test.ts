@@ -117,6 +117,21 @@ describe('fetchLyricsOnline', () => {
     expect(searchLyrics.mock.calls[1][0]).toMatchObject({ track: 'Song' })
   })
 
+  it('falls through to plainLyrics when the picked result has an empty (not null) syncedLyrics', async () => {
+    // Regression: pickBestResult selects on `?.trim()` truthiness, so a
+    // result can be chosen via its plainLyrics branch while syncedLyrics is
+    // '' rather than null — `??` would incorrectly stop at that '' instead
+    // of falling through.
+    const searchLyrics = vi.fn().mockResolvedValue([
+      result({ syncedLyrics: '', plainLyrics: 'plain fallback line' }),
+    ])
+    ;(globalThis as unknown as { window: { engine: { searchLyrics: typeof searchLyrics } } })
+      .window.engine.searchLyrics = searchLyrics
+
+    const match = await fetchLyricsOnline('Title', 'Artist')
+    expect(match?.raw).toBe('plain fallback line')
+  })
+
   it('returns null when nothing matches on either pass', async () => {
     const searchLyrics = vi.fn().mockResolvedValue([])
     ;(globalThis as unknown as { window: { engine: { searchLyrics: typeof searchLyrics } } })
