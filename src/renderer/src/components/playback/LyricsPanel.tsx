@@ -84,10 +84,18 @@ export function LyricsPanel({
   const autoFetchedForRef = useRef<string | null>(null)
   const activeSongIdRef = useRef<string | null>(null)
   useEffect(() => { activeSongIdRef.current = songId }, [songId])
+  // Tracks the live `lines` prop so the async fetch below can tell, right
+  // before it applies a result, whether the user beat it to it (manual LRC
+  // import or manual online search while the auto-fetch was still in
+  // flight) — without this a slow auto-match could silently clobber lyrics
+  // the user just loaded themselves.
+  const linesRef = useRef(lines)
+  useEffect(() => { linesRef.current = lines }, [lines])
 
   useEffect(() => {
     setShowFoundBanner(false)
-    if (!songId || autoFetchedForRef.current === songId) return
+    if (!songId) { setAutoStatus('idle'); return }
+    if (autoFetchedForRef.current === songId) return
     autoFetchedForRef.current = songId
 
     if (lines.length > 0 || !autoLyricsEnabled || !onlineSearchAllowed || !songTitle.trim()) {
@@ -99,7 +107,10 @@ export function LyricsPanel({
     setAutoStatus('searching')
 
     void (async () => {
-      const stillCurrent = (): boolean => !cancelled && activeSongIdRef.current === songId
+      // Also bails if lyrics showed up from elsewhere (manual import/search)
+      // while this fetch was in flight — see linesRef's comment above.
+      const stillCurrent = (): boolean =>
+        !cancelled && activeSongIdRef.current === songId && linesRef.current.length === 0
 
       const cached = await getCachedLyrics(songArtist, songTitle, songDuration)
       if (!stillCurrent()) return
@@ -152,7 +163,9 @@ export function LyricsPanel({
   }
 
   function useResult(result: LyricsSearchResult): void {
-    const raw = result.syncedLyrics ?? result.plainLyrics ?? ''
+    // `||`, not `??` — an empty-but-non-null syncedLyrics (seen from lrclib
+    // on some entries) must still fall through to plainLyrics.
+    const raw = result.syncedLyrics || result.plainLyrics || ''
     onImportLyrics(textFromLyricsBlob(raw))
     setSearchOpen(false)
   }

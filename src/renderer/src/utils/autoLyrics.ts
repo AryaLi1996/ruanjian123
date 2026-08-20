@@ -88,7 +88,10 @@ export async function fetchLyricsOnline(title: string, artist: string | null): P
     }
 
     if (!best) return null
-    const raw = best.syncedLyrics ?? best.plainLyrics ?? ''
+    // `||`, not `??` — pickBestResult selected `best` on truthiness (via
+    // `?.trim()`), so an empty-but-non-null syncedLyrics must still fall
+    // through to plainLyrics here, the same way it did there.
+    const raw = best.syncedLyrics || best.plainLyrics || ''
     if (!raw.trim()) return null
     return { lines: textFromLyricsBlob(raw), raw, source: 'lrclib' }
   } catch {
