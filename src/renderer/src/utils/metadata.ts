@@ -151,6 +151,23 @@ function extractM4AMetadata(buf: ArrayBuffer): EmbeddedMetadata {
   return { title, artist, coverArtUrl }
 }
 
+// ── Filename fallback (Ticket 43 §1) ────────────────────────────────────────
+/**
+ * Falls back to filename patterns like "Artist - Title.mp3" when embedded
+ * tags don't carry an artist — the second-priority song-identification
+ * source, after ID3/Vorbis/MP4 metadata. Only trusts a single " - "
+ * separator; anything else (no dash, or several) is treated as an
+ * unattributed track name rather than guessing wrong.
+ */
+export function parseArtistTitleFromFilename(filename: string): { artist: string | null; title: string | null } {
+  const base = filename.replace(/\.[^./]+$/, '').trim()
+  const parts = base.split(/\s+-\s+/)
+  if (parts.length === 2 && parts[0].trim() && parts[1].trim()) {
+    return { artist: parts[0].trim(), title: parts[1].trim() }
+  }
+  return { artist: null, title: base || null }
+}
+
 /** Best-effort embedded title / artist / cover-art extraction for MP3 / FLAC / M4A files. */
 export async function extractEmbeddedMetadata(file: File): Promise<EmbeddedMetadata> {
   const ext = file.name.split('.').pop()?.toLowerCase() ?? ''

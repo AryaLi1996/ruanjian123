@@ -40,6 +40,15 @@ const resources = {
         stemsLoading: '正在加载音轨…', unsolo: '取消独奏', mixerLoading: '正在加载音频音轨…', reverb: '混音', eqLow: '低音', eqMid: '中音', eqHigh: '高音',
       },
       audioTools: { title: '音频工具', description: '批量音源分离 — 拖入文件、选择模式、全部处理。', detect: '检测设备', drop: '拖入音频文件，或点击浏览', formats: '多个文件 · WAV · FLAC · OGG', files: '{{count}} 个文件', done: '{{count}} 个完成', pending: '{{count}} 个等待', failed: '{{count}} 个失败', process: '处理 {{count}} 个', processing: '处理中…', clear: '清空', pendingStatus: '● 等待中', errorStatus: '✕ 错误', downloadAll: '全部下载（{{count}}）', standard: '标准', enhanced: '增强' },
+      // Automatic lyrics recognition status copy (Ticket 43 §6) — shown in the
+      // Playback/Monitor lyrics panel while/after an automatic online match runs.
+      lyrics: {
+        auto: {
+          searching: '正在搜索歌词…',
+          found: '歌词已自动加载。',
+          notfound: '未自动找到歌词，您可以导入 LRC 文件或手动搜索。',
+        },
+      },
       playback: { title: '播放/监听', description: '加载音频、分离音轨、对比原唱与 AI 翻唱，并实时录制人声。', trackList: '音轨列表', loadOriginal: '加载原始音频', loadCover: '加载 AI 翻唱', noTracks: '暂无音轨 — 加载音频文件开始。', separate: '分离音轨', separating: '分离中…', separateMode: '分离模式', standard: '标准', enhanced: '增强', mute: '静音', solo: '独奏', volume: '音量', remove: '移除', waveform: '波形显示', zoomIn: '放大', zoomOut: '缩小', play: '播放', pause: '暂停', stop: '停止', abTitle: 'A/B 对比', trackA: '音轨 A', trackB: '音轨 B', switchAB: '切换 A/B', autoAlign: '自动对齐', aligning: '对齐中…', aligned: '已对齐（偏移 {{offset}} 秒）', selectTwoTracks: '请选择两条音轨进行对比', recordingPanel: '实时录音', record: '● 录音', recording: '● 正在录音…', stopRecording: '停止录音', save: '保存录音', discard: '丢弃', micUnavailable: '无法访问麦克风', recordedClip: '录音片段', original: '原始混音', stem: '分离音轨', cover: 'AI 翻唱', clip: '录音', lyrics: '歌词', expand: '展开', collapse: '收起', importLrc: '导入 LRC', searchOnline: '在线搜索', subscribeForSearch: '订阅后可使用在线歌词搜索', noLyrics: '暂无歌词，请导入 .lrc 文件或在线搜索', searchLyricsTitle: '在线搜索歌词', searchQueryPlaceholder: '歌曲名称', searchArtistPlaceholder: '艺术家（可选）', search: '搜索', searching: '搜索中…', searchNoResults: '未找到结果', searchError: '搜索失败，请检查网络连接后重试', useResult: '使用', unsynced: '无时间轴', instrumental: '纯音乐', closeSearch: '关闭', songs: '歌曲列表', addSong: '添加歌曲', noSongs: '暂无歌曲 — 点击上方按钮或将音频文件拖入此处。', noSongSelected: '未选择歌曲', trackCount: '{{count}} 轨', hideSongs: '隐藏歌曲列表', showSongs: '显示歌曲列表', filterSongs: '搜索歌曲或艺术家', sortBy: '排序', sortTitle: '标题', sortArtist: '艺术家', sortDateAdded: '添加时间', ctxPlay: '播放', ctxRemove: '从列表移除', ctxShowInFolder: '在文件夹中显示', like: '喜欢', unlike: '取消喜欢', share: '分享', shareCopied: '已复制到剪贴板', enterFullscreen: '全屏歌词', exitFullscreen: '退出全屏', unknownArtist: '未知艺术家', dragResize: '拖动调整高度', nowPlaying: '正在播放', monitoring: '波形与监听' },
       subscription: { title: '订阅', description: '管理舒音许可证和订阅计划。', status: '许可证状态', plan: '计划', trial: '试用', validUntil: '有效期至', daysRemaining: '剩余天数', features: '授权功能', active: '✓ 已激活', unlicensed: '○ 未授权', expired: '✕ 已过期', grace: '⚠ 已过期（宽限期）', graceMessage: '订阅已过期，剩余 {{count}} 天宽限期。', invalid: '✕ 无效令牌', manage: '管理订阅', renew: '续订', activateTitle: '激活许可证', renewTitle: '续订订阅', enterKey: '输入许可证密钥以解锁全部功能。', expiredDesc: '订阅已过期。续订后恢复完整访问。', subscribe: '订阅', subscribeNow: '立即订阅', activateKey: '输入现有许可证密钥', keyPlaceholder: 'SOOTHEVOICE-XXXX-XXXX-XXXX', activating: '激活中…', demo: '演示：使用 SOOTHEVOICE-DEMO-2026 获得 30 天试用。', subscribeUnlock: '订阅解锁', lockDescription: '舒音需要有效订阅才能使用 AI 功能。现在开始 30 天免费试用。', haveKey: '已有许可证密钥？请前往订阅页面。', expiredTitle: '订阅已过期', expiredLockDesc: '您的订阅已失效。续订后恢复全部功能。', openCheckout: '打开支付页面',
         choosePlan: '选择计划', choosePayment: '选择支付方式', payNow: '立即支付',
@@ -169,6 +178,11 @@ const resources = {
           },
           duration: '显示时长', position: '显示位置', positionTopRight: '右上角', positionBottomRight: '右下角',
         },
+        lyrics: {
+          title: '歌词', description: '控制加载歌曲时是否自动在线匹配歌词。',
+          autoFetch: '自动获取歌词',
+          autoFetchHint: '加载歌曲且本地未找到歌词时，自动从在线歌词库匹配并加载同步歌词。',
+        },
       },
     },
   },
@@ -193,6 +207,13 @@ const resources = {
         stemsLoading: 'Loading stems…', unsolo: 'Un-solo', mixerLoading: 'Loading audio tracks…', reverb: 'Reverb', eqLow: 'Lo', eqMid: 'Mid', eqHigh: 'Hi',
       },
       audioTools: { title: 'Audio Tools', description: 'Batch source separation — drop files, choose modes, process all.', detect: 'Detect Device', drop: 'Drop audio files here, or click to browse', formats: 'Multiple files · WAV · FLAC · OGG', files: '{{count}} file(s)', done: '{{count}} done', pending: '{{count}} pending', failed: '{{count}} failed', process: 'Process {{count}}', processing: 'Processing…', clear: 'Clear', pendingStatus: '● Pending', errorStatus: '✕ Error', downloadAll: 'Download All ({{count}})', standard: 'Standard', enhanced: 'Enhanced' },
+      lyrics: {
+        auto: {
+          searching: 'Searching lyrics…',
+          found: 'Lyrics loaded automatically.',
+          notfound: 'No lyrics found automatically. You can import an LRC file or search manually.',
+        },
+      },
       playback: { title: 'Playback / Monitor', description: 'Load audio, separate stems, A/B compare the original vocal against an AI cover, and record your voice live.', trackList: 'Track List', loadOriginal: 'Load Original Audio', loadCover: 'Load AI Cover', noTracks: 'No tracks yet — load an audio file to get started.', separate: 'Separate', separating: 'Separating…', separateMode: 'Separation mode', standard: 'Standard', enhanced: 'Enhanced', mute: 'Mute', solo: 'Solo', volume: 'Volume', remove: 'Remove', waveform: 'Waveform', zoomIn: 'Zoom in', zoomOut: 'Zoom out', play: 'Play', pause: 'Pause', stop: 'Stop', abTitle: 'A/B Comparison', trackA: 'Track A', trackB: 'Track B', switchAB: 'Switch A/B', autoAlign: 'Auto-Align', aligning: 'Aligning…', aligned: 'Aligned (offset {{offset}}s)', selectTwoTracks: 'Select two tracks to compare', recordingPanel: 'Live Recording', record: '● Record', recording: '● Recording…', stopRecording: 'Stop Recording', save: 'Save Recording', discard: 'Discard', micUnavailable: 'Microphone unavailable', recordedClip: 'Recorded clip', original: 'Original Mix', stem: 'Stem', cover: 'AI Cover', clip: 'Recording', lyrics: 'Lyrics', expand: 'Expand', collapse: 'Collapse', importLrc: 'Import LRC', searchOnline: 'Search Online', subscribeForSearch: 'Subscribe to use online lyrics search', noLyrics: 'No lyrics — import a .lrc file or search online', searchLyricsTitle: 'Search Lyrics Online', searchQueryPlaceholder: 'Song title', searchArtistPlaceholder: 'Artist (optional)', search: 'Search', searching: 'Searching…', searchNoResults: 'No results found', searchError: 'Search failed — check your connection and try again', useResult: 'Use', unsynced: 'Unsynced', instrumental: 'Instrumental', closeSearch: 'Close', songs: 'Songs', addSong: 'Add Song', noSongs: 'No songs yet — use the button above or drop audio files here.', noSongSelected: 'No song selected', trackCount: '{{count}} track(s)', hideSongs: 'Hide songs', showSongs: 'Show songs', filterSongs: 'Search songs or artists', sortBy: 'Sort', sortTitle: 'Title', sortArtist: 'Artist', sortDateAdded: 'Date added', ctxPlay: 'Play', ctxRemove: 'Remove from list', ctxShowInFolder: 'Show in folder', like: 'Like', unlike: 'Unlike', share: 'Share', shareCopied: 'Copied to clipboard', enterFullscreen: 'Fullscreen lyrics', exitFullscreen: 'Exit fullscreen', unknownArtist: 'Unknown Artist', dragResize: 'Drag to resize', nowPlaying: 'Now Playing', monitoring: 'Waveform & Monitoring' },
       subscription: { title: 'Subscription', description: 'Manage your SootheVoice license and plan.', status: 'License Status', plan: 'Plan', trial: 'Trial', validUntil: 'Valid until', daysRemaining: 'Days remaining', features: 'Licensed features', active: '✓ Active', unlicensed: '○ Unlicensed', expired: '✕ Expired', grace: '⚠ Expired (grace period)', graceMessage: 'Your subscription expired; {{count}} day(s) of grace remain.', invalid: '✕ Invalid token', manage: 'Manage Subscription', renew: 'Renew', activateTitle: 'Activate License', renewTitle: 'Renew Subscription', enterKey: 'Enter your license key to unlock all SootheVoice features.', expiredDesc: 'Your subscription has expired. Renew to restore full access.', subscribe: 'Subscribe', subscribeNow: 'Subscribe Now', activateKey: 'Or enter an existing license key', keyPlaceholder: 'SOOTHEVOICE-XXXX-XXXX-XXXX', activating: 'Activating…', demo: 'Demo: use SOOTHEVOICE-DEMO-2026 for a free 30-day trial.', subscribeUnlock: 'Subscribe to Unlock', lockDescription: 'SootheVoice requires an active subscription to use AI features. Start with a free 30-day trial.', haveKey: 'Already have a key? Go to the Subscription page.', expiredTitle: 'Subscription Expired', expiredLockDesc: 'Your subscription has lapsed. Renew to restore access to all features.', openCheckout: 'Open payment page',
         choosePlan: 'Choose a plan', choosePayment: 'Payment method', payNow: 'Pay Now',
@@ -318,6 +339,11 @@ const resources = {
             system: 'System messages', custom: 'Other alerts',
           },
           duration: 'Toast duration', position: 'Toast position', positionTopRight: 'Top-right', positionBottomRight: 'Bottom-right',
+        },
+        lyrics: {
+          title: 'Lyrics', description: 'Control whether lyrics are matched online automatically when a song loads.',
+          autoFetch: 'Automatically fetch lyrics',
+          autoFetchHint: 'When a song loads and no local lyrics are found, automatically match and load synced lyrics from an online source.',
         },
       },
     },

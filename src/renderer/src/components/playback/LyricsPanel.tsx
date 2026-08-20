@@ -1,17 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { textFromLyricsBlob, type LyricLine } from '../../utils/lrc'
-
-interface LyricsSearchResult {
-  id:            number
-  trackName:     string
-  artistName:    string
-  albumName:     string
-  duration:      number | null
-  instrumental:  boolean
-  syncedLyrics:  string | null
-  plainLyrics:   string | null
-}
+import { fetchLyricsOnline, getCachedLyrics, setCachedLyrics, type LyricsSearchResult } from '../../utils/autoLyrics'
 
 interface Props {
   lines:            LyricLine[]
@@ -21,10 +11,17 @@ interface Props {
   onSeek:           (time: number) => void
   onImportFile:     (file: File) => void
   onImportLyrics:   (lines: LyricLine[]) => void
+  songId:           string | null
   songTitle:        string
+  songArtist:       string | null
+  songDuration:     number
   onlineSearchAllowed: boolean
+  // Ticket 43 §5 — the Settings-page "automatically fetch lyrics" toggle.
+  autoLyricsEnabled: boolean
   coverArtUrl?:     string | null
 }
+
+type AutoStatus = 'idle' | 'searching' | 'found' | 'notfound'
 
 const WINDOW = 30   // render current line ± WINDOW to cap DOM node count
 
@@ -37,7 +34,7 @@ function formatDuration(sec: number | null): string {
 
 export function LyricsPanel({
   lines, currentIndex, collapsed, onToggleCollapse, onSeek, onImportFile, onImportLyrics,
-  songTitle, onlineSearchAllowed, coverArtUrl,
+  songId, songTitle, songArtist, songDuration, onlineSearchAllowed, autoLyricsEnabled, coverArtUrl,
 }: Props): JSX.Element {
   const { t } = useTranslation()
   const [fontSize, setFontSize] = useState(16)
@@ -74,6 +71,69 @@ export function LyricsPanel({
   useEffect(() => {
     if (searchOpen) searchInputRef.current?.focus()
   }, [searchOpen])
+
+  // ── Automatic lyrics recognition (Ticket 43) ────────────────────────────
+  // Runs once per newly-loaded song: a cache lookup first (instant on a
+  // repeat play), then an online search if that misses. Never blocks
+  // playback — this is a plain fire-and-forget effect — and backs off
+  // entirely if the song already has lyrics (embedded, or a previous
+  // manual/auto load), the user turned the feature off, or online lyrics
+  // aren't part of the current plan.
+  const [autoStatus, setAutoStatus] = useState<AutoStatus>('idle')
+  const [showFoundBanner, setShowFoundBanner] = useState(false)
+  const autoFetchedForRef = useRef<string | null>(null)
+  const activeSongIdRef = useRef<string | null>(null)
+  useEffect(() => { activeSongIdRef.current = songId }, [songId])
+
+  useEffect(() => {
+    setShowFoundBanner(false)
+    if (!songId || autoFetchedForRef.current === songId) return
+    autoFetchedForRef.current = songId
+
+    if (lines.length > 0 || !autoLyricsEnabled || !onlineSearchAllowed || !songTitle.trim()) {
+      setAutoStatus('idle')
+      return
+    }
+
+    let cancelled = false
+    setAutoStatus('searching')
+
+    void (async () => {
+      const stillCurrent = (): boolean => !cancelled && activeSongIdRef.current === songId
+
+      const cached = await getCachedLyrics(songArtist, songTitle, songDuration)
+      if (!stillCurrent()) return
+      if (cached) {
+        onImportLyrics(cached.lines)
+        setAutoStatus('found')
+        setShowFoundBanner(true)
+        return
+      }
+
+      const found = await fetchLyricsOnline(songTitle, songArtist)
+      if (!stillCurrent()) return
+      if (found) {
+        onImportLyrics(found.lines)
+        void setCachedLyrics(songArtist, songTitle, songDuration, found.raw, found.source)
+        setAutoStatus('found')
+        setShowFoundBanner(true)
+      } else {
+        setAutoStatus('notfound')
+      }
+    })()
+
+    return () => { cancelled = true }
+    // Deliberately keyed on songId alone — this should fire exactly once per
+    // song load, not re-run every time songTitle/songArtist/lines are
+    // touched by the fetch's own onImportLyrics call.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [songId])
+
+  useEffect(() => {
+    if (!showFoundBanner) return
+    const timer = setTimeout(() => setShowFoundBanner(false), 3000)
+    return () => clearTimeout(timer)
+  }, [showFoundBanner])
 
   async function runSearch(): Promise<void> {
     const track = query.trim()
@@ -155,6 +215,10 @@ export function LyricsPanel({
             </button>
           </div>
 
+          {showFoundBanner && lines.length > 0 && (
+            <div className="pbm-lyrics-auto-banner">{t('lyrics.auto.found')}</div>
+          )}
+
           {lines.length === 0 ? (
             <div
               className={`pbm-lyrics-empty${dragging ? ' drag-over' : ''}`}
@@ -163,10 +227,33 @@ export function LyricsPanel({
               onDragLeave={() => setDragging(false)}
               onDrop={(e) => { e.preventDefault(); setDragging(false); handleFiles(e.dataTransfer.files) }}
             >
-              <div className="view-desc">{t('playback.noLyrics')}</div>
-              <button className="btn btn-ghost" style={{ marginTop: 8 }} onClick={() => inputRef.current?.click()}>
-                {t('playback.importLrc')}
-              </button>
+              {autoStatus === 'searching' ? (
+                <div className="pbm-lyrics-auto-status">
+                  <span className="sub-spinner pbm-lyrics-auto-spinner" aria-hidden="true" />
+                  <span>{t('lyrics.auto.searching')}</span>
+                </div>
+              ) : autoStatus === 'notfound' ? (
+                <>
+                  <div className="view-desc">{t('lyrics.auto.notfound')}</div>
+                  <div className="row" style={{ gap: 8, marginTop: 8, justifyContent: 'center' }}>
+                    <button className="btn btn-ghost" onClick={() => inputRef.current?.click()}>
+                      {t('playback.importLrc')}
+                    </button>
+                    {onlineSearchAllowed && (
+                      <button className="btn btn-ghost" onClick={openSearch}>
+                        {t('playback.searchOnline')}
+                      </button>
+                    )}
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="view-desc">{t('playback.noLyrics')}</div>
+                  <button className="btn btn-ghost" style={{ marginTop: 8 }} onClick={() => inputRef.current?.click()}>
+                    {t('playback.importLrc')}
+                  </button>
+                </>
+              )}
             </div>
           ) : (
             <div

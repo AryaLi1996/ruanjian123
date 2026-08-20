@@ -32,6 +32,11 @@ contextBridge.exposeInMainWorld('engine', {
   searchLyrics: (query: { track: string; artist?: string }): Promise<unknown[]> =>
     ipcRenderer.invoke('lyrics:search', query),
 
+  // Automatic lyrics-match cache (Ticket 43 §4) — see main/lyrics-cache.ts
+  lyricsCacheLoad: (): Promise<Record<string, unknown>> => ipcRenderer.invoke('lyrics:cache-load'),
+  lyricsCacheSave: (cache: Record<string, unknown>): Promise<void> =>
+    ipcRenderer.invoke('lyrics:cache-save', cache),
+
   // Report renderer crashes caught by the React error boundary
   logRendererError: (payload: unknown): Promise<void> =>
     ipcRenderer.invoke('log:renderer-error', payload),
