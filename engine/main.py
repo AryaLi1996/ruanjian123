@@ -230,20 +230,39 @@ def synthesize_cover(args):
 
 
 def export_audio(args):
-    """Save mixed PCM audio from the renderer to a file on disk."""
+    """Save mixed PCM audio from the renderer to a file on disk.
+
+    Ticket 44: the renderer used to send the rendered mix inline as a JSON
+    sample array (`audio`), which flows through engine:call into the
+    process argv. That's fine for a toy payload, but a real song is
+    millions of samples — tens of MB of JSON text — and the OS caps a
+    single argv string well below that (Linux MAX_ARG_STRLEN is ~128KB),
+    so the engine process failed to even spawn and every real export
+    failed. The renderer now writes the raw interleaved float32 PCM to a
+    temp file and passes its path as `pcm_path`; `audio` is kept as a
+    fallback for small/inline payloads (e.g. direct engine callers/tests).
+    """
     import numpy as np  # noqa: PLC0415
     import soundfile as sf_mod  # noqa: PLC0415
     import os  # noqa: PLC0415
 
     params      = args[0] if args and isinstance(args[0], dict) else {}
-    audio       = params.get("audio", [])
     sample_rate = int(params.get("sample_rate", 44_100))
     channels    = int(params.get("channels", 1))
     output_path = params.get("output_path",
                              str(_writable_dir() / "_export.wav"))
     fmt         = params.get("format", "wav").lower()
+    pcm_path    = params.get("pcm_path")
 
-    arr = np.array(audio, dtype=np.float32)
+    if pcm_path:
+        arr = np.fromfile(pcm_path, dtype="<f4")
+        try:
+            os.remove(pcm_path)   # best-effort — temp file, not needed after this
+        except OSError:
+            pass
+    else:
+        arr = np.array(params.get("audio", []), dtype=np.float32)
+
     if channels == 2 and len(arr.shape) == 1:
         arr = arr.reshape(-1, 2)   # interleaved → [N, 2]
 

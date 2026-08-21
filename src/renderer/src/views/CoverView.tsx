@@ -268,7 +268,7 @@ export function CoverView(): JSX.Element {
                     {algoVer === v && <span className="mode-card-check">✓</span>}
                   </div>
                   <div className="mode-card-tagline">
-                    {v === 'v1' ? 'DTW + WSOLA · ≤10% real-time' : 'LSTM expression encoder · ≤50% RT'}
+                    {t(v === 'v1' ? 'cover.v1Tagline' : 'cover.v2Tagline')}
                   </div>
                 </button>
               ))}
@@ -291,7 +291,7 @@ export function CoverView(): JSX.Element {
           {!coverResult && (
             <>
               <p style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 12 }}>
-                Model: <strong>{selectedModel?.name ?? '—'}</strong> · Algorithm: <strong>{algoVer.toUpperCase()}</strong>
+                {t('cover.mixInfo', { model: selectedModel?.name ?? '—', algo: algoVer.toUpperCase() })}
               </p>
               {synthError && <div className="error-banner">{synthError}</div>}
               <button className="btn btn-primary" style={{ width: '100%' }}
@@ -304,7 +304,7 @@ export function CoverView(): JSX.Element {
           {coverResult && (
             <>
               <div style={{ fontSize: 12, color: 'var(--success)', marginBottom: 16 }}>
-                ✓ Cover synthesized in {coverResult.elapsed_sec}s ({coverResult.duration_sec}s audio)
+                {t('cover.synthesizedInfo', { elapsed: coverResult.elapsed_sec, duration: coverResult.duration_sec })}
               </div>
               <div className="card-title" style={{ marginBottom: 12 }}>{t('cover.mixer')}</div>
               {mixTracks.length > 0 && (

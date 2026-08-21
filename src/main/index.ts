@@ -489,8 +489,14 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
 })
 
+// Ticket 44: exporting a full mixdown (FLAC/OGG encoding of a real song, on
+// a slower machine) can legitimately take longer than the 30s budget every
+// other engine:call gets by default — give it its own, more generous
+// ceiling instead of timing out an export that's simply still working.
+const EXPORT_TIMEOUT_MS = 5 * 60_000
+
 ipcMain.handle('engine:call', (_event, method: string, args: unknown[]) =>
-  callPythonEngine(method, args)
+  callPythonEngine(method, args, method === 'export_audio' ? EXPORT_TIMEOUT_MS : undefined)
 )
 
 // Streaming handler: emits engine:progress events for each JSON line from Python
