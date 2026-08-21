@@ -78,7 +78,6 @@ export function TrainingView(): JSX.Element {
   const updateModelDemo = useAppStore((s) => s.updateModelDemo)
   const setEngineBusy  = useAppStore((s) => s.setEngineBusy)
   const setEngineStatus = useAppStore((s) => s.setEngineStatus)
-  const setUserVocalRange = useAppStore((s) => s.setUserVocalRange)
   const retrainParamsRef = useRef<{ mode: TrainingMode; epochs: number } | null>(null)
 
   // ── subscribe to engine:progress while training ──────────
@@ -161,23 +160,6 @@ export function TrainingView(): JSX.Element {
           audioFiles.map(async (f) => ({ name: f.name, buffer: await f.arrayBuffer() }))
         )
         dataDir = await window.engine.saveTrainingFiles(files)
-
-        // Ticket 16 (minimal): derive the user's vocal range from the same
-        // material they're training on — it's the only real recording of
-        // their voice this app has — so Cover Creation's Tune slider
-        // (Ticket 19) has a recommendation to show. Fired without waiting:
-        // pitch tracking runs in parallel with training and must never
-        // delay or block it; a failure here just leaves no recommendation.
-        const savedDir = dataDir
-        const audioPaths = files.map((f) => `${savedDir}/${f.name}`)
-        window.engine.call('analyze_vocal_range', { audio_paths: audioPaths })
-          .then((raw) => {
-            const range = raw as { min_midi: number | null; max_midi: number | null }
-            if (range.min_midi != null && range.max_midi != null) {
-              setUserVocalRange({ minMidi: range.min_midi, maxMidi: range.max_midi })
-            }
-          })
-          .catch(() => { /* best-effort — see comment above */ })
       }
 
       const res = await window.engine.stream('train_model', {

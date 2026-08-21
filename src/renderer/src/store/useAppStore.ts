@@ -45,19 +45,6 @@ export interface TargetSong {
   shiftedAudioPath: string | null
 }
 
-// Ticket 16 (minimal): the user's own vocal range, analyzed from their
-// Model Training upload material via the engine's analyze_vocal_range call
-// (see TrainingView's handleTrain). Only maxMidi is used today — by
-// Ticket 19's recommended-shift formula — but minMidi is kept alongside it
-// since the engine already computes both and a future range-aware feature
-// (e.g. warning when a shifted song still exceeds the low end) can reuse
-// it without another analysis pass. Session-only: re-analyzed the next
-// time training material is uploaded, not persisted across restarts.
-export interface VocalRange {
-  minMidi: number
-  maxMidi: number
-}
-
 interface AppState {
   activeView:      ActiveView
   selectedModel:   string | null
@@ -67,7 +54,6 @@ interface AppState {
   modelsHydrated:  boolean   // true once the persisted library has been loaded — gates autosave
                               // so an early empty render can't overwrite the saved file with []
   targetSong:      TargetSong | null
-  userVocalRange:  VocalRange | null
 
   setActiveView:    (view: ActiveView) => void
   setSelectedModel: (path: string | null) => void
@@ -82,7 +68,6 @@ interface AppState {
   // audio) on the current target song. No-ops if the song has since been
   // cleared/changed from under an in-flight shift request.
   setTargetSongShift: (shift: number, shiftedAudioPath: string | null) => void
-  setUserVocalRange:  (range: VocalRange | null) => void
 }
 
 export const useAppStore = create<AppState>((set) => ({
@@ -93,7 +78,6 @@ export const useAppStore = create<AppState>((set) => ({
   trainedModels:  [],
   modelsHydrated: false,
   targetSong:     null,
-  userVocalRange: null,
 
   setActiveView:    (view)  => set({ activeView: view }),
   setSelectedModel: (path)  => set({ selectedModel: path }),
@@ -109,5 +93,4 @@ export const useAppStore = create<AppState>((set) => ({
   setTargetSong:    (song)   => set({ targetSong: song }),
   setTargetSongShift: (shift, shiftedAudioPath) =>
     set((s) => (s.targetSong ? { targetSong: { ...s.targetSong, pitchShift: shift, shiftedAudioPath } } : s)),
-  setUserVocalRange: (range) => set({ userVocalRange: range }),
 }))

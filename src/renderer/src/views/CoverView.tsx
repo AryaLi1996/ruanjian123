@@ -7,8 +7,10 @@ import { StemPlayer, type StemTrack } from '../components/cover/StemPlayer'
 import { MixingConsole, type MixTrack } from '../components/cover/MixingConsole'
 import { ExportPanel } from '../components/cover/ExportPanel'
 import { PitchShiftSlider } from '../components/cover/PitchShiftSlider'
+import { PitchAnalysisPanel } from '../components/cover/PitchAnalysisPanel'
 import { HighPitchProtection } from '../components/cover/HighPitchProtection'
 import { CloudLibraryModal } from '../components/library/CloudLibraryModal'
+import { usePitchStore } from '../store/usePitchStore'
 import { computeRecommendedShift } from '../utils/pitch'
 import type { LibrarySong } from '../global'
 
@@ -33,12 +35,17 @@ export function CoverView(): JSX.Element {
   const [libraryOpen, setLibraryOpen] = useState(false)
 
   // ── Pitch Shift / Tune slider (Ticket 19) ────────────────
-  const userVocalRange     = useAppStore((s) => s.userVocalRange)
+  // The user's vocal range comes from Ticket 16's pitch analysis panel
+  // (usePitchStore, populated when the user runs "分析音高" below on the
+  // separated lead vocal stem). maxMidi === 0 is that panel's "nothing
+  // voiced detected" sentinel (see engine/pitch_analysis.py), not a real
+  // note — treated the same as "not analyzed yet": no recommendation shown.
+  const vocalRangeMaxMidi  = usePitchStore((s) => (s.result && s.result.maxMidi > 0 ? s.result.maxMidi : null))
   const setTargetSongShift = useAppStore((s) => s.setTargetSongShift)
   const [shifting,   setShifting]   = useState(false)
   const [shiftError, setShiftError] = useState<string | null>(null)
   const recommendedShift = targetSong
-    ? computeRecommendedShift(targetSong.originalKey, userVocalRange?.maxMidi ?? null)
+    ? computeRecommendedShift(targetSong.originalKey, vocalRangeMaxMidi)
     : null
   // Guards against a fast re-drag: if the user commits a second shift before
   // the first's engine call returns, only the response matching the latest
@@ -248,6 +255,19 @@ export function CoverView(): JSX.Element {
 
   const selectedModel = trainedModels.find((m) => m.id === selectedModelId)
 
+  // Ticket 16: prefer the driest lead vocal available for pitch analysis —
+  // same fallback chain used to pick the reference vocal for synthesis.
+  // Label mirrors whichever key the path actually came from (not just the
+  // first two candidates) so the panel never claims to be analyzing
+  // "Vocals" when it fell back to some other stem.
+  const pitchStemKey = sepResult
+    ? (['lead_dry', 'vocals'].find((k) => sepResult.stems[k]) ?? Object.keys(sepResult.stems)[0])
+    : null
+  const pitchStemPath  = pitchStemKey && sepResult ? sepResult.stems[pitchStemKey] : null
+  const pitchStemLabel = pitchStemKey
+    ? stemTracks.find((s) => s.key === pitchStemKey)?.label ?? pitchStemKey
+    : ''
+
   return (
     <>
       <div className="view-header">
@@ -342,6 +362,11 @@ export function CoverView(): JSX.Element {
             <div style={{ marginTop: 20 }}>
               <div className="card-title">{t('cover.stems')}</div>
               <StemPlayer stems={stemTracks} />
+              {pitchStemPath && (
+                <div style={{ marginTop: 16 }}>
+                  <PitchAnalysisPanel audioPath={pitchStemPath} label={pitchStemLabel} />
+                </div>
+              )}
               <button className="btn btn-primary" style={{ marginTop: 16 }}
                 onClick={() => complete(1, 2)}>
                 {t('cover.nextModel')}

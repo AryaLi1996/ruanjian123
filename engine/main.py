@@ -230,22 +230,6 @@ def synthesize_cover(args):
     }
 
 
-def analyze_vocal_range(args):
-    """Ticket 16 (minimal): estimate the user's vocal range from their own
-    recordings — see pitch_tools.estimate_vocal_range for the analysis
-    itself. Feeds Ticket 19's recommended pitch-shift calculation."""
-    from pitch_tools import estimate_vocal_range  # noqa: PLC0415
-
-    params = args[0] if args and isinstance(args[0], dict) else {}
-    paths  = params.get("audio_paths")
-    if not paths and params.get("audio_path"):
-        paths = [params["audio_path"]]
-    if not paths:
-        return {"error": "audio_paths is required"}
-
-    return estimate_vocal_range(paths)
-
-
 def pitch_shift(args):
     """Ticket 19: shift a target song's cached audio by up to ±12 semitones
     via librosa.effects.pitch_shift, caching the result under a writable
@@ -455,6 +439,30 @@ def encrypt_model(args):
     }
 
 
+def analyze_pitch(args):
+    """Ticket 16: extract the pitch contour of a region (or the whole track)
+    and report the highest note found, for the "分析音高" button.
+    """
+    from pitch_analysis import analyze_pitch as _analyze  # noqa: PLC0415
+
+    params     = args[0] if args and isinstance(args[0], dict) else {}
+    audio_path = params.get("audio_path", None)
+    start_sec  = params.get("start_sec", None)
+    end_sec    = params.get("end_sec", None)
+
+    if not audio_path:
+        return {"error": "audio_path is required"}
+
+    try:
+        return _analyze(audio_path, start_sec, end_sec)
+    except Exception as exc:
+        # Matches the other file-processing handlers (decrypt_model, etc.):
+        # surface a clean {"error": ...} the renderer can show, instead of
+        # letting a bad/corrupt file or missing codec raise all the way out
+        # to a non-zero exit + raw Python traceback on stderr.
+        return {"error": str(exc)}
+
+
 def decrypt_model(args):
     """Decrypt a .enc model file and verify it loads into ORT (in-memory only)."""
     from model_crypto import load_encrypted_session  # noqa: PLC0415
@@ -490,7 +498,6 @@ HANDLERS = {
     "benchmark_synthesis": benchmark_synthesis,
     "separate":            separate,
     "synthesize_cover":    synthesize_cover,
-    "analyze_vocal_range": analyze_vocal_range,
     "pitch_shift":         pitch_shift,
     "export_audio":        export_audio,
     "apply_high_pitch_protection": apply_high_pitch_protection,
@@ -499,6 +506,7 @@ HANDLERS = {
     "watermark_verify":    watermark_verify,
     "encrypt_model":       encrypt_model,
     "decrypt_model":       decrypt_model,
+    "analyze_pitch":       analyze_pitch,
 }
 
 

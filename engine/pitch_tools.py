@@ -1,70 +1,23 @@
 """
-Pitch analysis + shifting — Ticket 16 (vocal pitch/range analysis) and
-Ticket 19 (Pitch Shift / Key Change Control) share this module:
+Ticket 19 (Pitch Shift / Key Change Control): shift_pitch() applies
+librosa.effects.pitch_shift to a target song's cached audio, with an
+on-disk cache keyed by (song, semitones) so re-selecting a shift already
+computed this session (or a previous one) is instant and the shifted file
+survives for later use as a training target.
 
-  - estimate_vocal_range(): librosa.pyin-based f0 tracking over one or more
-    of the user's own vocal recordings (the material uploaded in Model
-    Training), reduced to a robust [min_midi, max_midi] — the "user's vocal
-    range" Ticket 19's recommendation formula needs.
-  - shift_pitch(): librosa.effects.pitch_shift on a target song's cached
-    audio, with an on-disk cache keyed by (song, semitones) so re-selecting
-    a shift already computed this session (or a previous one) is instant
-    and the shifted file survives for later use as a training target.
+The "user's vocal range" half of Ticket 19's recommendation formula comes
+from Ticket 16's pitch analysis instead (see engine/pitch_analysis.py's
+analyze_pitch, fed the separated lead vocal stem — wired up in CoverView).
 
-Both functions import librosa lazily (main.py's handlers do the same for
-every other heavy dependency) so a process that never touches pitch
-features doesn't pay for the import.
+Imports librosa lazily (main.py's handlers do the same for every other
+heavy dependency) so a process that never touches pitch shifting doesn't
+pay for the import.
 """
 from __future__ import annotations
 
 import hashlib
 from pathlib import Path
 from typing import Optional
-
-
-def estimate_vocal_range(
-    paths: list[str],
-    fmin_hz: float = 65.0,   # ~C2 — below the lowest realistic chest voice
-    fmax_hz: float = 1_000.0,  # ~B5 — above the highest realistic falsetto/head voice
-) -> dict:
-    """
-    Robust [min_midi, max_midi] vocal range across one or more recordings.
-
-    fmin/fmax bound pyin's search to the human voice so octave errors and
-    any instrumental bleed-through in the recording can't blow the range
-    out to something unusable; the 5th/95th percentile trim on top of that
-    guards against the handful of frames pyin still gets wrong on noisy
-    home-recorded material. Files that fail to load (missing, unsupported
-    codec) are skipped rather than failing the whole analysis.
-    """
-    import numpy as np
-    import librosa
-
-    all_midi: list[float] = []
-    for p in paths:
-        try:
-            y, sr = librosa.load(p, sr=None, mono=True)
-        except Exception:
-            continue
-        if y.size == 0:
-            continue
-        f0, voiced_flag, _voiced_probs = librosa.pyin(y, sr=sr, fmin=fmin_hz, fmax=fmax_hz)
-        voiced = f0[voiced_flag & np.isfinite(f0)]
-        if voiced.size:
-            all_midi.extend(librosa.hz_to_midi(voiced).tolist())
-
-    if not all_midi:
-        return {"min_midi": None, "max_midi": None, "min_note": None, "max_note": None, "n_frames_voiced": 0}
-
-    arr = np.array(all_midi, dtype=np.float64)
-    lo, hi = (float(v) for v in np.percentile(arr, [5, 95]))
-    return {
-        "min_midi":       round(lo, 1),
-        "max_midi":       round(hi, 1),
-        "min_note":       librosa.midi_to_note(round(lo)),
-        "max_note":       librosa.midi_to_note(round(hi)),
-        "n_frames_voiced": int(arr.size),
-    }
 
 
 def shift_pitch(

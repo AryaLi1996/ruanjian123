@@ -71,6 +71,19 @@ const resources = {
         prevPage: '上一页', nextPage: '下一页', pageOf: '第 {{page}} / {{totalPages}} 页',
       },
       audioTools: { title: '音频工具', description: '批量音源分离 — 拖入文件、选择模式、全部处理。', detect: '检测设备', drop: '拖入音频文件，或点击浏览', formats: '多个文件 · WAV · FLAC · OGG', files: '{{count}} 个文件', done: '{{count}} 个完成', pending: '{{count}} 个等待', failed: '{{count}} 个失败', process: '处理 {{count}} 个', processing: '处理中…', clear: '清空', pendingStatus: '● 等待中', errorStatus: '✕ 错误', downloadAll: '全部下载（{{count}}）', standard: '标准', enhanced: '增强' },
+      // Ticket 16: pitch analysis ("分析音高") panel — waveform region selection
+      // + max-note detection, shown after vocal separation in Cover Creation.
+      pitch: {
+        title: '音高分析', analyze: '分析音高', analyzing: '分析中…',
+        selectRegionHint: '在波形上拖动以选择要分析的区域，不选择则自动分析整段音轨。',
+        loadingWaveform: '正在加载波形…',
+        wholeTrackLabel: '未选择区域 — 将分析整段音轨',
+        regionSelected: '已选区域：{{start}}s – {{end}}s', clearRegion: '清除区域',
+        wholeTrackTitle: '已分析整段音轨', wholeTrackMessage: '未选择区域，系统已自动分析整段音轨。',
+        maxDetected: '检测到最高音', suggestedThreshold: '建议高音保护阈值', avgDetected: '平均音高',
+        summary: '检测到最高音: {{maxNote}}, 建议高音保护阈值: {{thresholdNote}}',
+        noPitchDetected: '未检测到有效音高，请确认所选区域包含人声。',
+      },
       // Ticket 15: waveform display + drag-selected region editor.
       waveformEditor: {
         title: '波形编辑', description: '拖入音频文件查看波形，拖动鼠标选取片段用于后续处理。',
@@ -286,6 +299,19 @@ const resources = {
         prevPage: 'Prev', nextPage: 'Next', pageOf: 'Page {{page}} of {{totalPages}}',
       },
       audioTools: { title: 'Audio Tools', description: 'Batch source separation — drop files, choose modes, process all.', detect: 'Detect Device', drop: 'Drop audio files here, or click to browse', formats: 'Multiple files · WAV · FLAC · OGG', files: '{{count}} file(s)', done: '{{count}} done', pending: '{{count}} pending', failed: '{{count}} failed', process: 'Process {{count}}', processing: 'Processing…', clear: 'Clear', pendingStatus: '● Pending', errorStatus: '✕ Error', downloadAll: 'Download All ({{count}})', standard: 'Standard', enhanced: 'Enhanced' },
+      // Ticket 16: pitch analysis ("Analyze Pitch") panel — waveform region
+      // selection + max-note detection, shown after vocal separation in Cover Creation.
+      pitch: {
+        title: 'Pitch Analysis', analyze: 'Analyze Pitch', analyzing: 'Analyzing…',
+        selectRegionHint: 'Drag on the waveform to select a region to analyze, or leave it unselected to analyze the whole track.',
+        loadingWaveform: 'Loading waveform…',
+        wholeTrackLabel: 'No region selected — the whole track will be analyzed',
+        regionSelected: 'Selected region: {{start}}s – {{end}}s', clearRegion: 'Clear region',
+        wholeTrackTitle: 'Analyzed whole track', wholeTrackMessage: 'No region was selected, so the entire track was analyzed automatically.',
+        maxDetected: 'Detected highest note', suggestedThreshold: 'Suggested high-note protection threshold', avgDetected: 'Average pitch',
+        summary: 'Detected highest note: {{maxNote}}, suggested high-note protection threshold: {{thresholdNote}}',
+        noPitchDetected: 'No pitch detected — make sure the selected region contains vocals.',
+      },
       // Ticket 15: waveform display + drag-selected region editor.
       waveformEditor: {
         title: 'Waveform Editor', description: 'Drop an audio file to view its waveform, then drag on it to select a region for downstream processing.',
