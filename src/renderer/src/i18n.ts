@@ -27,7 +27,7 @@ const resources = {
         ready: '更新已准备安装', install: '重启并安装', available: '发现更新 {{version}}',
         downloading: '正在下载…', download: '下载',
       },
-      status: { running: '正在运行：{{method}}', idle: '引擎就绪', training: '训练中：{{mode}}', separating: '正在分离…', synthesizing: '正在合成（{{mode}}）…', saved: '已保存：{{path}}' },
+      status: { running: '正在运行：{{method}}', idle: '引擎就绪', training: '训练中：{{mode}}', separating: '正在分离…', synthesizing: '正在合成（{{mode}}）…', saved: '已保存：{{path}}', applyingHighPitchProtection: '正在应用高音保护…', highPitchProtectionApplied: '已应用模型音域，高音保护起点为D#4' },
       training: {
         title: '模型训练', description: '使用干声录音微调 AI 歌手的音色。', info: '模型信息', name: '模型名称 *', namePlaceholder: '例如：我的歌手', epochs: '训练轮数', material: '训练素材', noFiles: '未上传文件，将使用演示数据。', mode: '训练模式', start: '开始本地训练', training: '训练中…', complete: '✓ 训练完成', finalizing: '正在收尾…', finalizingDesc: '训练已完成，正在生成试听音频并保存模型。', audition: '试听', trainAnother: '训练另一个模型', models: '我的模型（{{count}}）', demo: '试听', retrain: '重新训练', delete: '删除', standard: '标准', professional: '专业', gpu: 'GPU', cpu: 'CPU', vram: '显存', epoch: '第 {{current}}/{{total}} 轮', loss: '损失 {{value}}', eta: '预计剩余 {{value}}', waiting: '等待引擎…', materialHint: '拖入干净的人声录音。', standardTagline: 'LoRA rank-4 · 仅训练音色编码器', professionalTagline: 'LoRA+ rank-8 · 全层训练 · 梯度检查点', dropAudio: '拖入音频文件，或点击浏览', audioFormats: 'WAV · FLAC · MP3 · OGG · M4A', fileCount: '{{count}} 个文件', totalDuration: '共 {{duration}}', clearAll: '全部清除', removeFile: '移除文件', loadingWaveform: '正在加载波形…', waveform: '波形', play: '播放', pause: '暂停', volume: '音量', noDemo: '暂无演示音频', lossLabel: '损失：{{value}}', pro: '专业', trainingGpu: 'GPU', trainingCpu: 'CPU', trainingVram: '显存', qualityLow: '音质较低',
       },
@@ -46,6 +46,14 @@ const resources = {
         exportResult: '已导出：{{path}}\n大小：{{size}} MB · 时长：{{duration}}',
         exportNeedsMix: '请先完成合成与混音步骤。',
         workflowSteps: '工作流程步骤',
+        // Ticket 17: high-pitch protection (强制修音).
+        highPitchProtection: '高音保护',
+        highPitchProtectionThreshold: '高音保护起点为D#4',
+        highPitchProtectionApply: '应用高音保护',
+        highPitchProtectionApplying: '正在应用高音保护…',
+        highPitchProtectionInfo: '已修正 {{count}} 处高音（约 {{percent}}% 时长）',
+        highPitchProtectionLegend: '红色区域为强制修音修正范围',
+        highPitchProtectionNone: '未检测到超出 D#4 的高音，无需修正。',
         // Ticket 18: Cloud Library (云曲库) integration.
         openLibrary: '☁️ 从云曲库选择', targetSongLabel: '当前目标歌曲：{{title}} - {{artist}}',
         clearTargetSong: '清除', unknownArtist: '未知艺术家',
@@ -148,6 +156,10 @@ const resources = {
           complete: { title: '合成完成', message: '翻唱合成已完成（{{mode}}）。' },
           failed:   { title: '合成失败', message: '翻唱合成未能完成：{{message}}' },
         },
+        highPitchProtection: {
+          complete: { title: '高音保护已应用', message: '已修正 {{count}} 处高音，高音保护起点为 D#4。' },
+          failed:   { title: '高音保护失败', message: '高音保护未能完成：{{message}}' },
+        },
         trial: {
           activated:     { title: '试用已激活', message: '你的免费试用已开始，尽情体验全部功能吧。' },
           expiringSoon:  { title: '试用即将到期', message: '试用剩余 {{hours}} 小时，订阅以继续使用。' },
@@ -233,7 +245,7 @@ const resources = {
       nav: { training: 'Model Training', cover: 'Cover Creation', audioTools: 'Audio Tools', waveform: 'Waveform Editor', playback: 'Playback / Monitor', subscription: 'Subscription' },
       common: { loading: 'Loading…', cancel: 'Cancel', retry: 'Retry', reset: 'Reset', refresh: 'Refresh', activate: 'Activate', deactivate: 'Deactivate', download: 'Download', error: 'Error', done: 'Done', unavailable: 'Unavailable' },
       updater: { ready: 'Update ready to install', install: 'Restart & Install', available: 'Update {{version}} available', downloading: 'Downloading…', download: 'Download' },
-      status: { running: 'Running: {{method}}', idle: 'Engine ready', training: 'Training: {{mode}}', separating: 'Separating…', synthesizing: 'Synthesizing ({{mode}})…', saved: 'Saved: {{path}}' },
+      status: { running: 'Running: {{method}}', idle: 'Engine ready', training: 'Training: {{mode}}', separating: 'Separating…', synthesizing: 'Synthesizing ({{mode}})…', saved: 'Saved: {{path}}', applyingHighPitchProtection: 'Applying high-pitch protection…', highPitchProtectionApplied: 'Model vocal range applied — high-pitch protection starts at D#4' },
       training: { title: 'Model Training', description: 'Fine-tune the AI singer\'s timbre using dry vocal recordings.', info: 'Model Info', name: 'Model name *', namePlaceholder: 'e.g. My Singer', epochs: 'Epochs', material: 'Training Material', noFiles: 'No files uploaded; synthetic demo data will be used.', mode: 'Training Mode', start: 'Start Local Training', training: 'Training…', complete: '✓ Training Complete', finalizing: 'Finalizing…', finalizingDesc: 'Training finished. Generating the demo clip and saving the model.', audition: 'Audition', trainAnother: 'Train Another Model', models: 'Your Models ({{count}})', demo: 'Demo', retrain: 'Retrain', delete: 'Delete', standard: 'Standard', professional: 'Professional', gpu: 'GPU', cpu: 'CPU', vram: 'VRAM', epoch: 'Epoch {{current}}/{{total}}', loss: 'Loss {{value}}', eta: 'ETA {{value}}', waiting: 'Waiting for engine…', materialHint: 'Drop clean vocal recordings here.', standardTagline: 'LoRA rank-4 · timbre encoder only', professionalTagline: 'LoRA+ rank-8 · all layers · gradient checkpointing', dropAudio: 'Drop audio files here, or click to browse', audioFormats: 'WAV · FLAC · MP3 · OGG · M4A', fileCount: '{{count}} file(s)', totalDuration: '{{duration}} total', clearAll: 'Clear all', removeFile: 'Remove file', loadingWaveform: 'Loading waveform…', waveform: 'waveform', play: 'Play', pause: 'Pause', volume: 'Volume', noDemo: 'No demo available', lossLabel: 'Loss: {{value}}', pro: 'Pro', trainingGpu: 'GPU', trainingCpu: 'CPU', trainingVram: 'VRAM', qualityLow: 'Quality may be low' },
       cover: { title: 'Cover Creation', description: 'Upload → Separate → Synthesize → Mix → Export', upload: 'Upload & Separate', song: 'Song file (WAV / FLAC / MP3)', chooseSong: 'Click to choose a song', separationMode: 'Separation mode', standard: 'Standard', enhanced: 'Enhanced', standardStems: '2 stems — vocals + accompaniment', enhancedStems: '3 stems — lead · harmony · accompaniment', startSeparation: 'Start Separation', separating: 'Separating…', stems: 'Stems — click Solo to preview', nextModel: 'Next: Select Model →', selectModel: 'Select AI Singer Model', noModels: 'No models trained yet. Go to Model Training first.', algorithm: 'Cover algorithm', v1: 'V1 — Fast', v2: 'V2 — High-Precision', v1Tagline: 'DTW + WSOLA · ≤10% real-time', v2Tagline: 'LSTM expression encoder · ≤50% RT', synthesize: 'Synthesize Cover', synthesizing: 'Synthesizing…', nextSynthesize: 'Next: Synthesize →', mix: 'Synthesize & Mix', mixer: 'Mixing Console', export: 'Next: Export →', exportTitle: 'Export Audio',
         errUploadFirst: 'Please upload a song first.', errSelectModel: 'Select a model first.', errRunSeparation: 'Run separation first.',
@@ -249,6 +261,14 @@ const resources = {
         exportResult: 'Exported: {{path}}\nSize: {{size}} MB · Duration: {{duration}}',
         exportNeedsMix: 'Complete the mixing step first.',
         workflowSteps: 'Workflow steps',
+        // Ticket 17: high-pitch protection (forced auto-tune / 强制修音).
+        highPitchProtection: 'High-Pitch Protection',
+        highPitchProtectionThreshold: 'High-pitch protection starts at D#4',
+        highPitchProtectionApply: 'Apply High-Pitch Protection',
+        highPitchProtectionApplying: 'Applying high-pitch protection…',
+        highPitchProtectionInfo: 'Corrected {{count}} high-pitch region(s) (~{{percent}}% of duration)',
+        highPitchProtectionLegend: 'Red regions were corrected by forced auto-tune',
+        highPitchProtectionNone: 'No pitch above D#4 detected — nothing to correct.',
         // Ticket 18: Cloud Library integration.
         openLibrary: '☁️ Choose from Cloud Library', targetSongLabel: 'Target song: {{title}} - {{artist}}',
         clearTargetSong: 'Clear', unknownArtist: 'Unknown Artist',
@@ -348,6 +368,10 @@ const resources = {
         synthesis: {
           complete: { title: 'Synthesis Complete', message: 'Cover synthesis finished ({{mode}}).' },
           failed:   { title: 'Synthesis Failed', message: 'Cover synthesis did not complete: {{message}}' },
+        },
+        highPitchProtection: {
+          complete: { title: 'High-Pitch Protection Applied', message: 'Corrected {{count}} high-pitch region(s); protection starts at D#4.' },
+          failed:   { title: 'High-Pitch Protection Failed', message: 'High-pitch protection did not complete: {{message}}' },
         },
         trial: {
           activated:    { title: 'Trial Activated', message: 'Your free trial has started — enjoy full access.' },
