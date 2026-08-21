@@ -7,6 +7,8 @@ import { StemPlayer, type StemTrack } from '../components/cover/StemPlayer'
 import { MixingConsole, type MixTrack } from '../components/cover/MixingConsole'
 import { ExportPanel } from '../components/cover/ExportPanel'
 import { HighPitchProtection } from '../components/cover/HighPitchProtection'
+import { CloudLibraryModal } from '../components/library/CloudLibraryModal'
+import type { LibrarySong } from '../global'
 
 type SepMode  = 'standard' | 'enhanced'
 type AlgoVer  = 'v1' | 'v2'
@@ -23,6 +25,10 @@ export function CoverView(): JSX.Element {
   const trainedModels = useAppStore((s) => s.trainedModels)
   const setEngineBusy  = useAppStore((s) => s.setEngineBusy)
   const setEngineStatus = useAppStore((s) => s.setEngineStatus)
+  // Ticket 18: the 云曲库-selected song, if any — see useAppStore's TargetSong.
+  const targetSong    = useAppStore((s) => s.targetSong)
+  const setTargetSong = useAppStore((s) => s.setTargetSong)
+  const [libraryOpen, setLibraryOpen] = useState(false)
 
   // ── Wizard state ─────────────────────────────────────────
   const [step,      setStep]      = useState(1)
@@ -57,15 +63,18 @@ export function CoverView(): JSX.Element {
   // Step 1: upload + separate
   // ─────────────────────────────────────────────────────────
   async function handleSeparate(): Promise<void> {
-    if (!songFile) { setSepError(t('cover.errUploadFirst')); return }
+    if (!songFile && !targetSong) { setSepError(t('cover.errUploadFirst')); return }
     setSepError(null); setSeparating(true)
     setEngineBusy(true); setEngineStatus(t('status.separating'))
     try {
-      const dir = await window.engine.saveTrainingFiles([{
-        name: songFile.name,
-        buffer: await songFile.arrayBuffer(),
-      }])
-      const inputPath = `${dir}/${songFile.name}`
+      // A local upload and a 云曲库 selection are mutually exclusive (each
+      // clears the other — see handleLibrarySelect and the file input's
+      // onChange below), so at most one of these branches applies. The
+      // library song's audio is already a local, cached file — see
+      // main/library.ts's fetchLibraryAudio — so it needs no upload step.
+      const inputPath = songFile
+        ? `${await window.engine.saveTrainingFiles([{ name: songFile.name, buffer: await songFile.arrayBuffer() }])}/${songFile.name}`
+        : targetSong!.audioPath
       const res = await window.engine.call('separate', {
         mode:       sepMode,
         input_path: inputPath,
@@ -92,6 +101,21 @@ export function CoverView(): JSX.Element {
     } finally {
       setSeparating(false); setEngineBusy(false); setEngineStatus(t('status.idle'))
     }
+  }
+
+  // ─────────────────────────────────────────────────────────
+  // Cloud Library (云曲库) selection — Ticket 18
+  // ─────────────────────────────────────────────────────────
+  function handleLibrarySelect(song: LibrarySong, audioPath: string): void {
+    setSongFile(null)   // mutually exclusive with a local upload — see handleSeparate
+    setTargetSong({
+      id:          song.id,
+      title:       song.title,
+      artist:      song.artist,
+      originalKey: song.original_key,
+      audioPath,
+    })
+    setLibraryOpen(false)
   }
 
   // ─────────────────────────────────────────────────────────
@@ -180,6 +204,19 @@ export function CoverView(): JSX.Element {
         <p className="view-desc">{t('cover.description')}</p>
       </div>
 
+      {/* Ticket 18: the 云曲库-selected target song, shown prominently in the
+          main workspace and persisted (via useAppStore) until changed. */}
+      {targetSong && (
+        <div className="target-song-banner">
+          <span className="target-song-banner-text">
+            🎯 {t('cover.targetSongLabel', { title: targetSong.title, artist: targetSong.artist || t('cover.unknownArtist') })}
+          </span>
+          <button className="btn btn-ghost pbm-mini-btn" onClick={() => setTargetSong(null)}>
+            {t('cover.clearTargetSong')}
+          </button>
+        </div>
+      )}
+
       <StepWizard current={step} completed={completed} onNavigate={setStep} />
 
       {/* ── Step 1 ────────────────────────────────────────── */}
@@ -189,14 +226,24 @@ export function CoverView(): JSX.Element {
 
           <div className="field">
             <label>{t('cover.song')}</label>
-            <div className="song-drop" onClick={() => document.getElementById('song-input')?.click()}>
-              <input
-                id="song-input" type="file" accept="audio/*" style={{ display: 'none' }}
-                onChange={(e) => { const f = e.target.files?.[0]; if (f) setSongFile(f) }}
-              />
-              {songFile
-                ? <span style={{ color: 'var(--text)' }}>🎵 {songFile.name}</span>
-                : <span style={{ color: 'var(--text-muted)' }}>{t('cover.chooseSong')}</span>}
+            <div className="row" style={{ gap: 8 }}>
+              <div className="song-drop" style={{ flex: 1 }} onClick={() => document.getElementById('song-input')?.click()}>
+                <input
+                  id="song-input" type="file" accept="audio/*" style={{ display: 'none' }}
+                  onChange={(e) => {
+                    const f = e.target.files?.[0]
+                    if (f) { setSongFile(f); setTargetSong(null) }   // local upload wins over any 云曲库 selection
+                  }}
+                />
+                {songFile
+                  ? <span style={{ color: 'var(--text)' }}>🎵 {songFile.name}</span>
+                  : targetSong
+                    ? <span style={{ color: 'var(--text)' }}>☁️ {targetSong.title} - {targetSong.artist}</span>
+                    : <span style={{ color: 'var(--text-muted)' }}>{t('cover.chooseSong')}</span>}
+              </div>
+              <button type="button" className="btn btn-ghost" onClick={() => setLibraryOpen(true)}>
+                {t('cover.openLibrary')}
+              </button>
             </div>
           </div>
 
@@ -358,6 +405,13 @@ export function CoverView(): JSX.Element {
             sampleRate={44_100}
           />
         </div>
+      )}
+
+      {libraryOpen && (
+        <CloudLibraryModal
+          onClose={() => setLibraryOpen(false)}
+          onSelect={handleLibrarySelect}
+        />
       )}
     </>
   )

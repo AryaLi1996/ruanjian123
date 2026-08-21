@@ -17,7 +17,7 @@ const resources = {
         sloganZh: '让每个声音，都舒服入耳', sloganEn: 'Every voice, soothing to the ear.',
       },
       language: { label: '语言', zh: '简体中文', en: 'English' },
-      nav: { training: '模型训练', cover: '翻唱创作', audioTools: '音频工具', playback: '播放/监听', subscription: '订阅' },
+      nav: { training: '模型训练', cover: '翻唱创作', audioTools: '音频工具', waveform: '波形编辑', playback: '播放/监听', subscription: '订阅' },
       common: {
         loading: '加载中…', cancel: '取消', retry: '重试', reset: '重置', refresh: '刷新',
         activate: '激活', deactivate: '停用', download: '下载', error: '错误', done: '完成',
@@ -54,8 +54,28 @@ const resources = {
         highPitchProtectionInfo: '已修正 {{count}} 处高音（约 {{percent}}% 时长）',
         highPitchProtectionLegend: '红色区域为强制修音修正范围',
         highPitchProtectionNone: '未检测到超出 D#4 的高音，无需修正。',
+        // Ticket 18: Cloud Library (云曲库) integration.
+        openLibrary: '☁️ 从云曲库选择', targetSongLabel: '当前目标歌曲：{{title}} - {{artist}}',
+        clearTargetSong: '清除', unknownArtist: '未知艺术家',
+      },
+      // Ticket 18: Cloud Library (云曲库) search modal.
+      library: {
+        title: '云曲库', close: '关闭', searchPlaceholder: '搜索歌曲或歌手',
+        searching: '搜索中…', searchError: '搜索失败，请检查网络连接后重试',
+        noResults: '未找到结果', emptyPrompt: '输入关键词开始搜索',
+        select: '选择', downloading: '下载中…',
+        prevPage: '上一页', nextPage: '下一页', pageOf: '第 {{page}} / {{totalPages}} 页',
       },
       audioTools: { title: '音频工具', description: '批量音源分离 — 拖入文件、选择模式、全部处理。', detect: '检测设备', drop: '拖入音频文件，或点击浏览', formats: '多个文件 · WAV · FLAC · OGG', files: '{{count}} 个文件', done: '{{count}} 个完成', pending: '{{count}} 个等待', failed: '{{count}} 个失败', process: '处理 {{count}} 个', processing: '处理中…', clear: '清空', pendingStatus: '● 等待中', errorStatus: '✕ 错误', downloadAll: '全部下载（{{count}}）', standard: '标准', enhanced: '增强' },
+      // Ticket 15: waveform display + drag-selected region editor.
+      waveformEditor: {
+        title: '波形编辑', description: '拖入音频文件查看波形，拖动鼠标选取片段用于后续处理。',
+        drop: '拖入 WAV / MP3 文件，或点击浏览', formats: 'WAV · MP3',
+        unsupportedFormat: '不支持的文件格式，请使用 WAV 或 MP3。',
+        play: '播放', pause: '暂停', stop: '停止',
+        loopSelection: '循环播放选区', clearSelection: '清除选区',
+        selectionInfo: '选区：{{start}} – {{end}}（时长 {{dur}}）',
+      },
       // Automatic lyrics recognition status copy (Ticket 43 §6) — shown in the
       // Playback/Monitor lyrics panel while/after an automatic online match runs.
       lyrics: {
@@ -218,7 +238,7 @@ const resources = {
         sloganZh: '让每个声音，都舒服入耳', sloganEn: 'Every voice, soothing to the ear.',
       },
       language: { label: 'Language', zh: '简体中文', en: 'English' },
-      nav: { training: 'Model Training', cover: 'Cover Creation', audioTools: 'Audio Tools', playback: 'Playback / Monitor', subscription: 'Subscription' },
+      nav: { training: 'Model Training', cover: 'Cover Creation', audioTools: 'Audio Tools', waveform: 'Waveform Editor', playback: 'Playback / Monitor', subscription: 'Subscription' },
       common: { loading: 'Loading…', cancel: 'Cancel', retry: 'Retry', reset: 'Reset', refresh: 'Refresh', activate: 'Activate', deactivate: 'Deactivate', download: 'Download', error: 'Error', done: 'Done', unavailable: 'Unavailable' },
       updater: { ready: 'Update ready to install', install: 'Restart & Install', available: 'Update {{version}} available', downloading: 'Downloading…', download: 'Download' },
       status: { running: 'Running: {{method}}', idle: 'Engine ready', training: 'Training: {{mode}}', separating: 'Separating…', synthesizing: 'Synthesizing ({{mode}})…', saved: 'Saved: {{path}}', applyingHighPitchProtection: 'Applying high-pitch protection…', highPitchProtectionApplied: 'Model vocal range applied — high-pitch protection starts at D#4' },
@@ -245,8 +265,28 @@ const resources = {
         highPitchProtectionInfo: 'Corrected {{count}} high-pitch region(s) (~{{percent}}% of duration)',
         highPitchProtectionLegend: 'Red regions were corrected by forced auto-tune',
         highPitchProtectionNone: 'No pitch above D#4 detected — nothing to correct.',
+        // Ticket 18: Cloud Library integration.
+        openLibrary: '☁️ Choose from Cloud Library', targetSongLabel: 'Target song: {{title}} - {{artist}}',
+        clearTargetSong: 'Clear', unknownArtist: 'Unknown Artist',
+      },
+      // Ticket 18: Cloud Library search modal.
+      library: {
+        title: 'Cloud Library', close: 'Close', searchPlaceholder: 'Search songs or artists',
+        searching: 'Searching…', searchError: 'Search failed — check your connection and try again',
+        noResults: 'No results found', emptyPrompt: 'Type a keyword to start searching',
+        select: 'Select', downloading: 'Downloading…',
+        prevPage: 'Prev', nextPage: 'Next', pageOf: 'Page {{page}} of {{totalPages}}',
       },
       audioTools: { title: 'Audio Tools', description: 'Batch source separation — drop files, choose modes, process all.', detect: 'Detect Device', drop: 'Drop audio files here, or click to browse', formats: 'Multiple files · WAV · FLAC · OGG', files: '{{count}} file(s)', done: '{{count}} done', pending: '{{count}} pending', failed: '{{count}} failed', process: 'Process {{count}}', processing: 'Processing…', clear: 'Clear', pendingStatus: '● Pending', errorStatus: '✕ Error', downloadAll: 'Download All ({{count}})', standard: 'Standard', enhanced: 'Enhanced' },
+      // Ticket 15: waveform display + drag-selected region editor.
+      waveformEditor: {
+        title: 'Waveform Editor', description: 'Drop an audio file to view its waveform, then drag on it to select a region for downstream processing.',
+        drop: 'Drop a WAV / MP3 file here, or click to browse', formats: 'WAV · MP3',
+        unsupportedFormat: 'Unsupported file format — please use WAV or MP3.',
+        play: 'Play', pause: 'Pause', stop: 'Stop',
+        loopSelection: 'Loop selection', clearSelection: 'Clear selection',
+        selectionInfo: 'Selection: {{start}} – {{end}} ({{dur}})',
+      },
       lyrics: {
         auto: {
           searching: 'Searching lyrics…',

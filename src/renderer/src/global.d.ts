@@ -20,6 +20,24 @@ export interface PersistedModel {
   qualityWarning?: string | null
 }
 
+// Cloud Library (云曲库) — Ticket 18. Mirrors main/library.ts's LibrarySong /
+// LibrarySearchResult (renderer and main are separate TS programs — see
+// PersistedModel above for why this file keeps its own copy).
+export interface LibrarySong {
+  id:            string
+  title:         string
+  artist:        string
+  original_key:  string | null
+  audio_url:     string
+}
+export interface LibrarySearchResult {
+  results:  LibrarySong[]
+  page:     number
+  pageSize: number
+  total:    number
+  hasMore:  boolean
+}
+
 interface WarmupResult {
   passed:     boolean
   ep?:        string
@@ -70,6 +88,8 @@ declare global {
       // lyricsCacheKey(); durable copy lives at userData/lyrics-cache.json (main/lyrics-cache.ts).
       lyricsCacheLoad: () => Promise<Record<string, { raw: string; source: string; cachedAt: number }>>
       lyricsCacheSave: (cache: Record<string, { raw: string; source: string; cachedAt: number }>) => Promise<void>
+      searchLibrary:     (keyword: string, page?: number, pageSize?: number) => Promise<LibrarySearchResult>
+      fetchLibraryAudio: (song: LibrarySong) => Promise<{ path: string; cached: boolean }>
       logRendererError:  (payload: unknown) => Promise<void>
       showInFolder:      (filePath: string) => Promise<void>
       encryptModel:      (modelPath: string) => Promise<{ encPath: string; sizeBytes: number }>
