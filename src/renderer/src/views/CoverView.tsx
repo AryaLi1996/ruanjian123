@@ -6,6 +6,7 @@ import { StepWizard } from '../components/cover/StepWizard'
 import { StemPlayer, type StemTrack } from '../components/cover/StemPlayer'
 import { MixingConsole, type MixTrack } from '../components/cover/MixingConsole'
 import { ExportPanel } from '../components/cover/ExportPanel'
+import { PitchAnalysisPanel } from '../components/cover/PitchAnalysisPanel'
 import { HighPitchProtection } from '../components/cover/HighPitchProtection'
 import { CloudLibraryModal } from '../components/library/CloudLibraryModal'
 import type { LibrarySong } from '../global'
@@ -197,6 +198,19 @@ export function CoverView(): JSX.Element {
 
   const selectedModel = trainedModels.find((m) => m.id === selectedModelId)
 
+  // Ticket 16: prefer the driest lead vocal available for pitch analysis —
+  // same fallback chain used to pick the reference vocal for synthesis.
+  // Label mirrors whichever key the path actually came from (not just the
+  // first two candidates) so the panel never claims to be analyzing
+  // "Vocals" when it fell back to some other stem.
+  const pitchStemKey = sepResult
+    ? (['lead_dry', 'vocals'].find((k) => sepResult.stems[k]) ?? Object.keys(sepResult.stems)[0])
+    : null
+  const pitchStemPath  = pitchStemKey && sepResult ? sepResult.stems[pitchStemKey] : null
+  const pitchStemLabel = pitchStemKey
+    ? stemTracks.find((s) => s.key === pitchStemKey)?.label ?? pitchStemKey
+    : ''
+
   return (
     <>
       <div className="view-header">
@@ -276,6 +290,11 @@ export function CoverView(): JSX.Element {
             <div style={{ marginTop: 20 }}>
               <div className="card-title">{t('cover.stems')}</div>
               <StemPlayer stems={stemTracks} />
+              {pitchStemPath && (
+                <div style={{ marginTop: 16 }}>
+                  <PitchAnalysisPanel audioPath={pitchStemPath} label={pitchStemLabel} />
+                </div>
+              )}
               <button className="btn btn-primary" style={{ marginTop: 16 }}
                 onClick={() => complete(1, 2)}>
                 {t('cover.nextModel')}
