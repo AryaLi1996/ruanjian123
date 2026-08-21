@@ -14,6 +14,12 @@ export interface TrainedModel {
                                  // regenerate demoAudioUrl on demand after a restart
   epochs:        number
   bestLoss:      number
+  // Ticket 48: SI-SNR-based proxy (0-1) for how faithfully this model
+  // reproduces its training material, plus the plain-language warning
+  // shown when it's low. Optional so models saved before this ticket keep
+  // loading without either field.
+  qualityScore?:   number
+  qualityWarning?: string | null
 }
 
 interface AppState {

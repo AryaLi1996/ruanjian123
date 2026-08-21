@@ -22,6 +22,7 @@ from numpy.lib.stride_tricks import sliding_window_view
 from onnx import TensorProto, helper, numpy_helper
 
 from device_detector import detect_device, ordered_providers_for_ep
+from postprocess import postprocess_chain
 from synthesizer import Synthesizer, SAMPLE_RATE as SYNTH_SR, HOP_SIZE as SYNTH_HOP
 
 # ── Module constants ──────────────────────────────────────────────────────────
@@ -477,6 +478,7 @@ class CoverResult(TypedDict):
                              # alignment/synthesis) — see synthesize_cover().
     rt_ratio:        float
     vibrato_depth:   float
+    noise_reduction_db: float  # Ticket 48 §4: dB of hiss removed by postprocess_chain
     passed:          bool
 
 
@@ -556,6 +558,7 @@ def synthesize_cover(
 
     t0 = time.perf_counter()
     vib_depth = 0.0
+    noise_reduction_db = 0.0
     ai_voice_stereo: np.ndarray  # [2, N] at SR — set in each branch below
 
     if mode == "v1":
@@ -577,6 +580,14 @@ def synthesize_cover(
                             np.linspace(0, len(retimed) - 1, len(ai_feat["rms"])),
                             ai_feat["rms"]) + 1e-8
         retimed = (retimed * env_ref / env_ai * 0.9).astype(np.float32)
+
+        # Ticket 48 §4: WSOLA seams and the formant-synthesis source both
+        # leave broadband hiss/artifacts in the retimed voice — run the
+        # denoise → deess → compress → normalize chain before it's mixed
+        # and saved as the AI vocal stem.
+        pp = postprocess_chain(retimed, SR)
+        retimed = pp["audio"]
+        noise_reduction_db = pp["noise_reduction_db"]
 
         ai_voice_stereo = np.stack([retimed, retimed])   # mono → stereo
         N   = min(len(retimed), acc_stereo.shape[1])
@@ -602,6 +613,14 @@ def synthesize_cover(
         energy_scale = (10.0 ** (energy_db * 0.3)) * (dyn_ref / (dyn_ref.max() + 1e-8))
         vibrato_env  = 1.0 + vib_d * np.sin(2.0 * np.pi * vib_hz * t_arr)
         noise        = np.random.default_rng(0).standard_normal(len(ai_mono)).astype(np.float32)
+        # Ticket 48 §3/§5: real breath noise is weighted toward higher
+        # frequencies, not flat across the spectrum — injecting raw white
+        # noise here is exactly the broadband "hiss" users report from V2.
+        # A first-difference is a cheap one-pole high-pass (same technique
+        # separation.py's dereverb pre-emphasis kernel uses) that removes
+        # the noise's low-frequency/rumble content before it's scaled in.
+        noise = np.diff(noise, prepend=noise[0]).astype(np.float32)
+        noise = noise / (np.std(noise) + 1e-8)  # renormalise after differencing
         voiced_env   = np.interp(np.arange(len(ai_mono)),
                                  np.linspace(0, len(ai_mono) - 1, T_ref),
                                  (ref_feats["f0"][:T_ref] > 0).astype(np.float32))
@@ -609,6 +628,11 @@ def synthesize_cover(
                     + noise * breathiness * energy_scale * (1.0 - voiced_env * 0.5))
         pk       = np.max(np.abs(out_mono)) + 1e-8
         out_mono = (out_mono / pk * 0.9).astype(np.float32)
+
+        # Same enhancement chain as V1 — see comment there.
+        pp = postprocess_chain(out_mono, SR)
+        out_mono = pp["audio"]
+        noise_reduction_db = pp["noise_reduction_db"]
 
         ai_voice_stereo = np.stack([out_mono, out_mono])
         N   = min(len(out_mono), acc_stereo.shape[1])
@@ -640,5 +664,6 @@ def synthesize_cover(
         model_load_sec=round(model_load_sec, 3),
         rt_ratio=round(rt_ratio, 4),
         vibrato_depth=round(vib_depth, 6),
+        noise_reduction_db=round(noise_reduction_db, 2),
         passed=bool(rt_ratio <= rt_limit),
     )
