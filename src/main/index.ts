@@ -9,6 +9,7 @@ import { SubscriptionMonitor } from './subscription-monitor'
 import { LICENSE_CONFIG, usingDefaultSigningSecret } from './license-config'
 import { loadModels, saveModels, type PersistedModel } from './model-registry'
 import { loadLyricsCache, saveLyricsCache, type LyricsCache } from './lyrics-cache'
+import { searchLibrary, fetchLibraryAudio, type LibrarySong } from './library'
 import {
   saveBackground, saveBackgroundMeta, loadBackground, loadBackgroundSource, removeBackground,
   type SaveBackgroundPayload, type BackgroundMeta,
@@ -581,6 +582,20 @@ ipcMain.handle(
       clearTimeout(timeout)
     }
   },
+)
+
+// ── Cloud Library (云曲库) search + audio caching (Ticket 18) ──────────────
+// See library.ts — search proxies through main for the same CSP reason as
+// lyrics:search above; fetch-audio downloads (or reuses a cached copy of)
+// the selected song's full audio so Cover Creation has a local file to feed
+// into separation as the "目标音频".
+ipcMain.handle(
+  'library:search',
+  (_event, keyword: string, page?: number, pageSize?: number) => searchLibrary(keyword, page, pageSize),
+)
+ipcMain.handle(
+  'library:fetch-audio',
+  (_event, song: LibrarySong) => fetchLibraryAudio(song),
 )
 
 // Save a recorded WAV clip to a user-selected location (Playback/Monitor page).

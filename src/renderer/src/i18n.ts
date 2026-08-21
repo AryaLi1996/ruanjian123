@@ -46,6 +46,17 @@ const resources = {
         exportResult: '已导出：{{path}}\n大小：{{size}} MB · 时长：{{duration}}',
         exportNeedsMix: '请先完成合成与混音步骤。',
         workflowSteps: '工作流程步骤',
+        // Ticket 18: Cloud Library (云曲库) integration.
+        openLibrary: '☁️ 从云曲库选择', targetSongLabel: '当前目标歌曲：{{title}} - {{artist}}',
+        clearTargetSong: '清除', unknownArtist: '未知艺术家',
+      },
+      // Ticket 18: Cloud Library (云曲库) search modal.
+      library: {
+        title: '云曲库', close: '关闭', searchPlaceholder: '搜索歌曲或歌手',
+        searching: '搜索中…', searchError: '搜索失败，请检查网络连接后重试',
+        noResults: '未找到结果', emptyPrompt: '输入关键词开始搜索',
+        select: '选择', downloading: '下载中…',
+        prevPage: '上一页', nextPage: '下一页', pageOf: '第 {{page}} / {{totalPages}} 页',
       },
       audioTools: { title: '音频工具', description: '批量音源分离 — 拖入文件、选择模式、全部处理。', detect: '检测设备', drop: '拖入音频文件，或点击浏览', formats: '多个文件 · WAV · FLAC · OGG', files: '{{count}} 个文件', done: '{{count}} 个完成', pending: '{{count}} 个等待', failed: '{{count}} 个失败', process: '处理 {{count}} 个', processing: '处理中…', clear: '清空', pendingStatus: '● 等待中', errorStatus: '✕ 错误', downloadAll: '全部下载（{{count}}）', standard: '标准', enhanced: '增强' },
       // Automatic lyrics recognition status copy (Ticket 43 §6) — shown in the
@@ -225,6 +236,17 @@ const resources = {
         exportResult: 'Exported: {{path}}\nSize: {{size}} MB · Duration: {{duration}}',
         exportNeedsMix: 'Complete the mixing step first.',
         workflowSteps: 'Workflow steps',
+        // Ticket 18: Cloud Library integration.
+        openLibrary: '☁️ Choose from Cloud Library', targetSongLabel: 'Target song: {{title}} - {{artist}}',
+        clearTargetSong: 'Clear', unknownArtist: 'Unknown Artist',
+      },
+      // Ticket 18: Cloud Library search modal.
+      library: {
+        title: 'Cloud Library', close: 'Close', searchPlaceholder: 'Search songs or artists',
+        searching: 'Searching…', searchError: 'Search failed — check your connection and try again',
+        noResults: 'No results found', emptyPrompt: 'Type a keyword to start searching',
+        select: 'Select', downloading: 'Downloading…',
+        prevPage: 'Prev', nextPage: 'Next', pageOf: 'Page {{page}} of {{totalPages}}',
       },
       audioTools: { title: 'Audio Tools', description: 'Batch source separation — drop files, choose modes, process all.', detect: 'Detect Device', drop: 'Drop audio files here, or click to browse', formats: 'Multiple files · WAV · FLAC · OGG', files: '{{count}} file(s)', done: '{{count}} done', pending: '{{count}} pending', failed: '{{count}} failed', process: 'Process {{count}}', processing: 'Processing…', clear: 'Clear', pendingStatus: '● Pending', errorStatus: '✕ Error', downloadAll: 'Download All ({{count}})', standard: 'Standard', enhanced: 'Enhanced' },
       lyrics: {
