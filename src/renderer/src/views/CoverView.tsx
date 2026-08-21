@@ -115,8 +115,18 @@ export function CoverView(): JSX.Element {
         accompaniment: acc,
       }) as CoverResult
 
+      // Ticket 45: don't auto-advance to the export step here. Doing so used
+      // to skip straight from "synthesizing" to step 4 in the same update
+      // that set coverResult, so the mixer (step 3's `coverResult && (...)`
+      // branch, which mounts <MixingConsole> and is the only place that
+      // calls onExportRequest to register the render function) never got a
+      // chance to mount. renderMixRef.current stayed null forever, so the
+      // export button stayed disabled and "请先完成合成与混音步骤" showed no
+      // matter how complete synthesis actually was. Stay on step 3 so the
+      // mixer renders; the user (or the mixer's own "proceed" button) is
+      // what should trigger the move to step 4, once mixing is registered.
       setCoverResult(res)
-      complete(3, 4)
+      setCompleted((s) => new Set([...s, 3]))
       notify({
         category: 'taskCompletion',
         titleKey: 'notification.synthesis.complete.title',
@@ -313,8 +323,13 @@ export function CoverView(): JSX.Element {
                   onExportRequest={onExportRequest}
                 />
               )}
+              {/* Guard against the (rare) case where there's nothing to mix:
+                  <MixingConsole> only mounts — and only then registers the
+                  render function export needs — when mixTracks is non-empty.
+                  Without this guard the button below would still let the
+                  user "proceed" into a step 4 that can never export. */}
               <button className="btn btn-primary" style={{ marginTop: 16 }}
-                onClick={() => complete(3, 4)}>
+                onClick={() => complete(3, 4)} disabled={mixTracks.length === 0}>
                 {t('cover.export')}
               </button>
             </>
