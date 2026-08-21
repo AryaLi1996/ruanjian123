@@ -331,6 +331,23 @@ def train_model(args):
     return {k: (bool(v) if isinstance(v, (bool,)) else v) for k, v in result.items()}
 
 
+def apply_high_pitch_protection(args):
+    """Ticket 17: clamp vocal pitch above the D#4 (MIDI 63) threshold down
+    to exactly that note, returning the corrected regions for UI highlighting."""
+    from pitch_protection import apply_high_pitch_protection as _protect  # noqa: PLC0415
+
+    params         = args[0] if args and isinstance(args[0], dict) else {}
+    audio_path     = params.get("audio_path")
+    threshold_note = int(params.get("threshold_note", 63))
+    output_path    = params.get("output_path")
+
+    if not audio_path:
+        return {"error": "audio_path is required"}
+
+    result = _protect(audio_path, threshold_note=threshold_note, output_path=output_path)
+    return dict(result)
+
+
 def watermark_embed(args):
     """Embed a blind watermark into audio returned by a previous synthesize call."""
     import numpy as np  # noqa: PLC0415
@@ -441,6 +458,7 @@ HANDLERS = {
     "separate":            separate,
     "synthesize_cover":    synthesize_cover,
     "export_audio":        export_audio,
+    "apply_high_pitch_protection": apply_high_pitch_protection,
     "train_model":         train_model,
     "watermark_embed":     watermark_embed,
     "watermark_verify":    watermark_verify,
