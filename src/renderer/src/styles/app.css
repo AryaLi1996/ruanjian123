@@ -633,6 +633,99 @@ html, body, #root {
   flex-shrink: 0;
 }
 
+/* ── Waveform editor (Ticket 15) ─────────────────────────── */
+.wf-shell {
+  position: relative;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  padding: 8px;
+  transition: border-color 0.15s, background 0.15s;
+}
+.wf-shell.drag-over {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 5%, transparent);
+}
+.wf-waveform { width: 100%; min-height: 96px; }
+.wf-waveform ::part(region-handle-left),
+.wf-waveform ::part(region-handle-right) { cursor: ew-resize; }
+
+.wf-empty-overlay {
+  position: absolute;
+  inset: 8px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  border: 2px dashed var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+  user-select: none;
+  background: var(--bg);
+}
+.wf-shell:hover .wf-empty-overlay,
+.wf-shell.drag-over .wf-empty-overlay {
+  border-color: var(--accent);
+}
+
+.wf-error {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--danger);
+}
+
+.wf-transport {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 12px;
+  flex-wrap: wrap;
+}
+.wf-transport-btn {
+  width: 32px; height: 32px;
+  padding: 0;
+  border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 13px;
+  flex-shrink: 0;
+}
+.wf-time {
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 12px;
+  color: var(--text);
+  min-width: 96px;
+}
+.wf-loop-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.wf-loop-toggle input { accent-color: var(--accent); }
+.wf-loop-toggle:has(input:disabled) { opacity: 0.5; cursor: not-allowed; }
+.wf-clear-btn { font-size: 11px; padding: 4px 10px; }
+.wf-filename {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 220px;
+}
+
+.wf-selection-info {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  border-radius: 6px;
+  padding: 6px 10px;
+  display: inline-block;
+}
+
 /* ── Model grid + card ───────────────────────────────────── */
 .model-grid {
   display: grid;

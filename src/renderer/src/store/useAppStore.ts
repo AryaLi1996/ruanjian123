@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 
-export type ActiveView = 'training' | 'cover' | 'audio-tools' | 'playback' | 'subscription' | 'settings'
+export type ActiveView = 'training' | 'cover' | 'audio-tools' | 'waveform' | 'playback' | 'subscription' | 'settings'
 
 export interface TrainedModel {
   id:            string

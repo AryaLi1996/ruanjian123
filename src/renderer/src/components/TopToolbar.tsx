@@ -15,6 +15,7 @@ const NAV_ITEMS: NavItem[] = [
   { view: 'training',    icon: '🏋️', key: 'training' },
   { view: 'cover',       icon: '🎤', key: 'cover' },
   { view: 'audio-tools', icon: '🔊', key: 'audioTools' },
+  { view: 'waveform',    icon: '〰️', key: 'waveform' },
   { view: 'playback',    icon: '🎚️', key: 'playback' },
 ]
 
