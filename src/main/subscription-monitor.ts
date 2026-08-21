@@ -335,7 +335,12 @@ export class SubscriptionMonitor extends EventEmitter {
   }
 
   async activate(licenseKey: string): Promise<ActivationResult> {
-    const isDemo = licenseKey === LICENSE_CONFIG.demoKey
+    // Case-insensitive: the Settings key-entry field upper-cases whatever the
+    // user types (see SubscriptionView.tsx), and the demo key documented in
+    // DEMO_LICENSE.md contains mixed-case characters — compare, then store,
+    // the canonical demoKey so the resulting token matches it exactly (see
+    // the `refresh()` demo check below, which relies on that).
+    const isDemo = licenseKey.trim().toUpperCase() === LICENSE_CONFIG.demoKey.toUpperCase()
 
     let token: string
     if (isDemo) {
@@ -343,7 +348,7 @@ export class SubscriptionMonitor extends EventEmitter {
       token = createToken({
         userId:     'demo_user',
         planId:     'monthly',
-        licenseKey: licenseKey,
+        licenseKey: LICENSE_CONFIG.demoKey,
         expiresAt:  Math.floor(Date.now() / 1000) + 30 * 86400,
         issuedAt:   Math.floor(Date.now() / 1000),
         features:   ['training', 'synthesis', 'separation', 'cover'],
