@@ -6,6 +6,7 @@ import { StepWizard } from '../components/cover/StepWizard'
 import { StemPlayer, type StemTrack } from '../components/cover/StemPlayer'
 import { MixingConsole, type MixTrack } from '../components/cover/MixingConsole'
 import { ExportPanel } from '../components/cover/ExportPanel'
+import { TrainingDatasetPanel } from '../components/cover/TrainingDatasetPanel'
 import { CloudLibraryModal } from '../components/library/CloudLibraryModal'
 import type { LibrarySong } from '../global'
 
@@ -391,6 +392,22 @@ export function CoverView(): JSX.Element {
           <ExportPanel
             renderMix={renderMixRef.current}
             sampleRate={44_100}
+          />
+        </div>
+      )}
+
+      {/* ── Step 5 (Ticket 20) ───────────────────────────────
+          Reachable once synthesis (step 3) has produced an AI vocal —
+          independent of whether the user has exported a mixdown (step 4),
+          since building a training dataset doesn't need one. */}
+      {step === 5 && (
+        <div className="card">
+          <div className="card-title">⑤ {t('cover.trainingDataTitle')}</div>
+          <TrainingDatasetPanel
+            vocalPath={coverResult?.ai_vocal_path ?? null}
+            dryVocalPath={sepResult?.stems['lead_dry'] ?? null}
+            targetSong={targetSong}
+            onMerged={() => setCompleted((s) => new Set([...s, 5]))}
           />
         </div>
       )}

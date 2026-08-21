@@ -43,6 +43,12 @@ contextBridge.exposeInMainWorld('engine', {
   fetchLibraryAudio: (song: unknown): Promise<{ path: string; cached: boolean }> =>
     ipcRenderer.invoke('library:fetch-audio', song),
 
+  // Upload & Start Training (Ticket 20)
+  uploadTrainDataset: (zipPath: string, taskId: string, config: unknown): Promise<unknown> =>
+    ipcRenderer.invoke('train:upload', zipPath, taskId, config),
+  getTrainStatus: (taskId: string): Promise<unknown> =>
+    ipcRenderer.invoke('train:status', taskId),
+
   // Report renderer crashes caught by the React error boundary
   logRendererError: (payload: unknown): Promise<void> =>
     ipcRenderer.invoke('log:renderer-error', payload),

@@ -49,6 +49,26 @@ const resources = {
         // Ticket 18: Cloud Library (云曲库) integration.
         openLibrary: '☁️ 从云曲库选择', targetSongLabel: '当前目标歌曲：{{title}} - {{artist}}',
         clearTargetSong: '清除', unknownArtist: '未知艺术家',
+        // Ticket 20: Merge Audio & Upload Training Dataset (plus its Ticket
+        // 17 高音保护 and Ticket 19 变调 prerequisites).
+        stepTrainingData: '训练数据集',
+        trainingDataTitle: '生成训练数据集', trainingDataDesc: '合并已应用高音保护的人声与变调后的目标歌曲，打包上传并开始云端训练。',
+        protectionTitle: '① 高音保护', protectionApply: '应用高音保护', protectionApplying: '处理中…',
+        protectionApplied: '✓ 已应用高音保护（峰值 {{before}} → {{after}}，高频降低 {{db}} dB）',
+        protectionNeedsVocal: '请先完成合成与混音步骤，生成 AI 人声。',
+        pitchShiftTitle: '② 变调对齐目标歌曲', pitchShiftSemitones: '变调（半音）',
+        pitchShiftApply: '应用变调', pitchShiftApplying: '处理中…',
+        pitchShiftApplied: '✓ 已变调 {{semitones}} 个半音',
+        pitchShiftNeedsSong: '请先从云曲库选择目标歌曲。',
+        includeDryVocal: '同时包含干声人声轨（用于训练灵活性）',
+        mergeTitle: '③ 合并所有音频', mergeAction: '合并所有音频', merging: '合并中…',
+        mergeBlockedTooltip: '请先完成：{{reasons}}',
+        prereqProtection: '高音保护', prereqTargetSong: '选择目标歌曲', prereqPitchShift: '变调',
+        mergeResultInfo: '✓ 已合并：时长 {{duration}} 秒 · {{sampleRate}} Hz',
+        mergePadded: '（已用静音填充 {{sec}} 秒）', mergeTruncated: '（已截断 {{sec}} 秒）',
+        uploadTitle: '④ 上传并开始训练', uploadAction: '上传并开始训练', uploadNeedsMerge: '请先合并所有音频。',
+        phasePackaging: '正在打包…', phaseUploading: '正在上传…', phaseTraining: '云端训练中…',
+        phaseDone: '✓ 训练已开始', uploadResult: '模型：{{modelUrl}}',
       },
       // Ticket 18: Cloud Library (云曲库) search modal.
       library: {
@@ -143,6 +163,10 @@ const resources = {
         synthesis: {
           complete: { title: '合成完成', message: '翻唱合成已完成（{{mode}}）。' },
           failed:   { title: '合成失败', message: '翻唱合成未能完成：{{message}}' },
+        },
+        trainUpload: {
+          complete: { title: '训练已开始', message: '训练数据集已上传，云端训练任务已开始。' },
+          failed:   { title: '上传/训练失败', message: '未能上传训练数据集或启动训练：{{message}}' },
         },
         trial: {
           activated:     { title: '试用已激活', message: '你的免费试用已开始，尽情体验全部功能吧。' },
@@ -248,6 +272,26 @@ const resources = {
         // Ticket 18: Cloud Library integration.
         openLibrary: '☁️ Choose from Cloud Library', targetSongLabel: 'Target song: {{title}} - {{artist}}',
         clearTargetSong: 'Clear', unknownArtist: 'Unknown Artist',
+        // Ticket 20: Merge Audio & Upload Training Dataset (plus its Ticket
+        // 17 high-pitch protection and Ticket 19 pitch shift prerequisites).
+        stepTrainingData: 'Training Dataset',
+        trainingDataTitle: 'Build Training Dataset', trainingDataDesc: 'Merge the high-pitch-protected vocal with the pitch-shifted target song, then package and upload it to start cloud training.',
+        protectionTitle: '① High-Pitch Protection', protectionApply: 'Apply High-Pitch Protection', protectionApplying: 'Processing…',
+        protectionApplied: '✓ High-pitch protection applied (peak {{before}} → {{after}}, high-band reduced {{db}} dB)',
+        protectionNeedsVocal: 'Complete the synthesize & mix step first to generate an AI vocal.',
+        pitchShiftTitle: '② Pitch-Shift the Target Song', pitchShiftSemitones: 'Pitch shift (semitones)',
+        pitchShiftApply: 'Apply Pitch Shift', pitchShiftApplying: 'Processing…',
+        pitchShiftApplied: '✓ Shifted {{semitones}} semitone(s)',
+        pitchShiftNeedsSong: 'Select a target song from the Cloud Library first.',
+        includeDryVocal: 'Also include the dry vocal track (for training flexibility)',
+        mergeTitle: '③ Merge All Audio', mergeAction: 'Merge All Audio', merging: 'Merging…',
+        mergeBlockedTooltip: 'Complete first: {{reasons}}',
+        prereqProtection: 'high-pitch protection', prereqTargetSong: 'target song selection', prereqPitchShift: 'pitch shift',
+        mergeResultInfo: '✓ Merged: {{duration}}s · {{sampleRate}} Hz',
+        mergePadded: ' (padded with {{sec}}s of silence)', mergeTruncated: ' (truncated {{sec}}s)',
+        uploadTitle: '④ Upload & Start Training', uploadAction: 'Upload & Start Training', uploadNeedsMerge: 'Merge all audio first.',
+        phasePackaging: 'Packaging…', phaseUploading: 'Uploading…', phaseTraining: 'Training in the cloud…',
+        phaseDone: '✓ Training started', uploadResult: 'Model: {{modelUrl}}',
       },
       // Ticket 18: Cloud Library search modal.
       library: {
@@ -340,6 +384,10 @@ const resources = {
         synthesis: {
           complete: { title: 'Synthesis Complete', message: 'Cover synthesis finished ({{mode}}).' },
           failed:   { title: 'Synthesis Failed', message: 'Cover synthesis did not complete: {{message}}' },
+        },
+        trainUpload: {
+          complete: { title: 'Training Started', message: 'The training dataset was uploaded and the cloud training job has started.' },
+          failed:   { title: 'Upload/Training Failed', message: 'Could not upload the training dataset or start training: {{message}}' },
         },
         trial: {
           activated:    { title: 'Trial Activated', message: 'Your free trial has started — enjoy full access.' },

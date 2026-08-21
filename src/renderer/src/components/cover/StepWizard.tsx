@@ -4,6 +4,11 @@ import { useTranslation } from 'react-i18next'
 export interface StepDef {
   number: number
   label:  string
+  // Which earlier step must be completed to unlock this one. Defaults to
+  // `number - 1` (the previous step) — set explicitly for Step 5, which
+  // only needs synthesis (step 3) done, not the export step (4): building
+  // a training dataset doesn't require having exported a mixdown first.
+  requires?: number
 }
 
 interface Props {
@@ -19,6 +24,7 @@ export function StepWizard({ current, completed, onNavigate }: Props): JSX.Eleme
     { number: 2, label: t('cover.stepModel')  },
     { number: 3, label: t('cover.stepMix')    },
     { number: 4, label: t('cover.stepExport') },
+    { number: 5, label: t('cover.stepTrainingData'), requires: 3 },
   ]
 
   return (
@@ -26,7 +32,7 @@ export function StepWizard({ current, completed, onNavigate }: Props): JSX.Eleme
       {steps.map((step, i) => {
         const isDone   = completed.has(step.number)
         const isActive = current === step.number
-        const canNav   = isDone || isActive || completed.has(step.number - 1)
+        const canNav   = isDone || isActive || completed.has(step.requires ?? step.number - 1)
 
         return (
           <React.Fragment key={step.number}>

@@ -432,20 +432,102 @@ def decrypt_model(args):
         return {"decrypted": False, "error": str(exc)}
 
 
+def _task_dir(task_id) -> Path:
+    """Per-task scratch dir under the writable dir, e.g. for a merge/upload
+    run's protected vocal, shifted target, merged_train.wav and zip to all
+    land together (Ticket 20). Sanitised the same way train_model()
+    sanitises model_id — this flows from the untrusted IPC boundary into a
+    filesystem path."""
+    import re  # noqa: PLC0415
+    safe = re.sub(r"[^A-Za-z0-9_-]", "", str(task_id or ""))[:64] or "adhoc"
+    d = _writable_dir() / "train_datasets" / safe
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def apply_high_pitch_protection(args):
+    """Ticket 17: protect a vocal from harsh/clipped high-pitch passages
+    before it's used as merge-training material."""
+    from train_dataset import protect_vocal_file  # noqa: PLC0415
+
+    params = args[0] if args and isinstance(args[0], dict) else {}
+    vocal_path = params.get("vocal_path")
+    if not vocal_path:
+        return {"error": "vocal_path is required"}
+
+    output_path = params.get("output_path") or str(_task_dir(params.get("task_id")) / "protected_vocal.wav")
+    return protect_vocal_file(
+        vocal_path, output_path=output_path,
+        reduction_db=float(params.get("reduction_db", 8.0)),
+        peak_ceiling=float(params.get("peak_ceiling", 0.95)),
+    )
+
+
+def pitch_shift(args):
+    """Ticket 19: shift the target song's pitch by N semitones while
+    keeping its original duration."""
+    from train_dataset import pitch_shift_file  # noqa: PLC0415
+
+    params = args[0] if args and isinstance(args[0], dict) else {}
+    input_path = params.get("input_path")
+    if not input_path:
+        return {"error": "input_path is required"}
+
+    output_path = params.get("output_path") or str(_task_dir(params.get("task_id")) / "target_shifted.wav")
+    return pitch_shift_file(input_path, float(params.get("semitones", 0)), output_path=output_path)
+
+
+def merge_train_audio(args):
+    """Ticket 20: merge the (high-pitch-protected) vocal and the
+    (pitch-shifted) target song into a single merged_train.wav."""
+    from train_dataset import merge_train_audio as _merge  # noqa: PLC0415
+
+    params      = args[0] if args and isinstance(args[0], dict) else {}
+    vocal_path  = params.get("vocal_path")
+    target_path = params.get("target_path")
+    if not vocal_path or not target_path:
+        return {"error": "vocal_path and target_path are required"}
+
+    output_path = params.get("output_path") or str(_task_dir(params.get("task_id")) / "merged_train.wav")
+    return _merge(
+        vocal_path, target_path, output_path,
+        align_mode=params.get("align_mode", "pad"),
+        include_dry_vocal=bool(params.get("include_dry_vocal", False)),
+        dry_vocal_path=params.get("dry_vocal_path"),
+    )
+
+
+def package_train_dataset(args):
+    """Ticket 20: zip merged_train.wav (+ optional dry vocal) for upload."""
+    from train_dataset import package_train_dataset as _package  # noqa: PLC0415
+
+    params = args[0] if args and isinstance(args[0], dict) else {}
+    files  = params.get("files") or []
+    if not files:
+        return {"error": "files is required"}
+
+    output_zip_path = params.get("output_zip_path") or str(_task_dir(params.get("task_id")) / "train_dataset.zip")
+    return _package(files, output_zip_path)
+
+
 HANDLERS = {
-    "ping":                ping,
-    "detect_device":       detect_device,
-    "test_inference":      test_inference,
-    "synthesize":          synthesize,
-    "benchmark_synthesis": benchmark_synthesis,
-    "separate":            separate,
-    "synthesize_cover":    synthesize_cover,
-    "export_audio":        export_audio,
-    "train_model":         train_model,
-    "watermark_embed":     watermark_embed,
-    "watermark_verify":    watermark_verify,
-    "encrypt_model":       encrypt_model,
-    "decrypt_model":       decrypt_model,
+    "ping":                        ping,
+    "detect_device":               detect_device,
+    "test_inference":              test_inference,
+    "synthesize":                  synthesize,
+    "benchmark_synthesis":         benchmark_synthesis,
+    "separate":                    separate,
+    "synthesize_cover":            synthesize_cover,
+    "export_audio":                export_audio,
+    "train_model":                 train_model,
+    "watermark_embed":             watermark_embed,
+    "watermark_verify":            watermark_verify,
+    "encrypt_model":               encrypt_model,
+    "decrypt_model":               decrypt_model,
+    "apply_high_pitch_protection": apply_high_pitch_protection,
+    "pitch_shift":                 pitch_shift,
+    "merge_train_audio":           merge_train_audio,
+    "package_train_dataset":       package_train_dataset,
 }
 
 

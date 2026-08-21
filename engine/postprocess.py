@@ -241,6 +241,59 @@ def normalize_loudness(
     return out.astype(np.float32)
 
 
+# ── High-pitch protection (Ticket 17) ─────────────────────────────────────────
+
+def protect_high_pitch(
+    audio: np.ndarray, sr: int,
+    band_hz: tuple[float, float] = (3_000.0, 12_000.0),
+    reduction_db: float = 8.0, peak_ceiling: float = 0.95,
+    n_fft: int = 1024, hop: int = 256,
+) -> tuple[np.ndarray, dict[str, float | bool]]:
+    """
+    Protects a vocal from harsh/clipped high-pitch passages before it's used
+    as merge-training material (Ticket 20 requires this to have already run
+    on the "processed vocal" it merges in).
+
+    Two stages, reusing the building blocks already in this module:
+
+      1. Dynamic high-band attenuation — the same disproportionate-energy
+         detection as deess() above, just tuned to a wider high-pitch band
+         (covers a singer's upper partials, not only sibilance) and a
+         stronger reduction. Frames where high partials dominate get pulled
+         back; frames that don't are left alone, so it only engages on the
+         actual problem passages instead of dulling the whole vocal.
+      2. A tanh soft-knee peak limiter (see normalize_loudness's clipping
+         guard) on top, so nothing exceeding `peak_ceiling` reaches the
+         merged training file even if stage 1 under-corrects — this is what
+         actually guarantees no digital clipping/breakup on the loudest
+         high notes.
+
+    Returns (protected_audio, stats) where stats reports whether protection
+    ran and how much peak reduction it applied — surfaced to the UI so
+    "high-pitch protection applied" isn't a black box.
+    """
+    audio = np.asarray(audio, dtype=np.float32)
+    if audio.size == 0:
+        return audio.copy(), {"protected": False, "high_band_reduction_db": 0.0,
+                               "peak_before": 0.0, "peak_after": 0.0}
+
+    peak_before = float(np.max(np.abs(audio)))
+    out = deess(audio, sr, band_hz=band_hz, reduction_db=reduction_db, n_fft=n_fft, hop=hop)
+
+    peak = float(np.max(np.abs(out))) + 1e-8
+    if peak > peak_ceiling:
+        out = np.tanh(out / peak_ceiling) * peak_ceiling
+    peak_after = float(np.max(np.abs(out)))
+
+    reduction_db_applied = 20.0 * np.log10((peak_before + 1e-8) / (peak_after + 1e-8))
+    return out.astype(np.float32), {
+        "protected":              True,
+        "high_band_reduction_db": round(max(0.0, float(reduction_db_applied)), 2),
+        "peak_before":            round(peak_before, 4),
+        "peak_after":             round(peak_after, 4),
+    }
+
+
 # ── Chain ─────────────────────────────────────────────────────────────────────
 
 class PostprocessResult(TypedDict):
