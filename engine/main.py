@@ -405,6 +405,30 @@ def encrypt_model(args):
     }
 
 
+def analyze_pitch(args):
+    """Ticket 16: extract the pitch contour of a region (or the whole track)
+    and report the highest note found, for the "分析音高" button.
+    """
+    from pitch_analysis import analyze_pitch as _analyze  # noqa: PLC0415
+
+    params     = args[0] if args and isinstance(args[0], dict) else {}
+    audio_path = params.get("audio_path", None)
+    start_sec  = params.get("start_sec", None)
+    end_sec    = params.get("end_sec", None)
+
+    if not audio_path:
+        return {"error": "audio_path is required"}
+
+    try:
+        return _analyze(audio_path, start_sec, end_sec)
+    except Exception as exc:
+        # Matches the other file-processing handlers (decrypt_model, etc.):
+        # surface a clean {"error": ...} the renderer can show, instead of
+        # letting a bad/corrupt file or missing codec raise all the way out
+        # to a non-zero exit + raw Python traceback on stderr.
+        return {"error": str(exc)}
+
+
 def decrypt_model(args):
     """Decrypt a .enc model file and verify it loads into ORT (in-memory only)."""
     from model_crypto import load_encrypted_session  # noqa: PLC0415
@@ -446,6 +470,7 @@ HANDLERS = {
     "watermark_verify":    watermark_verify,
     "encrypt_model":       encrypt_model,
     "decrypt_model":       decrypt_model,
+    "analyze_pitch":       analyze_pitch,
 }
 
 
