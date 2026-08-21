@@ -75,7 +75,7 @@ export function StemPlayer({ stems }: Props): JSX.Element {
               preload="metadata"
             />
           ) : (
-            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 6 }}>unavailable</div>
+            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 6 }}>{t('common.unavailable')}</div>
           )}
         </div>
       ))}
