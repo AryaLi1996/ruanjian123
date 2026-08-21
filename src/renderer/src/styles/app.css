@@ -853,6 +853,42 @@ html, body, #root {
 }
 .stem-solo-btn.active { color: var(--accent); border-color: var(--accent); }
 
+/* ── High-pitch protection (Ticket 17, 强制修音) ─────────────── */
+.hpp-card { margin-bottom: 20px; }
+.hpp-desc { font-size: 12px; color: var(--text-muted); margin: -8px 0 12px; }
+
+.hpp-wave-wrap {
+  position: relative;
+  margin-top: 14px;
+  min-height: 4px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  overflow: hidden;
+}
+.hpp-canvas { display: block; width: 100%; }
+
+/* Positioned by percentage over the waveform canvas — the red span the
+   correction actually touched, per Ticket 17's "waveform...highlight the
+   corrected regions in red" requirement. */
+.hpp-region {
+  position: absolute;
+  top: 0; bottom: 0;
+  background: color-mix(in srgb, var(--danger) 35%, transparent);
+  border-left: 1px solid var(--danger);
+  border-right: 1px solid var(--danger);
+  pointer-events: none;
+}
+
+.hpp-footer { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.hpp-info { font-size: 12px; color: var(--text-muted); }
+.hpp-legend { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text-muted); }
+.hpp-legend-swatch {
+  display: inline-block; width: 10px; height: 10px; border-radius: 2px;
+  background: color-mix(in srgb, var(--danger) 35%, transparent);
+  border: 1px solid var(--danger);
+}
+
 /* ── Mixing console ──────────────────────────────────────── */
 .mixer { padding: 4px 0; }
 

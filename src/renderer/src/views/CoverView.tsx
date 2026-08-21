@@ -6,6 +6,7 @@ import { StepWizard } from '../components/cover/StepWizard'
 import { StemPlayer, type StemTrack } from '../components/cover/StemPlayer'
 import { MixingConsole, type MixTrack } from '../components/cover/MixingConsole'
 import { ExportPanel } from '../components/cover/ExportPanel'
+import { HighPitchProtection } from '../components/cover/HighPitchProtection'
 import { CloudLibraryModal } from '../components/library/CloudLibraryModal'
 import type { LibrarySong } from '../global'
 
@@ -363,6 +364,17 @@ export function CoverView(): JSX.Element {
               <div style={{ fontSize: 12, color: 'var(--success)', marginBottom: 16 }}>
                 {t('cover.synthesizedInfo', { elapsed: coverResult.elapsed_sec, duration: coverResult.duration_sec })}
               </div>
+
+              {/* Ticket 17: 强制修音 — clamp any AI-vocal pitch above D#4
+                  before mixing, so the mixer/export downstream always work
+                  from the protected stem once applied. */}
+              <HighPitchProtection
+                audioPath={coverResult.ai_vocal_path}
+                onApplied={(path) =>
+                  setCoverResult((prev) => (prev ? { ...prev, ai_vocal_path: path } : prev))
+                }
+              />
+
               <div className="card-title" style={{ marginBottom: 12 }}>{t('cover.mixer')}</div>
               {mixTracks.length > 0 && (
                 <MixingConsole
