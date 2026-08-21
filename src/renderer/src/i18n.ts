@@ -17,7 +17,7 @@ const resources = {
         sloganZh: '让每个声音，都舒服入耳', sloganEn: 'Every voice, soothing to the ear.',
       },
       language: { label: '语言', zh: '简体中文', en: 'English' },
-      nav: { training: '模型训练', cover: '翻唱创作', audioTools: '音频工具', playback: '播放/监听', subscription: '订阅' },
+      nav: { training: '模型训练', cover: '翻唱创作', audioTools: '音频工具', waveform: '波形编辑', playback: '播放/监听', subscription: '订阅' },
       common: {
         loading: '加载中…', cancel: '取消', retry: '重试', reset: '重置', refresh: '刷新',
         activate: '激活', deactivate: '停用', download: '下载', error: '错误', done: '完成',
@@ -48,6 +48,15 @@ const resources = {
         workflowSteps: '工作流程步骤',
       },
       audioTools: { title: '音频工具', description: '批量音源分离 — 拖入文件、选择模式、全部处理。', detect: '检测设备', drop: '拖入音频文件，或点击浏览', formats: '多个文件 · WAV · FLAC · OGG', files: '{{count}} 个文件', done: '{{count}} 个完成', pending: '{{count}} 个等待', failed: '{{count}} 个失败', process: '处理 {{count}} 个', processing: '处理中…', clear: '清空', pendingStatus: '● 等待中', errorStatus: '✕ 错误', downloadAll: '全部下载（{{count}}）', standard: '标准', enhanced: '增强' },
+      // Ticket 15: waveform display + drag-selected region editor.
+      waveformEditor: {
+        title: '波形编辑', description: '拖入音频文件查看波形，拖动鼠标选取片段用于后续处理。',
+        drop: '拖入 WAV / MP3 文件，或点击浏览', formats: 'WAV · MP3',
+        unsupportedFormat: '不支持的文件格式，请使用 WAV 或 MP3。',
+        play: '播放', pause: '暂停', stop: '停止',
+        loopSelection: '循环播放选区', clearSelection: '清除选区',
+        selectionInfo: '选区：{{start}} – {{end}}（时长 {{dur}}）',
+      },
       // Automatic lyrics recognition status copy (Ticket 43 §6) — shown in the
       // Playback/Monitor lyrics panel while/after an automatic online match runs.
       lyrics: {
@@ -206,7 +215,7 @@ const resources = {
         sloganZh: '让每个声音，都舒服入耳', sloganEn: 'Every voice, soothing to the ear.',
       },
       language: { label: 'Language', zh: '简体中文', en: 'English' },
-      nav: { training: 'Model Training', cover: 'Cover Creation', audioTools: 'Audio Tools', playback: 'Playback / Monitor', subscription: 'Subscription' },
+      nav: { training: 'Model Training', cover: 'Cover Creation', audioTools: 'Audio Tools', waveform: 'Waveform Editor', playback: 'Playback / Monitor', subscription: 'Subscription' },
       common: { loading: 'Loading…', cancel: 'Cancel', retry: 'Retry', reset: 'Reset', refresh: 'Refresh', activate: 'Activate', deactivate: 'Deactivate', download: 'Download', error: 'Error', done: 'Done', unavailable: 'Unavailable' },
       updater: { ready: 'Update ready to install', install: 'Restart & Install', available: 'Update {{version}} available', downloading: 'Downloading…', download: 'Download' },
       status: { running: 'Running: {{method}}', idle: 'Engine ready', training: 'Training: {{mode}}', separating: 'Separating…', synthesizing: 'Synthesizing ({{mode}})…', saved: 'Saved: {{path}}' },
@@ -227,6 +236,15 @@ const resources = {
         workflowSteps: 'Workflow steps',
       },
       audioTools: { title: 'Audio Tools', description: 'Batch source separation — drop files, choose modes, process all.', detect: 'Detect Device', drop: 'Drop audio files here, or click to browse', formats: 'Multiple files · WAV · FLAC · OGG', files: '{{count}} file(s)', done: '{{count}} done', pending: '{{count}} pending', failed: '{{count}} failed', process: 'Process {{count}}', processing: 'Processing…', clear: 'Clear', pendingStatus: '● Pending', errorStatus: '✕ Error', downloadAll: 'Download All ({{count}})', standard: 'Standard', enhanced: 'Enhanced' },
+      // Ticket 15: waveform display + drag-selected region editor.
+      waveformEditor: {
+        title: 'Waveform Editor', description: 'Drop an audio file to view its waveform, then drag on it to select a region for downstream processing.',
+        drop: 'Drop a WAV / MP3 file here, or click to browse', formats: 'WAV · MP3',
+        unsupportedFormat: 'Unsupported file format — please use WAV or MP3.',
+        play: 'Play', pause: 'Pause', stop: 'Stop',
+        loopSelection: 'Loop selection', clearSelection: 'Clear selection',
+        selectionInfo: 'Selection: {{start}} – {{end}} ({{dur}})',
+      },
       lyrics: {
         auto: {
           searching: 'Searching lyrics…',
