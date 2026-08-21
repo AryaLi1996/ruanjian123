@@ -27,6 +27,20 @@ export function formatDuration(seconds: number): string {
   return `${m}:${s.toString().padStart(2, '0')}`
 }
 
+/**
+ * Formats a duration as `mm:ss.d` (one decisecond digit) — e.g. `00:17.2` —
+ * for displays that need sub-second precision, such as the waveform
+ * region editor's transport readout (Ticket 15).
+ */
+export function formatTimeDs(seconds: number): string {
+  const clamped = Number.isFinite(seconds) && seconds > 0 ? seconds : 0
+  const totalDs = Math.round(clamped * 10)
+  const m = Math.floor(totalDs / 600)
+  const s = Math.floor((totalDs % 600) / 10)
+  const d = totalDs % 10
+  return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}.${d}`
+}
+
 /** Draws a waveform on an off-screen canvas and returns it as a data URL. */
 export async function makeWaveformDataUrl(file: File, w = 400, h = 60): Promise<string | null> {
   try {
