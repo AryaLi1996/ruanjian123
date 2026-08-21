@@ -910,8 +910,6 @@ html, body, #root {
   border: 1px solid color-mix(in srgb, var(--success) 30%, transparent);
   border-radius: 6px; padding: 10px 14px; color: var(--success); font-size: 13px;
 }
-.sub-demo-hint { font-size: 11px; color: var(--text-muted); margin-top: 8px; }
-.sub-demo-hint code { background: var(--bg-hover); padding: 1px 5px; border-radius: 3px; }
 
 /* ── Multi-channel payment: plan / method picker (Ticket 28) ─── */
 .sub-field-label { display: block; font-size: 12px; color: var(--text-muted); margin-bottom: 8px; }

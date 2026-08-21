@@ -113,10 +113,14 @@ export const LICENSE_CONFIG = {
   provider: (process.env['LICENSE_PROVIDER'] ?? 'custom') as
     'stripe' | 'lemonsqueezy' | 'paddle' | 'custom',
 
-  // ── Demo / CI key ───────────────────────────────────────────────────────────
-  // Activating this key in dev mode creates a local 30-day token without
-  // hitting the server — safe for automated tests and first-launch demos.
-  demoKey: 'SOOTHEVOICE-DEMO-2026',
+  // ── Demo / CI key (Ticket 47) ────────────────────────────────────────────────
+  // Activating this key creates a local 30-day token without hitting the
+  // server — for automated tests and internal support use only. Deliberately
+  // long/random (not the old guessable "SOOTHEVOICE-DEMO-2026") and never
+  // surfaced in the UI — see DEMO_LICENSE.md at the repo root for the value,
+  // usage notes, and the warning not to share it. Override via the
+  // DEMO_LICENSE_KEY env var if it ever needs rotating without a code change.
+  demoKey: process.env['DEMO_LICENSE_KEY'] ?? 'SOOTHEVOICE-DEMO-8f3aQ9c#2b7e1D4f6a9B2c3d4e5F6a7b8C9d0e1f',
 
   // ── Plans & payment methods (Ticket 28) ─────────────────────────────────────
   plans:          PLANS,

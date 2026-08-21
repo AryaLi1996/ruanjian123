@@ -742,9 +742,6 @@ export function SubscriptionView(): JSX.Element {
               </div>
               {error   && <div className="error-banner"  style={{ marginTop: 10 }}>{error}</div>}
               {success && <div className="sub-success"   style={{ marginTop: 10 }}>{success}</div>}
-              <p className="sub-demo-hint">
-                {t('subscription.demo')}
-              </p>
             </div>
           )}
         </div>
