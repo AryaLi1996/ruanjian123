@@ -1,19 +1,18 @@
 """
-Merge Audio & Upload Training Dataset — Ticket 20 (plus its Ticket 17 and
-Ticket 19 prerequisites: high-pitch protection and pitch shift).
+Merge Audio & Upload Training Dataset — Ticket 20 (plus its Ticket 19
+prerequisite: pitch shift; Ticket 17's high-pitch protection already ships
+as engine/pitch_protection.py + main.py's apply_high_pitch_protection —
+this module's merge step just consumes that step's output path).
 
-File-handling orchestration around the pure-numpy DSP already in
-postprocess.py, mirroring how cover_synthesis.py wraps postprocess_chain()
-and library.ts wraps library-search.ts's pure catalog logic — the DSP stays
-a pure function over arrays (easy to unit-test); this module only adds the
-file I/O around it.
+File-handling orchestration around plain numpy DSP, mirroring how
+cover_synthesis.py wraps postprocess_chain() and library.ts wraps
+library-search.ts's pure catalog logic — the DSP stays a pure function over
+arrays (easy to unit-test); this module only adds the file I/O around it.
 
-  - protect_vocal_file(): reads a vocal WAV, runs postprocess.protect_high_pitch
-    per channel, writes the result (Ticket 17 — "高音保护").
   - pitch_shift_file(): reads a WAV, shifts every channel by N semitones
     while preserving the file's original duration (Ticket 19 — "变调").
-  - merge_train_audio(): time-aligns the protected vocal and the
-    pitch-shifted target song (pad-to-longest or truncate-to-shortest),
+  - merge_train_audio(): time-aligns the (high-pitch-protected) vocal and
+    the pitch-shifted target song (pad-to-longest or truncate-to-shortest),
     mixes them into merged_train.wav, and optionally copies a dry-vocal
     track alongside it (Ticket 20's merge step).
   - package_train_dataset(): zips a set of files (merged_train.wav + the
@@ -31,8 +30,6 @@ from typing import Any
 
 import numpy as np
 import soundfile as sf
-
-from postprocess import protect_high_pitch
 
 
 def _load(path: str) -> tuple[np.ndarray, int]:
@@ -69,34 +66,6 @@ def _pad_to(audio: np.ndarray, n: int) -> np.ndarray:
     if audio.shape[0] >= n:
         return audio[:n]
     return np.pad(audio, ((0, n - audio.shape[0]), (0, 0)))
-
-
-# ── Ticket 17: high-pitch protection ────────────────────────────────────────
-
-def protect_vocal_file(
-    vocal_path: str, output_path: str,
-    reduction_db: float = 8.0, peak_ceiling: float = 0.95,
-) -> dict[str, Any]:
-    audio, sr = _load(vocal_path)
-    per_channel = [
-        protect_high_pitch(audio[:, c], sr, reduction_db=reduction_db, peak_ceiling=peak_ceiling)
-        for c in range(audio.shape[1])
-    ]
-    out = np.stack([c[0] for c in per_channel], axis=1)
-    # Stats are per-channel-identical in practice (same DSP, same input
-    # loudness range) — the first channel's numbers stand in for the file.
-    stats = per_channel[0][1]
-
-    out_p = Path(output_path)
-    out_p.parent.mkdir(parents=True, exist_ok=True)
-    sf.write(str(out_p), out, sr, subtype="PCM_16")
-
-    return {
-        "output_path":  str(out_p),
-        "duration_sec": round(out.shape[0] / sr, 3),
-        "sample_rate":  sr,
-        **stats,
-    }
 
 
 # ── Ticket 19: pitch shift ──────────────────────────────────────────────────

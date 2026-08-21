@@ -27,7 +27,7 @@ const resources = {
         ready: '更新已准备安装', install: '重启并安装', available: '发现更新 {{version}}',
         downloading: '正在下载…', download: '下载',
       },
-      status: { running: '正在运行：{{method}}', idle: '引擎就绪', training: '训练中：{{mode}}', separating: '正在分离…', synthesizing: '正在合成（{{mode}}）…', saved: '已保存：{{path}}' },
+      status: { running: '正在运行：{{method}}', idle: '引擎就绪', training: '训练中：{{mode}}', separating: '正在分离…', synthesizing: '正在合成（{{mode}}）…', saved: '已保存：{{path}}', applyingHighPitchProtection: '正在应用高音保护…', highPitchProtectionApplied: '已应用模型音域，高音保护起点为D#4' },
       training: {
         title: '模型训练', description: '使用干声录音微调 AI 歌手的音色。', info: '模型信息', name: '模型名称 *', namePlaceholder: '例如：我的歌手', epochs: '训练轮数', material: '训练素材', noFiles: '未上传文件，将使用演示数据。', mode: '训练模式', start: '开始本地训练', training: '训练中…', complete: '✓ 训练完成', finalizing: '正在收尾…', finalizingDesc: '训练已完成，正在生成试听音频并保存模型。', audition: '试听', trainAnother: '训练另一个模型', models: '我的模型（{{count}}）', demo: '试听', retrain: '重新训练', delete: '删除', standard: '标准', professional: '专业', gpu: 'GPU', cpu: 'CPU', vram: '显存', epoch: '第 {{current}}/{{total}} 轮', loss: '损失 {{value}}', eta: '预计剩余 {{value}}', waiting: '等待引擎…', materialHint: '拖入干净的人声录音。', standardTagline: 'LoRA rank-4 · 仅训练音色编码器', professionalTagline: 'LoRA+ rank-8 · 全层训练 · 梯度检查点', dropAudio: '拖入音频文件，或点击浏览', audioFormats: 'WAV · FLAC · MP3 · OGG · M4A', fileCount: '{{count}} 个文件', totalDuration: '共 {{duration}}', clearAll: '全部清除', removeFile: '移除文件', loadingWaveform: '正在加载波形…', waveform: '波形', play: '播放', pause: '暂停', volume: '音量', noDemo: '暂无演示音频', lossLabel: '损失：{{value}}', pro: '专业', trainingGpu: 'GPU', trainingCpu: 'CPU', trainingVram: '显存', qualityLow: '音质较低',
       },
@@ -46,6 +46,14 @@ const resources = {
         exportResult: '已导出：{{path}}\n大小：{{size}} MB · 时长：{{duration}}',
         exportNeedsMix: '请先完成合成与混音步骤。',
         workflowSteps: '工作流程步骤',
+        // Ticket 17: high-pitch protection (强制修音).
+        highPitchProtection: '高音保护',
+        highPitchProtectionThreshold: '高音保护起点为D#4',
+        highPitchProtectionApply: '应用高音保护',
+        highPitchProtectionApplying: '正在应用高音保护…',
+        highPitchProtectionInfo: '已修正 {{count}} 处高音（约 {{percent}}% 时长）',
+        highPitchProtectionLegend: '红色区域为强制修音修正范围',
+        highPitchProtectionNone: '未检测到超出 D#4 的高音，无需修正。',
         // Ticket 18: Cloud Library (云曲库) integration.
         openLibrary: '☁️ 从云曲库选择', targetSongLabel: '当前目标歌曲：{{title}} - {{artist}}',
         clearTargetSong: '清除', unknownArtist: '未知艺术家',
@@ -53,9 +61,10 @@ const resources = {
         // 17 高音保护 and Ticket 19 变调 prerequisites).
         stepTrainingData: '训练数据集',
         trainingDataTitle: '生成训练数据集', trainingDataDesc: '合并已应用高音保护的人声与变调后的目标歌曲，打包上传并开始云端训练。',
-        protectionTitle: '① 高音保护', protectionApply: '应用高音保护', protectionApplying: '处理中…',
-        protectionApplied: '✓ 已应用高音保护（峰值 {{before}} → {{after}}，高频降低 {{db}} dB）',
+        protectionTitle: '① 高音保护',
+        protectionApplied: '✓ 已应用高音保护（强制修音）',
         protectionNeedsVocal: '请先完成合成与混音步骤，生成 AI 人声。',
+        protectionNotApplied: '请先在③混音步骤中应用高音保护。',
         pitchShiftTitle: '② 变调对齐目标歌曲', pitchShiftSemitones: '变调（半音）',
         pitchShiftApply: '应用变调', pitchShiftApplying: '处理中…',
         pitchShiftApplied: '✓ 已变调 {{semitones}} 个半音',
@@ -79,6 +88,19 @@ const resources = {
         prevPage: '上一页', nextPage: '下一页', pageOf: '第 {{page}} / {{totalPages}} 页',
       },
       audioTools: { title: '音频工具', description: '批量音源分离 — 拖入文件、选择模式、全部处理。', detect: '检测设备', drop: '拖入音频文件，或点击浏览', formats: '多个文件 · WAV · FLAC · OGG', files: '{{count}} 个文件', done: '{{count}} 个完成', pending: '{{count}} 个等待', failed: '{{count}} 个失败', process: '处理 {{count}} 个', processing: '处理中…', clear: '清空', pendingStatus: '● 等待中', errorStatus: '✕ 错误', downloadAll: '全部下载（{{count}}）', standard: '标准', enhanced: '增强' },
+      // Ticket 16: pitch analysis ("分析音高") panel — waveform region selection
+      // + max-note detection, shown after vocal separation in Cover Creation.
+      pitch: {
+        title: '音高分析', analyze: '分析音高', analyzing: '分析中…',
+        selectRegionHint: '在波形上拖动以选择要分析的区域，不选择则自动分析整段音轨。',
+        loadingWaveform: '正在加载波形…',
+        wholeTrackLabel: '未选择区域 — 将分析整段音轨',
+        regionSelected: '已选区域：{{start}}s – {{end}}s', clearRegion: '清除区域',
+        wholeTrackTitle: '已分析整段音轨', wholeTrackMessage: '未选择区域，系统已自动分析整段音轨。',
+        maxDetected: '检测到最高音', suggestedThreshold: '建议高音保护阈值', avgDetected: '平均音高',
+        summary: '检测到最高音: {{maxNote}}, 建议高音保护阈值: {{thresholdNote}}',
+        noPitchDetected: '未检测到有效音高，请确认所选区域包含人声。',
+      },
       // Ticket 15: waveform display + drag-selected region editor.
       waveformEditor: {
         title: '波形编辑', description: '拖入音频文件查看波形，拖动鼠标选取片段用于后续处理。',
@@ -163,6 +185,10 @@ const resources = {
         synthesis: {
           complete: { title: '合成完成', message: '翻唱合成已完成（{{mode}}）。' },
           failed:   { title: '合成失败', message: '翻唱合成未能完成：{{message}}' },
+        },
+        highPitchProtection: {
+          complete: { title: '高音保护已应用', message: '已修正 {{count}} 处高音，高音保护起点为 D#4。' },
+          failed:   { title: '高音保护失败', message: '高音保护未能完成：{{message}}' },
         },
         trainUpload: {
           complete: { title: '训练已开始', message: '训练数据集已上传，云端训练任务已开始。' },
@@ -253,7 +279,7 @@ const resources = {
       nav: { training: 'Model Training', cover: 'Cover Creation', audioTools: 'Audio Tools', waveform: 'Waveform Editor', playback: 'Playback / Monitor', subscription: 'Subscription' },
       common: { loading: 'Loading…', cancel: 'Cancel', retry: 'Retry', reset: 'Reset', refresh: 'Refresh', activate: 'Activate', deactivate: 'Deactivate', download: 'Download', error: 'Error', done: 'Done', unavailable: 'Unavailable' },
       updater: { ready: 'Update ready to install', install: 'Restart & Install', available: 'Update {{version}} available', downloading: 'Downloading…', download: 'Download' },
-      status: { running: 'Running: {{method}}', idle: 'Engine ready', training: 'Training: {{mode}}', separating: 'Separating…', synthesizing: 'Synthesizing ({{mode}})…', saved: 'Saved: {{path}}' },
+      status: { running: 'Running: {{method}}', idle: 'Engine ready', training: 'Training: {{mode}}', separating: 'Separating…', synthesizing: 'Synthesizing ({{mode}})…', saved: 'Saved: {{path}}', applyingHighPitchProtection: 'Applying high-pitch protection…', highPitchProtectionApplied: 'Model vocal range applied — high-pitch protection starts at D#4' },
       training: { title: 'Model Training', description: 'Fine-tune the AI singer\'s timbre using dry vocal recordings.', info: 'Model Info', name: 'Model name *', namePlaceholder: 'e.g. My Singer', epochs: 'Epochs', material: 'Training Material', noFiles: 'No files uploaded; synthetic demo data will be used.', mode: 'Training Mode', start: 'Start Local Training', training: 'Training…', complete: '✓ Training Complete', finalizing: 'Finalizing…', finalizingDesc: 'Training finished. Generating the demo clip and saving the model.', audition: 'Audition', trainAnother: 'Train Another Model', models: 'Your Models ({{count}})', demo: 'Demo', retrain: 'Retrain', delete: 'Delete', standard: 'Standard', professional: 'Professional', gpu: 'GPU', cpu: 'CPU', vram: 'VRAM', epoch: 'Epoch {{current}}/{{total}}', loss: 'Loss {{value}}', eta: 'ETA {{value}}', waiting: 'Waiting for engine…', materialHint: 'Drop clean vocal recordings here.', standardTagline: 'LoRA rank-4 · timbre encoder only', professionalTagline: 'LoRA+ rank-8 · all layers · gradient checkpointing', dropAudio: 'Drop audio files here, or click to browse', audioFormats: 'WAV · FLAC · MP3 · OGG · M4A', fileCount: '{{count}} file(s)', totalDuration: '{{duration}} total', clearAll: 'Clear all', removeFile: 'Remove file', loadingWaveform: 'Loading waveform…', waveform: 'waveform', play: 'Play', pause: 'Pause', volume: 'Volume', noDemo: 'No demo available', lossLabel: 'Loss: {{value}}', pro: 'Pro', trainingGpu: 'GPU', trainingCpu: 'CPU', trainingVram: 'VRAM', qualityLow: 'Quality may be low' },
       cover: { title: 'Cover Creation', description: 'Upload → Separate → Synthesize → Mix → Export', upload: 'Upload & Separate', song: 'Song file (WAV / FLAC / MP3)', chooseSong: 'Click to choose a song', separationMode: 'Separation mode', standard: 'Standard', enhanced: 'Enhanced', standardStems: '2 stems — vocals + accompaniment', enhancedStems: '3 stems — lead · harmony · accompaniment', startSeparation: 'Start Separation', separating: 'Separating…', stems: 'Stems — click Solo to preview', nextModel: 'Next: Select Model →', selectModel: 'Select AI Singer Model', noModels: 'No models trained yet. Go to Model Training first.', algorithm: 'Cover algorithm', v1: 'V1 — Fast', v2: 'V2 — High-Precision', v1Tagline: 'DTW + WSOLA · ≤10% real-time', v2Tagline: 'LSTM expression encoder · ≤50% RT', synthesize: 'Synthesize Cover', synthesizing: 'Synthesizing…', nextSynthesize: 'Next: Synthesize →', mix: 'Synthesize & Mix', mixer: 'Mixing Console', export: 'Next: Export →', exportTitle: 'Export Audio',
         errUploadFirst: 'Please upload a song first.', errSelectModel: 'Select a model first.', errRunSeparation: 'Run separation first.',
@@ -269,6 +295,14 @@ const resources = {
         exportResult: 'Exported: {{path}}\nSize: {{size}} MB · Duration: {{duration}}',
         exportNeedsMix: 'Complete the mixing step first.',
         workflowSteps: 'Workflow steps',
+        // Ticket 17: high-pitch protection (forced auto-tune / 强制修音).
+        highPitchProtection: 'High-Pitch Protection',
+        highPitchProtectionThreshold: 'High-pitch protection starts at D#4',
+        highPitchProtectionApply: 'Apply High-Pitch Protection',
+        highPitchProtectionApplying: 'Applying high-pitch protection…',
+        highPitchProtectionInfo: 'Corrected {{count}} high-pitch region(s) (~{{percent}}% of duration)',
+        highPitchProtectionLegend: 'Red regions were corrected by forced auto-tune',
+        highPitchProtectionNone: 'No pitch above D#4 detected — nothing to correct.',
         // Ticket 18: Cloud Library integration.
         openLibrary: '☁️ Choose from Cloud Library', targetSongLabel: 'Target song: {{title}} - {{artist}}',
         clearTargetSong: 'Clear', unknownArtist: 'Unknown Artist',
@@ -276,9 +310,10 @@ const resources = {
         // 17 high-pitch protection and Ticket 19 pitch shift prerequisites).
         stepTrainingData: 'Training Dataset',
         trainingDataTitle: 'Build Training Dataset', trainingDataDesc: 'Merge the high-pitch-protected vocal with the pitch-shifted target song, then package and upload it to start cloud training.',
-        protectionTitle: '① High-Pitch Protection', protectionApply: 'Apply High-Pitch Protection', protectionApplying: 'Processing…',
-        protectionApplied: '✓ High-pitch protection applied (peak {{before}} → {{after}}, high-band reduced {{db}} dB)',
+        protectionTitle: '① High-Pitch Protection',
+        protectionApplied: '✓ High-pitch protection applied (forced auto-tune)',
         protectionNeedsVocal: 'Complete the synthesize & mix step first to generate an AI vocal.',
+        protectionNotApplied: 'Apply high-pitch protection in step ③ (Mix) first.',
         pitchShiftTitle: '② Pitch-Shift the Target Song', pitchShiftSemitones: 'Pitch shift (semitones)',
         pitchShiftApply: 'Apply Pitch Shift', pitchShiftApplying: 'Processing…',
         pitchShiftApplied: '✓ Shifted {{semitones}} semitone(s)',
@@ -302,6 +337,19 @@ const resources = {
         prevPage: 'Prev', nextPage: 'Next', pageOf: 'Page {{page}} of {{totalPages}}',
       },
       audioTools: { title: 'Audio Tools', description: 'Batch source separation — drop files, choose modes, process all.', detect: 'Detect Device', drop: 'Drop audio files here, or click to browse', formats: 'Multiple files · WAV · FLAC · OGG', files: '{{count}} file(s)', done: '{{count}} done', pending: '{{count}} pending', failed: '{{count}} failed', process: 'Process {{count}}', processing: 'Processing…', clear: 'Clear', pendingStatus: '● Pending', errorStatus: '✕ Error', downloadAll: 'Download All ({{count}})', standard: 'Standard', enhanced: 'Enhanced' },
+      // Ticket 16: pitch analysis ("Analyze Pitch") panel — waveform region
+      // selection + max-note detection, shown after vocal separation in Cover Creation.
+      pitch: {
+        title: 'Pitch Analysis', analyze: 'Analyze Pitch', analyzing: 'Analyzing…',
+        selectRegionHint: 'Drag on the waveform to select a region to analyze, or leave it unselected to analyze the whole track.',
+        loadingWaveform: 'Loading waveform…',
+        wholeTrackLabel: 'No region selected — the whole track will be analyzed',
+        regionSelected: 'Selected region: {{start}}s – {{end}}s', clearRegion: 'Clear region',
+        wholeTrackTitle: 'Analyzed whole track', wholeTrackMessage: 'No region was selected, so the entire track was analyzed automatically.',
+        maxDetected: 'Detected highest note', suggestedThreshold: 'Suggested high-note protection threshold', avgDetected: 'Average pitch',
+        summary: 'Detected highest note: {{maxNote}}, suggested high-note protection threshold: {{thresholdNote}}',
+        noPitchDetected: 'No pitch detected — make sure the selected region contains vocals.',
+      },
       // Ticket 15: waveform display + drag-selected region editor.
       waveformEditor: {
         title: 'Waveform Editor', description: 'Drop an audio file to view its waveform, then drag on it to select a region for downstream processing.',
@@ -384,6 +432,10 @@ const resources = {
         synthesis: {
           complete: { title: 'Synthesis Complete', message: 'Cover synthesis finished ({{mode}}).' },
           failed:   { title: 'Synthesis Failed', message: 'Cover synthesis did not complete: {{message}}' },
+        },
+        highPitchProtection: {
+          complete: { title: 'High-Pitch Protection Applied', message: 'Corrected {{count}} high-pitch region(s); protection starts at D#4.' },
+          failed:   { title: 'High-Pitch Protection Failed', message: 'High-pitch protection did not complete: {{message}}' },
         },
         trainUpload: {
           complete: { title: 'Training Started', message: 'The training dataset was uploaded and the cloud training job has started.' },

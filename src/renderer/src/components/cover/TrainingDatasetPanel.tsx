@@ -4,12 +4,6 @@ import { notify } from '../../store/useNotificationStore'
 import type { TargetSong } from '../../store/useAppStore'
 
 // ── Engine response shapes (engine/train_dataset.py) ─────────────────────────
-interface ProtectResult {
-  output_path: string
-  high_band_reduction_db: number
-  peak_before: number
-  peak_after: number
-}
 interface ShiftResult {
   output_path: string
   duration_sec: number
@@ -31,8 +25,10 @@ interface PackageResult {
 type UploadPhase = 'idle' | 'packaging' | 'uploading' | 'training' | 'done' | 'error'
 
 interface Props {
-  /** The processed AI vocal (coverResult.ai_vocal_path) — Ticket 17 runs on this. Null until synthesis (step 3) has produced one. */
+  /** The AI vocal (coverResult.ai_vocal_path). Null until synthesis (step 3) has produced one. */
   vocalPath: string | null
+  /** Whether Ticket 17's <HighPitchProtection> has actually run on `vocalPath` — see CoverView's onApplied. */
+  vocalProtected: boolean
   /** The clean dry vocal from separation, offered as an optional extra training track. */
   dryVocalPath?: string | null
   /** Ticket 18's Cloud Library selection — the "target song" Ticket 19 pitch-shifts. */
@@ -55,14 +51,11 @@ function combinedPercent(phase: UploadPhase, subPercent: number): number {
   }
 }
 
-export function TrainingDatasetPanel({ vocalPath, dryVocalPath, targetSong, onMerged }: Props): JSX.Element {
+export function TrainingDatasetPanel({
+  vocalPath, vocalProtected, dryVocalPath, targetSong, onMerged,
+}: Props): JSX.Element {
   const { t } = useTranslation()
   const taskIdRef = useRef<string>(crypto.randomUUID())
-
-  // ── Ticket 17: high-pitch protection ──────────────────────
-  const [protecting, setProtecting]   = useState(false)
-  const [protectRes, setProtectRes]   = useState<ProtectResult | null>(null)
-  const [protectError, setProtectError] = useState<string | null>(null)
 
   // ── Ticket 19: pitch shift ────────────────────────────────
   const [semitones, setSemitones]     = useState(0)
@@ -71,11 +64,13 @@ export function TrainingDatasetPanel({ vocalPath, dryVocalPath, targetSong, onMe
   const [shiftError, setShiftError]   = useState<string | null>(null)
   const [includeDryVocal, setIncludeDryVocal] = useState(false)
 
-  // Fresh AI vocal / target song invalidates whatever was already applied —
-  // otherwise a re-synthesized vocal or a newly-picked song could silently
-  // merge in stale protected/shifted output from the previous one.
-  useEffect(() => { setProtectRes(null); setProtectError(null); setMergeRes(null) }, [vocalPath])
+  // A newly-picked target song invalidates whatever shift was already
+  // applied — otherwise switching songs could silently merge in a shift
+  // computed against the previous one.
   useEffect(() => { setShiftRes(null); setShiftError(null); setMergeRes(null) }, [targetSong?.id])
+  // A fresh (or freshly re-protected) AI vocal invalidates any merge that
+  // was built from the old one.
+  useEffect(() => { setMergeRes(null) }, [vocalPath, vocalProtected])
 
   // ── Ticket 20: merge ──────────────────────────────────────
   const [merging, setMerging]         = useState(false)
@@ -91,21 +86,6 @@ export function TrainingDatasetPanel({ vocalPath, dryVocalPath, targetSong, onMe
   const pollTimer = useRef<ReturnType<typeof setInterval> | null>(null)
 
   useEffect(() => () => { if (pollTimer.current) clearInterval(pollTimer.current) }, [])
-
-  async function handleProtect(): Promise<void> {
-    if (!vocalPath) return
-    setProtecting(true); setProtectError(null)
-    try {
-      const res = await window.engine.call('apply_high_pitch_protection', {
-        vocal_path: vocalPath, task_id: taskIdRef.current,
-      }) as ProtectResult
-      setProtectRes(res)
-    } catch (err) {
-      setProtectError(String(err))
-    } finally {
-      setProtecting(false)
-    }
-  }
 
   async function handlePitchShift(): Promise<void> {
     if (!targetSong) return
@@ -124,17 +104,17 @@ export function TrainingDatasetPanel({ vocalPath, dryVocalPath, targetSong, onMe
 
   // ── Prerequisites (Tickets 17/18/19, enforced) ────────────
   const missing: string[] = []
-  if (!protectRes) missing.push(t('cover.prereqProtection'))
-  if (!targetSong) missing.push(t('cover.prereqTargetSong'))
-  if (!shiftRes)   missing.push(t('cover.prereqPitchShift'))
+  if (!vocalProtected) missing.push(t('cover.prereqProtection'))
+  if (!targetSong)     missing.push(t('cover.prereqTargetSong'))
+  if (!shiftRes)        missing.push(t('cover.prereqPitchShift'))
   const prereqsMet = missing.length === 0
 
   async function handleMerge(): Promise<void> {
-    if (!prereqsMet || !protectRes || !shiftRes) return
+    if (!prereqsMet || !vocalPath || !shiftRes) return
     setMerging(true); setMergeError(null); setMergeRes(null)
     try {
       const res = await window.engine.call('merge_train_audio', {
-        vocal_path:        protectRes.output_path,
+        vocal_path:        vocalPath,
         target_path:       shiftRes.output_path,
         task_id:           taskIdRef.current,
         align_mode:        'pad',
@@ -230,27 +210,12 @@ export function TrainingDatasetPanel({ vocalPath, dryVocalPath, targetSong, onMe
         {t('cover.trainingDataDesc')}
       </p>
 
-      {/* ── Ticket 17: high-pitch protection ─────────────────── */}
+      {/* ── Ticket 17 status (applied in step ③'s <HighPitchProtection>) ── */}
       <div className="field">
         <label>{t('cover.protectionTitle')}</label>
         {!vocalPath && <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{t('cover.protectionNeedsVocal')}</div>}
-        {vocalPath && (
-          <>
-            <button className="btn btn-ghost" onClick={handleProtect} disabled={protecting}>
-              {protecting ? `⏳ ${t('cover.protectionApplying')}` : `🛡 ${t('cover.protectionApply')}`}
-            </button>
-            {protectError && <div className="error-banner" style={{ marginTop: 8 }}>{protectError}</div>}
-            {protectRes && (
-              <div style={{ fontSize: 12, color: 'var(--success)', marginTop: 8 }}>
-                {t('cover.protectionApplied', {
-                  before: protectRes.peak_before.toFixed(3),
-                  after:  protectRes.peak_after.toFixed(3),
-                  db:     protectRes.high_band_reduction_db.toFixed(1),
-                })}
-              </div>
-            )}
-          </>
-        )}
+        {vocalPath && !vocalProtected && <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{t('cover.protectionNotApplied')}</div>}
+        {vocalPath && vocalProtected && <div style={{ fontSize: 12, color: 'var(--success)' }}>{t('cover.protectionApplied')}</div>}
       </div>
 
       {/* ── Ticket 19: pitch shift ────────────────────────────── */}

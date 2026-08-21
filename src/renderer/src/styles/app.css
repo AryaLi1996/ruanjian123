@@ -853,6 +853,93 @@ html, body, #root {
 }
 .stem-solo-btn.active { color: var(--accent); border-color: var(--accent); }
 
+/* ── Pitch analysis panel (Ticket 16) ────────────────────── */
+.pitch-panel {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+}
+.pitch-panel-header {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 8px;
+}
+.pitch-panel-source { font-size: 12px; color: var(--text-muted); }
+.pitch-hint { font-size: 12px; color: var(--text-muted); margin: 4px 0 10px; }
+
+.pitch-waveform-wrap {
+  position: relative;
+  width: 100%;
+  height: 84px;
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--bg);
+  border: 1px solid var(--border);
+}
+.pitch-canvas { display: block; width: 100%; height: 100%; cursor: crosshair; }
+.pitch-waveform-loading {
+  display: flex; align-items: center; justify-content: center;
+  height: 100%; font-size: 12px; color: var(--text-muted);
+}
+.pitch-selection-overlay {
+  position: absolute; top: 0; bottom: 0;
+  background: color-mix(in srgb, var(--accent) 25%, transparent);
+  border-left: 1px solid var(--accent);
+  border-right: 1px solid var(--accent);
+  pointer-events: none;
+}
+
+.pitch-controls {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; margin-top: 10px; flex-wrap: wrap;
+}
+.pitch-region-label { font-size: 12px; color: var(--text-muted); }
+
+.pitch-result { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
+.pitch-result-summary { font-size: 13px; color: var(--text); margin: 0 0 10px; }
+.pitch-result-empty { font-size: 12px; color: var(--text-muted); margin: 0; }
+.pitch-result-stats { display: flex; gap: 20px; flex-wrap: wrap; }
+.pitch-stat { display: flex; flex-direction: column; gap: 2px; }
+.pitch-stat-label { font-size: 11px; color: var(--text-muted); }
+.pitch-stat-value { font-size: 18px; font-weight: 700; color: var(--text); }
+.pitch-stat-max { color: var(--accent); }
+.pitch-stat-threshold { color: var(--warning); }
+
+/* ── High-pitch protection (Ticket 17, 强制修音) ─────────────── */
+.hpp-card { margin-bottom: 20px; }
+.hpp-desc { font-size: 12px; color: var(--text-muted); margin: -8px 0 12px; }
+
+.hpp-wave-wrap {
+  position: relative;
+  margin-top: 14px;
+  min-height: 4px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  overflow: hidden;
+}
+.hpp-canvas { display: block; width: 100%; }
+
+/* Positioned by percentage over the waveform canvas — the red span the
+   correction actually touched, per Ticket 17's "waveform...highlight the
+   corrected regions in red" requirement. */
+.hpp-region {
+  position: absolute;
+  top: 0; bottom: 0;
+  background: color-mix(in srgb, var(--danger) 35%, transparent);
+  border-left: 1px solid var(--danger);
+  border-right: 1px solid var(--danger);
+  pointer-events: none;
+}
+
+.hpp-footer { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.hpp-info { font-size: 12px; color: var(--text-muted); }
+.hpp-legend { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text-muted); }
+.hpp-legend-swatch {
+  display: inline-block; width: 10px; height: 10px; border-radius: 2px;
+  background: color-mix(in srgb, var(--danger) 35%, transparent);
+  border: 1px solid var(--danger);
+}
+
 /* ── Mixing console ──────────────────────────────────────── */
 .mixer { padding: 4px 0; }
 

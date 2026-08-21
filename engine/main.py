@@ -331,6 +331,23 @@ def train_model(args):
     return {k: (bool(v) if isinstance(v, (bool,)) else v) for k, v in result.items()}
 
 
+def apply_high_pitch_protection(args):
+    """Ticket 17: clamp vocal pitch above the D#4 (MIDI 63) threshold down
+    to exactly that note, returning the corrected regions for UI highlighting."""
+    from pitch_protection import apply_high_pitch_protection as _protect  # noqa: PLC0415
+
+    params         = args[0] if args and isinstance(args[0], dict) else {}
+    audio_path     = params.get("audio_path")
+    threshold_note = int(params.get("threshold_note", 63))
+    output_path    = params.get("output_path")
+
+    if not audio_path:
+        return {"error": "audio_path is required"}
+
+    result = _protect(audio_path, threshold_note=threshold_note, output_path=output_path)
+    return dict(result)
+
+
 def watermark_embed(args):
     """Embed a blind watermark into audio returned by a previous synthesize call."""
     import numpy as np  # noqa: PLC0415
@@ -405,6 +422,30 @@ def encrypt_model(args):
     }
 
 
+def analyze_pitch(args):
+    """Ticket 16: extract the pitch contour of a region (or the whole track)
+    and report the highest note found, for the "分析音高" button.
+    """
+    from pitch_analysis import analyze_pitch as _analyze  # noqa: PLC0415
+
+    params     = args[0] if args and isinstance(args[0], dict) else {}
+    audio_path = params.get("audio_path", None)
+    start_sec  = params.get("start_sec", None)
+    end_sec    = params.get("end_sec", None)
+
+    if not audio_path:
+        return {"error": "audio_path is required"}
+
+    try:
+        return _analyze(audio_path, start_sec, end_sec)
+    except Exception as exc:
+        # Matches the other file-processing handlers (decrypt_model, etc.):
+        # surface a clean {"error": ...} the renderer can show, instead of
+        # letting a bad/corrupt file or missing codec raise all the way out
+        # to a non-zero exit + raw Python traceback on stderr.
+        return {"error": str(exc)}
+
+
 def decrypt_model(args):
     """Decrypt a .enc model file and verify it loads into ORT (in-memory only)."""
     from model_crypto import load_encrypted_session  # noqa: PLC0415
@@ -443,24 +484,6 @@ def _task_dir(task_id) -> Path:
     d = _writable_dir() / "train_datasets" / safe
     d.mkdir(parents=True, exist_ok=True)
     return d
-
-
-def apply_high_pitch_protection(args):
-    """Ticket 17: protect a vocal from harsh/clipped high-pitch passages
-    before it's used as merge-training material."""
-    from train_dataset import protect_vocal_file  # noqa: PLC0415
-
-    params = args[0] if args and isinstance(args[0], dict) else {}
-    vocal_path = params.get("vocal_path")
-    if not vocal_path:
-        return {"error": "vocal_path is required"}
-
-    output_path = params.get("output_path") or str(_task_dir(params.get("task_id")) / "protected_vocal.wav")
-    return protect_vocal_file(
-        vocal_path, output_path=output_path,
-        reduction_db=float(params.get("reduction_db", 8.0)),
-        peak_ceiling=float(params.get("peak_ceiling", 0.95)),
-    )
 
 
 def pitch_shift(args):
@@ -524,7 +547,13 @@ HANDLERS = {
     "watermark_verify":            watermark_verify,
     "encrypt_model":               encrypt_model,
     "decrypt_model":               decrypt_model,
+    # Ticket 17 (already on main): 强制修音 high-pitch protection.
     "apply_high_pitch_protection": apply_high_pitch_protection,
+    # Ticket 16 (already on main): pitch analysis ("分析音高").
+    "analyze_pitch":               analyze_pitch,
+    # Ticket 19/20 (this branch): pitch shift + merge/package for the
+    # training-dataset upload flow — see train_dataset.py. Reuses Ticket
+    # 17's apply_high_pitch_protection above for the protection step.
     "pitch_shift":                 pitch_shift,
     "merge_train_audio":           merge_train_audio,
     "package_train_dataset":       package_train_dataset,

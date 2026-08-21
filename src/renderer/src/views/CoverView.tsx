@@ -7,6 +7,8 @@ import { StemPlayer, type StemTrack } from '../components/cover/StemPlayer'
 import { MixingConsole, type MixTrack } from '../components/cover/MixingConsole'
 import { ExportPanel } from '../components/cover/ExportPanel'
 import { TrainingDatasetPanel } from '../components/cover/TrainingDatasetPanel'
+import { PitchAnalysisPanel } from '../components/cover/PitchAnalysisPanel'
+import { HighPitchProtection } from '../components/cover/HighPitchProtection'
 import { CloudLibraryModal } from '../components/library/CloudLibraryModal'
 import type { LibrarySong } from '../global'
 
@@ -54,6 +56,10 @@ export function CoverView(): JSX.Element {
   const [synthesizing, setSynthesizing] = useState(false)
   const [coverResult,  setCoverResult]  = useState<CoverResult | null>(null)
   const [synthError,   setSynthError]   = useState<string | null>(null)
+  // Ticket 20 gates on Ticket 17 having actually run (not just that a vocal
+  // exists) — see <HighPitchProtection>'s onApplied below, and
+  // TrainingDatasetPanel's prereqProtection.
+  const [vocalProtected, setVocalProtected] = useState(false)
   const renderMixRef = useRef<(() => Promise<Float32Array>) | null>(null)
   const onExportRequest = useCallback((fn: () => Promise<Float32Array>) => {
     renderMixRef.current = fn
@@ -151,6 +157,7 @@ export function CoverView(): JSX.Element {
       // mixer renders; the user (or the mixer's own "proceed" button) is
       // what should trigger the move to step 4, once mixing is registered.
       setCoverResult(res)
+      setVocalProtected(false)   // fresh AI vocal — Ticket 17 hasn't run on it yet
       setCompleted((s) => new Set([...s, 3]))
       notify({
         category: 'taskCompletion',
@@ -196,6 +203,19 @@ export function CoverView(): JSX.Element {
     : []
 
   const selectedModel = trainedModels.find((m) => m.id === selectedModelId)
+
+  // Ticket 16: prefer the driest lead vocal available for pitch analysis —
+  // same fallback chain used to pick the reference vocal for synthesis.
+  // Label mirrors whichever key the path actually came from (not just the
+  // first two candidates) so the panel never claims to be analyzing
+  // "Vocals" when it fell back to some other stem.
+  const pitchStemKey = sepResult
+    ? (['lead_dry', 'vocals'].find((k) => sepResult.stems[k]) ?? Object.keys(sepResult.stems)[0])
+    : null
+  const pitchStemPath  = pitchStemKey && sepResult ? sepResult.stems[pitchStemKey] : null
+  const pitchStemLabel = pitchStemKey
+    ? stemTracks.find((s) => s.key === pitchStemKey)?.label ?? pitchStemKey
+    : ''
 
   return (
     <>
@@ -276,6 +296,11 @@ export function CoverView(): JSX.Element {
             <div style={{ marginTop: 20 }}>
               <div className="card-title">{t('cover.stems')}</div>
               <StemPlayer stems={stemTracks} />
+              {pitchStemPath && (
+                <div style={{ marginTop: 16 }}>
+                  <PitchAnalysisPanel audioPath={pitchStemPath} label={pitchStemLabel} />
+                </div>
+              )}
               <button className="btn btn-primary" style={{ marginTop: 16 }}
                 onClick={() => complete(1, 2)}>
                 {t('cover.nextModel')}
@@ -364,6 +389,18 @@ export function CoverView(): JSX.Element {
               <div style={{ fontSize: 12, color: 'var(--success)', marginBottom: 16 }}>
                 {t('cover.synthesizedInfo', { elapsed: coverResult.elapsed_sec, duration: coverResult.duration_sec })}
               </div>
+
+              {/* Ticket 17: 强制修音 — clamp any AI-vocal pitch above D#4
+                  before mixing, so the mixer/export downstream always work
+                  from the protected stem once applied. */}
+              <HighPitchProtection
+                audioPath={coverResult.ai_vocal_path}
+                onApplied={(path) => {
+                  setCoverResult((prev) => (prev ? { ...prev, ai_vocal_path: path } : prev))
+                  setVocalProtected(true)
+                }}
+              />
+
               <div className="card-title" style={{ marginBottom: 12 }}>{t('cover.mixer')}</div>
               {mixTracks.length > 0 && (
                 <MixingConsole
@@ -405,6 +442,7 @@ export function CoverView(): JSX.Element {
           <div className="card-title">⑤ {t('cover.trainingDataTitle')}</div>
           <TrainingDatasetPanel
             vocalPath={coverResult?.ai_vocal_path ?? null}
+            vocalProtected={vocalProtected}
             dryVocalPath={sepResult?.stems['lead_dry'] ?? null}
             targetSong={targetSong}
             onMerged={() => setCompleted((s) => new Set([...s, 5]))}

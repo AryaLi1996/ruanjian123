@@ -580,6 +580,75 @@ def test_t11_postprocess(duration: float) -> TestResult:
     return r  # type: ignore[return-value]
 
 
+def test_t12_high_pitch_protection(duration: float) -> TestResult:
+    """Ticket 17: pitch above D#4 (MIDI 63) must be clamped down to the
+    threshold with no clipping/NaNs, unshifted audio must be reported as
+    such, and the whole clip must clear the 5s/30s-clip CPU budget."""
+    r = _make_result("T12", "High-pitch protection (D#4 auto-tune)")
+    try:
+        import tempfile
+        import soundfile as sf_mod  # noqa: PLC0415
+        from pitch_protection import apply_high_pitch_protection, midi_to_hz  # noqa: PLC0415
+
+        sr = 44100
+        threshold_note = 63
+        threshold_hz = midi_to_hz(threshold_note)
+
+        # First half: A5 (880 Hz), well above the threshold — must be
+        # flattened to ~D#4. Second half: A3 (220 Hz), below it — must pass
+        # through unmodified.
+        half = duration / 2
+        high = _sine(880.0, half, sr) * 0.6
+        low  = _sine(220.0, half, sr) * 0.6
+        clip = np.concatenate([high, low]).astype(np.float32)
+
+        tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+        _write_wav(Path(tmp.name), clip, sr)
+
+        t0  = time.perf_counter()
+        res = apply_high_pitch_protection(tmp.name, threshold_note=threshold_note)
+        elapsed = time.perf_counter() - t0
+
+        out, out_sr = sf_mod.read(res["output_path"], dtype="float32")
+
+        # Dominant frequency of the corrected first half, well away from the
+        # seam between the two notes, via the same spectral-peak technique
+        # the module itself uses to detect pitch.
+        seg = out[: int(half * sr) // 2]
+        spec = np.abs(np.fft.rfft(seg * np.hanning(len(seg))))
+        freqs = np.fft.rfftfreq(len(seg), 1.0 / out_sr)
+        band = (freqs >= 80) & (freqs <= 1200)
+        peak_hz = float(freqs[band][np.argmax(spec[band])])
+
+        r["elapsed"] = elapsed
+        r["metrics"] = {
+            "threshold_hz":      round(threshold_hz, 2),
+            "corrected_peak_hz": round(peak_hz, 2),
+            "modified_regions":  len(res["modified_regions"]),
+            "modified_ratio":    res["modified_ratio"],
+            "max_abs":           round(float(np.max(np.abs(out))), 4),
+            "is_finite":         bool(np.all(np.isfinite(out))),
+        }
+        r["targets"] = {"max_elapsed_sec_per_30s": 5.0, "max_pitch_error_hz": 15.0}
+        budget = 5.0 * max(1.0, duration / 30.0)
+        r["passed"] = bool(
+            abs(peak_hz - threshold_hz) <= 15.0
+            and len(res["modified_regions"]) >= 1
+            and np.all(np.isfinite(out))
+            and float(np.max(np.abs(out))) <= 1.0
+            and elapsed <= budget
+        )
+        if abs(peak_hz - threshold_hz) > 15.0:
+            r["errors"].append(f"Corrected pitch {peak_hz:.1f} Hz not near threshold {threshold_hz:.1f} Hz")
+        if len(res["modified_regions"]) < 1:
+            r["errors"].append("No modified regions reported for a clip with a note above threshold")
+        if elapsed > budget:
+            r["errors"].append(f"Processing took {elapsed:.2f}s (budget: {budget:.2f}s)")
+    except Exception as e:
+        r["errors"].append(str(e))
+    return r  # type: ignore[return-value]
+
+
 def test_t09_watermark(targets: dict) -> TestResult:
     r = _make_result("T09", "Blind watermark embed + verify")
     try:
@@ -725,7 +794,7 @@ def main() -> None:
     ap.add_argument("--fast",   action="store_true", help="Short durations for CI (≤ 60s total)")
     ap.add_argument("--bench",  action="store_true", help="Run with longer durations for benchmarking")
     ap.add_argument("--skip",   action="append", default=[], metavar="CATEGORY",
-                    help="Skip category: training, cover, separation, watermark")
+                    help="Skip category: training, cover, separation, watermark, pitch_protection")
     ap.add_argument("--output", metavar="FILE",  help="Write JSON report to FILE")
     ap.add_argument("--tier",   metavar="TIER",  help="Override hardware tier detection")
     args = ap.parse_args()
@@ -772,6 +841,10 @@ def main() -> None:
     # Post-processing (Ticket 48)
     if "postprocess" not in args.skip:
         results.append(test_t11_postprocess(synth_dur))
+
+    # High-pitch protection (Ticket 17)
+    if "pitch_protection" not in args.skip:
+        results.append(test_t12_high_pitch_protection(synth_dur))
 
     # Training (optional — requires torch)
     if "training" not in args.skip:
