@@ -29,12 +29,33 @@ export interface TrainedModel {
 // remote audio_url directly. Session-only, like selectedModel above — it's
 // meant to persist "until changed" within a running session, not survive a
 // restart.
+//
+// pitchShift/shiftedAudioPath (Ticket 19): the Tune slider's applied key
+// change and the local, engine-cached result of running
+// librosa.effects.pitch_shift on audioPath at that shift. shiftedAudioPath
+// is null at shift 0 (nothing to shift — audioPath is used as-is); see
+// CoverView's handleSeparate for where the two are chosen between.
 export interface TargetSong {
-  id:          string
-  title:       string
-  artist:      string
-  originalKey: string | null
-  audioPath:   string
+  id:               string
+  title:            string
+  artist:           string
+  originalKey:      string | null
+  audioPath:        string
+  pitchShift:       number
+  shiftedAudioPath: string | null
+}
+
+// Ticket 16 (minimal): the user's own vocal range, analyzed from their
+// Model Training upload material via the engine's analyze_vocal_range call
+// (see TrainingView's handleTrain). Only maxMidi is used today — by
+// Ticket 19's recommended-shift formula — but minMidi is kept alongside it
+// since the engine already computes both and a future range-aware feature
+// (e.g. warning when a shifted song still exceeds the low end) can reuse
+// it without another analysis pass. Session-only: re-analyzed the next
+// time training material is uploaded, not persisted across restarts.
+export interface VocalRange {
+  minMidi: number
+  maxMidi: number
 }
 
 interface AppState {
@@ -46,6 +67,7 @@ interface AppState {
   modelsHydrated:  boolean   // true once the persisted library has been loaded — gates autosave
                               // so an early empty render can't overwrite the saved file with []
   targetSong:      TargetSong | null
+  userVocalRange:  VocalRange | null
 
   setActiveView:    (view: ActiveView) => void
   setSelectedModel: (path: string | null) => void
@@ -56,6 +78,11 @@ interface AppState {
   updateModelDemo:  (id: string, demoAudioUrl: string) => void
   hydrateModels:    (models: TrainedModel[]) => void
   setTargetSong:    (song: TargetSong | null) => void
+  // Ticket 19: records a newly-applied pitch shift (and its cached shifted
+  // audio) on the current target song. No-ops if the song has since been
+  // cleared/changed from under an in-flight shift request.
+  setTargetSongShift: (shift: number, shiftedAudioPath: string | null) => void
+  setUserVocalRange:  (range: VocalRange | null) => void
 }
 
 export const useAppStore = create<AppState>((set) => ({
@@ -66,6 +93,7 @@ export const useAppStore = create<AppState>((set) => ({
   trainedModels:  [],
   modelsHydrated: false,
   targetSong:     null,
+  userVocalRange: null,
 
   setActiveView:    (view)  => set({ activeView: view }),
   setSelectedModel: (path)  => set({ selectedModel: path }),
@@ -79,4 +107,7 @@ export const useAppStore = create<AppState>((set) => ({
     })),
   hydrateModels:    (models) => set({ trainedModels: models, modelsHydrated: true }),
   setTargetSong:    (song)   => set({ targetSong: song }),
+  setTargetSongShift: (shift, shiftedAudioPath) =>
+    set((s) => (s.targetSong ? { targetSong: { ...s.targetSong, pitchShift: shift, shiftedAudioPath } } : s)),
+  setUserVocalRange: (range) => set({ userVocalRange: range }),
 }))

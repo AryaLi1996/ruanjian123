@@ -6,7 +6,9 @@ import { StepWizard } from '../components/cover/StepWizard'
 import { StemPlayer, type StemTrack } from '../components/cover/StemPlayer'
 import { MixingConsole, type MixTrack } from '../components/cover/MixingConsole'
 import { ExportPanel } from '../components/cover/ExportPanel'
+import { PitchShiftSlider } from '../components/cover/PitchShiftSlider'
 import { CloudLibraryModal } from '../components/library/CloudLibraryModal'
+import { computeRecommendedShift } from '../utils/pitch'
 import type { LibrarySong } from '../global'
 
 type SepMode  = 'standard' | 'enhanced'
@@ -28,6 +30,20 @@ export function CoverView(): JSX.Element {
   const targetSong    = useAppStore((s) => s.targetSong)
   const setTargetSong = useAppStore((s) => s.setTargetSong)
   const [libraryOpen, setLibraryOpen] = useState(false)
+
+  // ── Pitch Shift / Tune slider (Ticket 19) ────────────────
+  const userVocalRange     = useAppStore((s) => s.userVocalRange)
+  const setTargetSongShift = useAppStore((s) => s.setTargetSongShift)
+  const [shifting,   setShifting]   = useState(false)
+  const [shiftError, setShiftError] = useState<string | null>(null)
+  const recommendedShift = targetSong
+    ? computeRecommendedShift(targetSong.originalKey, userVocalRange?.maxMidi ?? null)
+    : null
+  // Guards against a fast re-drag: if the user commits a second shift before
+  // the first's engine call returns, only the response matching the latest
+  // request may write into the store — otherwise an in-flight response for
+  // an already-abandoned value could land after (and overwrite) it.
+  const shiftRequestRef = useRef(0)
 
   // ── Wizard state ─────────────────────────────────────────
   const [step,      setStep]      = useState(1)
@@ -71,9 +87,12 @@ export function CoverView(): JSX.Element {
       // onChange below), so at most one of these branches applies. The
       // library song's audio is already a local, cached file — see
       // main/library.ts's fetchLibraryAudio — so it needs no upload step.
+      // Ticket 19: a pitch-shifted target song uses its cached shifted audio
+      // (shiftedAudioPath) as the training target instead of the original
+      // download — null at shift 0, where there's nothing to shift.
       const inputPath = songFile
         ? `${await window.engine.saveTrainingFiles([{ name: songFile.name, buffer: await songFile.arrayBuffer() }])}/${songFile.name}`
-        : targetSong!.audioPath
+        : targetSong!.shiftedAudioPath ?? targetSong!.audioPath
       const res = await window.engine.call('separate', {
         mode:       sepMode,
         input_path: inputPath,
@@ -107,14 +126,46 @@ export function CoverView(): JSX.Element {
   // ─────────────────────────────────────────────────────────
   function handleLibrarySelect(song: LibrarySong, audioPath: string): void {
     setSongFile(null)   // mutually exclusive with a local upload — see handleSeparate
+    setShiftError(null)
     setTargetSong({
-      id:          song.id,
-      title:       song.title,
-      artist:      song.artist,
-      originalKey: song.original_key,
+      id:               song.id,
+      title:            song.title,
+      artist:           song.artist,
+      originalKey:      song.original_key,
       audioPath,
+      pitchShift:       0,
+      shiftedAudioPath: null,
     })
     setLibraryOpen(false)
+  }
+
+  // ─────────────────────────────────────────────────────────
+  // Pitch Shift / Tune slider (Ticket 19)
+  // ─────────────────────────────────────────────────────────
+  async function handlePitchShiftChange(nextShift: number): Promise<void> {
+    if (!targetSong || nextShift === targetSong.pitchShift) return
+    setShiftError(null)
+    const requestId = ++shiftRequestRef.current
+
+    if (nextShift === 0) {
+      setTargetSongShift(0, null)
+      setShifting(false)   // supersedes any shift still in flight — see requestId above
+      return
+    }
+
+    setShifting(true)
+    try {
+      const res = await window.engine.call('pitch_shift', {
+        input_path: targetSong.audioPath,
+        semitones:  nextShift,
+        cache_key:  targetSong.id,
+      }) as { output_path: string }
+      if (shiftRequestRef.current === requestId) setTargetSongShift(nextShift, res.output_path)
+    } catch (err) {
+      if (shiftRequestRef.current === requestId) setShiftError(String(err))
+    } finally {
+      if (shiftRequestRef.current === requestId) setShifting(false)
+    }
   }
 
   // ─────────────────────────────────────────────────────────
@@ -245,6 +296,21 @@ export function CoverView(): JSX.Element {
               </button>
             </div>
           </div>
+
+          {/* Ticket 19: only meaningful for a 云曲库 song — a local upload has
+              no catalog `original_key` to shift against and is meant to be
+              used as-is. */}
+          {targetSong && (
+            <div className="field">
+              <PitchShiftSlider
+                value={targetSong.pitchShift}
+                recommended={recommendedShift}
+                busy={shifting}
+                onChange={(v) => void handlePitchShiftChange(v)}
+              />
+              {shiftError && <div className="error-banner">{shiftError}</div>}
+            </div>
+          )}
 
           <div className="field">
             <label>{t('cover.separationMode')}</label>
