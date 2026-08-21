@@ -22,6 +22,21 @@ export interface TrainedModel {
   qualityWarning?: string | null
 }
 
+// Ticket 18: the song picked in the Cloud Library (云曲库) modal — the
+// "目标音频" that Cover Creation separates and replaces the vocal of.
+// audioPath is a local file already downloaded/cached by the main process
+// (see main/library.ts's fetchLibraryAudio), so consumers never touch the
+// remote audio_url directly. Session-only, like selectedModel above — it's
+// meant to persist "until changed" within a running session, not survive a
+// restart.
+export interface TargetSong {
+  id:          string
+  title:       string
+  artist:      string
+  originalKey: string | null
+  audioPath:   string
+}
+
 interface AppState {
   activeView:      ActiveView
   selectedModel:   string | null
@@ -30,6 +45,7 @@ interface AppState {
   trainedModels:   TrainedModel[]
   modelsHydrated:  boolean   // true once the persisted library has been loaded — gates autosave
                               // so an early empty render can't overwrite the saved file with []
+  targetSong:      TargetSong | null
 
   setActiveView:    (view: ActiveView) => void
   setSelectedModel: (path: string | null) => void
@@ -39,6 +55,7 @@ interface AppState {
   removeModel:      (id: string) => void
   updateModelDemo:  (id: string, demoAudioUrl: string) => void
   hydrateModels:    (models: TrainedModel[]) => void
+  setTargetSong:    (song: TargetSong | null) => void
 }
 
 export const useAppStore = create<AppState>((set) => ({
@@ -48,6 +65,7 @@ export const useAppStore = create<AppState>((set) => ({
   engineStatus:   'idle',
   trainedModels:  [],
   modelsHydrated: false,
+  targetSong:     null,
 
   setActiveView:    (view)  => set({ activeView: view }),
   setSelectedModel: (path)  => set({ selectedModel: path }),
@@ -60,4 +78,5 @@ export const useAppStore = create<AppState>((set) => ({
       trainedModels: s.trainedModels.map((m) => m.id === id ? { ...m, demoAudioUrl: url } : m),
     })),
   hydrateModels:    (models) => set({ trainedModels: models, modelsHydrated: true }),
+  setTargetSong:    (song)   => set({ targetSong: song }),
 }))
