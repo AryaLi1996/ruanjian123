@@ -497,6 +497,16 @@ def test_t08_training_standard(targets: dict) -> TestResult:
         res = train(data_dir, out_path, mode="standard", epochs=3, batch_size=16)
         elapsed = time.perf_counter() - t0
 
+        # Ticket 48 §5/§6: quality_score/quality_warning/data_quality must be
+        # present and well-formed on every training run, not just wired up
+        # for the happy path — the UI shows them unconditionally.
+        quality_score = res.get("quality_score")
+        data_quality  = res.get("data_quality")
+        quality_ok = (
+            isinstance(quality_score, (int, float)) and 0.0 <= quality_score <= 1.0
+            and isinstance(data_quality, dict) and "warnings" in data_quality
+        )
+
         r["elapsed"] = elapsed
         r["metrics"] = {
             "best_loss":        res["best_loss"],
@@ -504,14 +514,67 @@ def test_t08_training_standard(targets: dict) -> TestResult:
             "model_bytes":      res["model_bytes"],
             "device":           res["device"],
             "elapsed_sec":      res["elapsed_sec"],
+            "quality_score":    quality_score,
+            "quality_warning":  res.get("quality_warning"),
+            "data_quality_n_files": (data_quality or {}).get("n_files"),
         }
         r["targets"] = {"train_std_sec": targets["train_std_sec"]}
-        r["passed"]  = elapsed <= targets["train_std_sec"] and res["model_bytes"] > 0
+        r["passed"]  = elapsed <= targets["train_std_sec"] and res["model_bytes"] > 0 and quality_ok
         if elapsed > targets["train_std_sec"]:
             r["errors"].append(f"Training {elapsed:.1f}s > target {targets['train_std_sec']}s")
+        if not quality_ok:
+            r["errors"].append(f"quality_score/data_quality missing or malformed: {quality_score!r}")
     except ImportError:
         r["errors"].append("PyTorch not available — skip training test")
         r["passed"] = True   # optional if no torch
+    except Exception as e:
+        r["errors"].append(str(e))
+    return r  # type: ignore[return-value]
+
+
+def test_t11_postprocess(duration: float) -> TestResult:
+    """Ticket 48: postprocess_chain must measurably reduce injected broadband
+    noise without destroying the underlying tone or clipping the output."""
+    r = _make_result("T11", f"Post-processing chain ({duration}s audio)")
+    try:
+        from postprocess import postprocess_chain  # noqa: PLC0415
+
+        sr = 44100
+        clean = (_sine(220.0, duration, sr) * 0.5).astype(np.float32)
+        rng   = np.random.default_rng(7)
+        # std=0.15 against a 0.5-amplitude tone ≈ 7.5 dB baseline SNR — a
+        # clearly audible hiss, matching the "significant background noise"
+        # users report (Ticket 48), not a barely-there noise floor.
+        noisy = (clean + rng.standard_normal(len(clean)).astype(np.float32) * 0.15).astype(np.float32)
+
+        t0  = time.perf_counter()
+        res = postprocess_chain(noisy, sr)
+        elapsed = time.perf_counter() - t0
+
+        out = res["audio"]
+        n = min(len(clean), len(out))
+        snr_before = si_snr(clean[:n], noisy[:n])
+        snr_after  = si_snr(clean[:n], out[:n])
+
+        r["elapsed"] = elapsed
+        r["metrics"] = {
+            "snr_before_db":      round(snr_before, 2),
+            "snr_after_db":       round(snr_after, 2),
+            "noise_reduction_db": res["noise_reduction_db"],
+            "final_peak":         res["final_peak"],
+            "is_finite":          bool(np.all(np.isfinite(out))),
+        }
+        r["targets"] = {"min_snr_improvement_db": 2.0, "max_peak": 1.0}
+        r["passed"] = bool(
+            snr_after > snr_before + 2.0
+            and np.all(np.isfinite(out))
+            and res["final_peak"] <= 1.0
+        )
+        if snr_after <= snr_before + 2.0:
+            r["errors"].append(
+                f"SNR improved only {snr_after - snr_before:.2f} dB (want ≥ 2 dB)")
+        if res["final_peak"] > 1.0:
+            r["errors"].append(f"Output peak {res['final_peak']} exceeds 1.0 (clipping)")
     except Exception as e:
         r["errors"].append(str(e))
     return r  # type: ignore[return-value]
@@ -705,6 +768,10 @@ def main() -> None:
     if "cover" not in args.skip:
         results.append(test_t06_cover_v1(cover_dur, targets))
         results.append(test_t07_cover_v2(cover_dur, targets))
+
+    # Post-processing (Ticket 48)
+    if "postprocess" not in args.skip:
+        results.append(test_t11_postprocess(synth_dur))
 
     # Training (optional — requires torch)
     if "training" not in args.skip:

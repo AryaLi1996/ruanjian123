@@ -223,6 +223,7 @@ def synthesize_cover(args):
         "elapsed_sec":    result["elapsed_sec"],
         "rt_ratio":       result["rt_ratio"],
         "vibrato_depth":  result["vibrato_depth"],
+        "noise_reduction_db": result["noise_reduction_db"],
         "output_path":    result["output_path"],
         "ai_vocal_path":  result["ai_vocal_path"],
         "passed":         bool(result["passed"]),

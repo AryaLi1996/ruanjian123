@@ -16,6 +16,8 @@ export interface PersistedModel {
   demoAudioPath: string | null
   epochs:        number
   bestLoss:      number
+  qualityScore?:   number
+  qualityWarning?: string | null
 }
 
 interface WarmupResult {

@@ -35,6 +35,14 @@ export function ModelCard({ model, onDelete, onRetrain, onPlay }: Props): JSX.El
         {model.bestLoss != null && (
           <div className="model-card-loss">{t('training.lossLabel', { value: model.bestLoss.toFixed(5) })}</div>
         )}
+        {/* Ticket 48 §7: keep the low-quality warning visible after training
+            finishes, not just in the one-time result screen — this card is
+            what the user sees every time they come back to pick a voice. */}
+        {model.qualityWarning && (
+          <div className="model-card-loss" style={{ color: 'var(--warning, #d99a1b)' }} title={model.qualityWarning}>
+            ⚠ {t('training.qualityLow')}
+          </div>
+        )}
       </div>
 
       <div className="model-card-actions">
