@@ -97,6 +97,8 @@ declare global {
       call:              (method: string, ...args: unknown[]) => Promise<unknown>
       onProgress:        (callback: (data: unknown) => void) => () => void
       stream:            (method: string, ...args: unknown[]) => Promise<unknown>
+      /** Ticket UI-10: kills the streaming run in flight; true if one was killed. */
+      cancelStream:      () => Promise<boolean>
       saveTrainingFiles: (files: Array<{ name: string; buffer: ArrayBuffer }>) => Promise<string>
       readFile:          (filePath: string) => Promise<ArrayBuffer>
       saveRecording:     (buffer: ArrayBuffer, defaultName: string) => Promise<string | null>
