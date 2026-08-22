@@ -61,6 +61,25 @@ const resources = {
         pitchShift: '调音（半音）', pitchShiftRecommended: '推荐移调：{{value}}',
         pitchShiftRecommendedTitle: '推荐移调：{{value}} 半音',
         pitchShiftApplyRecommended: '应用推荐值', pitchShiftProcessing: '正在处理移调音频…',
+        // Ticket 20: Merge Audio & Upload Training Dataset (consumes Ticket
+        // 17's 高音保护 and Ticket 19's 变调, both applied earlier in the
+        // wizard — this step just reads their results).
+        stepTrainingData: '训练数据集',
+        trainingDataTitle: '生成训练数据集', trainingDataDesc: '合并已应用高音保护的人声与变调后的目标歌曲，打包上传并开始云端训练。',
+        protectionTitle: '① 高音保护',
+        protectionApplied: '✓ 已应用高音保护（强制修音）',
+        protectionNeedsVocal: '请先完成合成与混音步骤，生成 AI 人声。',
+        protectionNotApplied: '请先在③混音步骤中应用高音保护。',
+        includeDryVocal: '同时包含干声人声轨（用于训练灵活性）',
+        mergeTitle: '② 合并所有音频', mergeAction: '合并所有音频', merging: '合并中…',
+        mergeBlockedTooltip: '请先完成：{{reasons}}',
+        mergeBlockedShifting: '正在处理变调音频，请稍候…',
+        prereqProtection: '高音保护', prereqTargetSong: '选择目标歌曲',
+        mergeResultInfo: '✓ 已合并：时长 {{duration}} 秒 · {{sampleRate}} Hz',
+        mergePadded: '（已用静音填充 {{sec}} 秒）', mergeTruncated: '（已截断 {{sec}} 秒）',
+        uploadTitle: '③ 上传并开始训练', uploadAction: '上传并开始训练', uploadNeedsMerge: '请先合并所有音频。',
+        phasePackaging: '正在打包…', phaseUploading: '正在上传…', phaseTraining: '云端训练中…',
+        phaseDone: '✓ 训练已开始', uploadResult: '模型：{{modelUrl}}',
       },
       // Ticket 18: Cloud Library (云曲库) search modal.
       library: {
@@ -174,6 +193,10 @@ const resources = {
         highPitchProtection: {
           complete: { title: '高音保护已应用', message: '已修正 {{count}} 处高音，高音保护起点为 D#4。' },
           failed:   { title: '高音保护失败', message: '高音保护未能完成：{{message}}' },
+        },
+        trainUpload: {
+          complete: { title: '训练已开始', message: '训练数据集已上传，云端训练任务已开始。' },
+          failed:   { title: '上传/训练失败', message: '未能上传训练数据集或启动训练：{{message}}' },
         },
         trial: {
           activated:     { title: '试用已激活', message: '你的免费试用已开始，尽情体验全部功能吧。' },
@@ -291,6 +314,25 @@ const resources = {
         pitchShift: 'Tune (semitones)', pitchShiftRecommended: 'Recommended shift: {{value}}',
         pitchShiftRecommendedTitle: 'Recommended shift: {{value}} semitones',
         pitchShiftApplyRecommended: 'Apply recommended', pitchShiftProcessing: 'Re-processing shifted audio…',
+        // Ticket 20: Merge Audio & Upload Training Dataset (consumes Ticket
+        // 17's high-pitch protection and Ticket 19's pitch shift, both
+        // applied earlier in the wizard — this step just reads their results).
+        stepTrainingData: 'Training Dataset',
+        trainingDataTitle: 'Build Training Dataset', trainingDataDesc: 'Merge the high-pitch-protected vocal with the pitch-shifted target song, then package and upload it to start cloud training.',
+        protectionTitle: '① High-Pitch Protection',
+        protectionApplied: '✓ High-pitch protection applied (forced auto-tune)',
+        protectionNeedsVocal: 'Complete the synthesize & mix step first to generate an AI vocal.',
+        protectionNotApplied: 'Apply high-pitch protection in step ③ (Mix) first.',
+        includeDryVocal: 'Also include the dry vocal track (for training flexibility)',
+        mergeTitle: '② Merge All Audio', mergeAction: 'Merge All Audio', merging: 'Merging…',
+        mergeBlockedTooltip: 'Complete first: {{reasons}}',
+        mergeBlockedShifting: 'Pitch-shift processing in progress — please wait…',
+        prereqProtection: 'high-pitch protection', prereqTargetSong: 'target song selection',
+        mergeResultInfo: '✓ Merged: {{duration}}s · {{sampleRate}} Hz',
+        mergePadded: ' (padded with {{sec}}s of silence)', mergeTruncated: ' (truncated {{sec}}s)',
+        uploadTitle: '③ Upload & Start Training', uploadAction: 'Upload & Start Training', uploadNeedsMerge: 'Merge all audio first.',
+        phasePackaging: 'Packaging…', phaseUploading: 'Uploading…', phaseTraining: 'Training in the cloud…',
+        phaseDone: '✓ Training started', uploadResult: 'Model: {{modelUrl}}',
       },
       // Ticket 18: Cloud Library search modal.
       library: {
@@ -402,6 +444,10 @@ const resources = {
         highPitchProtection: {
           complete: { title: 'High-Pitch Protection Applied', message: 'Corrected {{count}} high-pitch region(s); protection starts at D#4.' },
           failed:   { title: 'High-Pitch Protection Failed', message: 'High-pitch protection did not complete: {{message}}' },
+        },
+        trainUpload: {
+          complete: { title: 'Training Started', message: 'The training dataset was uploaded and the cloud training job has started.' },
+          failed:   { title: 'Upload/Training Failed', message: 'Could not upload the training dataset or start training: {{message}}' },
         },
         trial: {
           activated:    { title: 'Trial Activated', message: 'Your free trial has started — enjoy full access.' },

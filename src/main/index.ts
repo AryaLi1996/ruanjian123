@@ -10,6 +10,7 @@ import { LICENSE_CONFIG, usingDefaultSigningSecret } from './license-config'
 import { loadModels, saveModels, type PersistedModel } from './model-registry'
 import { loadLyricsCache, saveLyricsCache, type LyricsCache } from './lyrics-cache'
 import { searchLibrary, fetchLibraryAudio, type LibrarySong } from './library'
+import { uploadTrainDataset, getTrainStatus, type TrainStartConfig } from './train-upload'
 import {
   saveBackground, saveBackgroundMeta, loadBackground, loadBackgroundSource, removeBackground,
   type SaveBackgroundPayload, type BackgroundMeta,
@@ -596,6 +597,22 @@ ipcMain.handle(
 ipcMain.handle(
   'library:fetch-audio',
   (_event, song: LibrarySong) => fetchLibraryAudio(song),
+)
+
+// ── Upload & Start Training (Ticket 20) ─────────────────────────────────────
+// See train-upload.ts — packages/merges the training dataset (done by the
+// Python engine — engine:call('merge_train_audio'/'package_train_dataset'))
+// are proxied the same generic way; only the network-touching upload/train
+// calls need dedicated handlers here, for the same CSP reason as
+// library:search above.
+ipcMain.handle(
+  'train:upload',
+  (_event, zipPath: string, taskId: string, config: TrainStartConfig) =>
+    uploadTrainDataset(zipPath, taskId, config),
+)
+ipcMain.handle(
+  'train:status',
+  (_event, taskId: string) => getTrainStatus(taskId),
 )
 
 // Save a recorded WAV clip to a user-selected location (Playback/Monitor page).

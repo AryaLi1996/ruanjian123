@@ -38,6 +38,31 @@ export interface LibrarySearchResult {
   hasMore:  boolean
 }
 
+// Upload & Start Training (Ticket 20). Mirrors main/train-upload.ts's
+// TrainStartResult / TrainStatusResult (see PersistedModel above for why
+// renderer and main keep separate copies).
+export type TrainJobStatus = 'uploading' | 'queued' | 'training' | 'completed' | 'failed'
+export interface TrainStartResult {
+  task_id:  string
+  file_url: string
+  status:   string
+}
+export interface TrainStatusResult {
+  task_id:    string
+  status:     TrainJobStatus
+  percent:    number
+  message?:   string
+  model_url?: string
+  error?:     string
+}
+export interface TrainStartConfig {
+  mode?:                string
+  pitchShiftSemitones?: number
+  highPitchProtection?: boolean
+  includeDryVocal?:     boolean
+  [key: string]:        unknown
+}
+
 interface WarmupResult {
   passed:     boolean
   ep?:        string
@@ -90,6 +115,9 @@ declare global {
       lyricsCacheSave: (cache: Record<string, { raw: string; source: string; cachedAt: number }>) => Promise<void>
       searchLibrary:     (keyword: string, page?: number, pageSize?: number) => Promise<LibrarySearchResult>
       fetchLibraryAudio: (song: LibrarySong) => Promise<{ path: string; cached: boolean }>
+      // Upload & Start Training (Ticket 20)
+      uploadTrainDataset: (zipPath: string, taskId: string, config: TrainStartConfig) => Promise<TrainStartResult>
+      getTrainStatus:     (taskId: string) => Promise<TrainStatusResult>
       logRendererError:  (payload: unknown) => Promise<void>
       showInFolder:      (filePath: string) => Promise<void>
       encryptModel:      (modelPath: string) => Promise<{ encPath: string; sizeBytes: number }>
