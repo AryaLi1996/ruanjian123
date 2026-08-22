@@ -57,25 +57,27 @@ const resources = {
         // Ticket 18: Cloud Library (云曲库) integration.
         openLibrary: '☁️ 从云曲库选择', targetSongLabel: '当前目标歌曲：{{title}} - {{artist}}',
         clearTargetSong: '清除', unknownArtist: '未知艺术家',
-        // Ticket 20: Merge Audio & Upload Training Dataset (plus its Ticket
-        // 17 高音保护 and Ticket 19 变调 prerequisites).
+        // Ticket 19: Pitch Shift / Tune slider.
+        pitchShift: '调音（半音）', pitchShiftRecommended: '推荐移调：{{value}}',
+        pitchShiftRecommendedTitle: '推荐移调：{{value}} 半音',
+        pitchShiftApplyRecommended: '应用推荐值', pitchShiftProcessing: '正在处理移调音频…',
+        // Ticket 20: Merge Audio & Upload Training Dataset (consumes Ticket
+        // 17's 高音保护 and Ticket 19's 变调, both applied earlier in the
+        // wizard — this step just reads their results).
         stepTrainingData: '训练数据集',
         trainingDataTitle: '生成训练数据集', trainingDataDesc: '合并已应用高音保护的人声与变调后的目标歌曲，打包上传并开始云端训练。',
         protectionTitle: '① 高音保护',
         protectionApplied: '✓ 已应用高音保护（强制修音）',
         protectionNeedsVocal: '请先完成合成与混音步骤，生成 AI 人声。',
         protectionNotApplied: '请先在③混音步骤中应用高音保护。',
-        pitchShiftTitle: '② 变调对齐目标歌曲', pitchShiftSemitones: '变调（半音）',
-        pitchShiftApply: '应用变调', pitchShiftApplying: '处理中…',
-        pitchShiftApplied: '✓ 已变调 {{semitones}} 个半音',
-        pitchShiftNeedsSong: '请先从云曲库选择目标歌曲。',
         includeDryVocal: '同时包含干声人声轨（用于训练灵活性）',
-        mergeTitle: '③ 合并所有音频', mergeAction: '合并所有音频', merging: '合并中…',
+        mergeTitle: '② 合并所有音频', mergeAction: '合并所有音频', merging: '合并中…',
         mergeBlockedTooltip: '请先完成：{{reasons}}',
-        prereqProtection: '高音保护', prereqTargetSong: '选择目标歌曲', prereqPitchShift: '变调',
+        mergeBlockedShifting: '正在处理变调音频，请稍候…',
+        prereqProtection: '高音保护', prereqTargetSong: '选择目标歌曲',
         mergeResultInfo: '✓ 已合并：时长 {{duration}} 秒 · {{sampleRate}} Hz',
         mergePadded: '（已用静音填充 {{sec}} 秒）', mergeTruncated: '（已截断 {{sec}} 秒）',
-        uploadTitle: '④ 上传并开始训练', uploadAction: '上传并开始训练', uploadNeedsMerge: '请先合并所有音频。',
+        uploadTitle: '③ 上传并开始训练', uploadAction: '上传并开始训练', uploadNeedsMerge: '请先合并所有音频。',
         phasePackaging: '正在打包…', phaseUploading: '正在上传…', phaseTraining: '云端训练中…',
         phaseDone: '✓ 训练已开始', uploadResult: '模型：{{modelUrl}}',
       },
@@ -306,25 +308,27 @@ const resources = {
         // Ticket 18: Cloud Library integration.
         openLibrary: '☁️ Choose from Cloud Library', targetSongLabel: 'Target song: {{title}} - {{artist}}',
         clearTargetSong: 'Clear', unknownArtist: 'Unknown Artist',
-        // Ticket 20: Merge Audio & Upload Training Dataset (plus its Ticket
-        // 17 high-pitch protection and Ticket 19 pitch shift prerequisites).
+        // Ticket 19: Pitch Shift / Tune slider.
+        pitchShift: 'Tune (semitones)', pitchShiftRecommended: 'Recommended shift: {{value}}',
+        pitchShiftRecommendedTitle: 'Recommended shift: {{value}} semitones',
+        pitchShiftApplyRecommended: 'Apply recommended', pitchShiftProcessing: 'Re-processing shifted audio…',
+        // Ticket 20: Merge Audio & Upload Training Dataset (consumes Ticket
+        // 17's high-pitch protection and Ticket 19's pitch shift, both
+        // applied earlier in the wizard — this step just reads their results).
         stepTrainingData: 'Training Dataset',
         trainingDataTitle: 'Build Training Dataset', trainingDataDesc: 'Merge the high-pitch-protected vocal with the pitch-shifted target song, then package and upload it to start cloud training.',
         protectionTitle: '① High-Pitch Protection',
         protectionApplied: '✓ High-pitch protection applied (forced auto-tune)',
         protectionNeedsVocal: 'Complete the synthesize & mix step first to generate an AI vocal.',
         protectionNotApplied: 'Apply high-pitch protection in step ③ (Mix) first.',
-        pitchShiftTitle: '② Pitch-Shift the Target Song', pitchShiftSemitones: 'Pitch shift (semitones)',
-        pitchShiftApply: 'Apply Pitch Shift', pitchShiftApplying: 'Processing…',
-        pitchShiftApplied: '✓ Shifted {{semitones}} semitone(s)',
-        pitchShiftNeedsSong: 'Select a target song from the Cloud Library first.',
         includeDryVocal: 'Also include the dry vocal track (for training flexibility)',
-        mergeTitle: '③ Merge All Audio', mergeAction: 'Merge All Audio', merging: 'Merging…',
+        mergeTitle: '② Merge All Audio', mergeAction: 'Merge All Audio', merging: 'Merging…',
         mergeBlockedTooltip: 'Complete first: {{reasons}}',
-        prereqProtection: 'high-pitch protection', prereqTargetSong: 'target song selection', prereqPitchShift: 'pitch shift',
+        mergeBlockedShifting: 'Pitch-shift processing in progress — please wait…',
+        prereqProtection: 'high-pitch protection', prereqTargetSong: 'target song selection',
         mergeResultInfo: '✓ Merged: {{duration}}s · {{sampleRate}} Hz',
         mergePadded: ' (padded with {{sec}}s of silence)', mergeTruncated: ' (truncated {{sec}}s)',
-        uploadTitle: '④ Upload & Start Training', uploadAction: 'Upload & Start Training', uploadNeedsMerge: 'Merge all audio first.',
+        uploadTitle: '③ Upload & Start Training', uploadAction: 'Upload & Start Training', uploadNeedsMerge: 'Merge all audio first.',
         phasePackaging: 'Packaging…', phaseUploading: 'Uploading…', phaseTraining: 'Training in the cloud…',
         phaseDone: '✓ Training started', uploadResult: 'Model: {{modelUrl}}',
       },

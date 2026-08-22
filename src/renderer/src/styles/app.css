@@ -1994,6 +1994,61 @@ html, body, #root {
 }
 .target-song-banner-text { font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+/* ── Pitch Shift / Tune slider (Ticket 19) ───────────────── */
+.pitch-shift-header {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 6px;
+}
+.pitch-shift-label { font-size: 12px; color: var(--text-muted); }
+.pitch-shift-value {
+  font-size: 13px; font-weight: 700; color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+
+.pitch-shift-track-wrap { position: relative; padding: 4px 0; }
+
+.pitch-shift-slider {
+  width: 100%;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+.pitch-shift-slider:disabled { cursor: wait; opacity: 0.6; }
+
+/* Positioned by left:{pct}% from the parent's full width — a small inset
+   correction so the dot centers on the thumb's actual travel range rather
+   than the track's bare edges (the thumb itself has width, so it can never
+   reach 0%/100% of the track). Close enough for a visual marker; it isn't
+   meant to track the thumb pixel-for-pixel. */
+.pitch-shift-marker {
+  position: absolute;
+  top: 50%;
+  width: 10px; height: 10px;
+  border-radius: 50%;
+  background: var(--warning);
+  border: 2px solid var(--bg);
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--warning) 50%, transparent);
+}
+
+.pitch-shift-scale {
+  display: flex; justify-content: space-between;
+  font-size: 10px; color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  margin-top: 2px;
+}
+
+.pitch-shift-hint {
+  display: flex; align-items: center; gap: 8px;
+  margin-top: 8px;
+  font-size: 12px; color: var(--warning);
+}
+
+.pitch-shift-busy {
+  margin-top: 8px;
+  font-size: 12px; color: var(--text-muted);
+}
+
 /* ── Settings toolbar button ─────────────────────────────── */
 .tb-settings-btn {
   display: flex;

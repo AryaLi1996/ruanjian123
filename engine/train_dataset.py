@@ -1,20 +1,16 @@
 """
-Merge Audio & Upload Training Dataset — Ticket 20 (plus its Ticket 19
-prerequisite: pitch shift; Ticket 17's high-pitch protection already ships
-as engine/pitch_protection.py + main.py's apply_high_pitch_protection —
-this module's merge step just consumes that step's output path).
+Merge Audio & Upload Training Dataset — Ticket 20.
 
-File-handling orchestration around plain numpy DSP, mirroring how
-cover_synthesis.py wraps postprocess_chain() and library.ts wraps
-library-search.ts's pure catalog logic — the DSP stays a pure function over
-arrays (easy to unit-test); this module only adds the file I/O around it.
+Both of this ticket's prerequisites already ship elsewhere: Ticket 17's
+high-pitch protection as engine/pitch_protection.py + main.py's
+apply_high_pitch_protection, and Ticket 19's pitch shift as
+engine/pitch_tools.py + main.py's pitch_shift. This module's merge step
+just consumes those two steps' output paths.
 
-  - pitch_shift_file(): reads a WAV, shifts every channel by N semitones
-    while preserving the file's original duration (Ticket 19 — "变调").
   - merge_train_audio(): time-aligns the (high-pitch-protected) vocal and
-    the pitch-shifted target song (pad-to-longest or truncate-to-shortest),
+    the (pitch-shifted) target song (pad-to-longest or truncate-to-shortest),
     mixes them into merged_train.wav, and optionally copies a dry-vocal
-    track alongside it (Ticket 20's merge step).
+    track alongside it.
   - package_train_dataset(): zips a set of files (merged_train.wav + the
     optional dry vocal) ready for upload.
 
@@ -66,47 +62,6 @@ def _pad_to(audio: np.ndarray, n: int) -> np.ndarray:
     if audio.shape[0] >= n:
         return audio[:n]
     return np.pad(audio, ((0, n - audio.shape[0]), (0, 0)))
-
-
-# ── Ticket 19: pitch shift ──────────────────────────────────────────────────
-
-def pitch_shift_file(input_path: str, semitones: float, output_path: str) -> dict[str, Any]:
-    audio, sr = _load(input_path)
-    n, ch = audio.shape
-
-    if abs(semitones) < 1e-6 or n == 0:
-        shifted = audio.copy()
-    else:
-        factor = 2.0 ** (semitones / 12.0)
-        # Lightweight two-pass resample pitch-shifter: resample by `factor`
-        # (shifts pitch, incidentally changes duration), then resample back
-        # to the original sample count (restores duration/tempo so the
-        # result still lines up with the vocal it will be merged with).
-        # This has known artifacts on large shifts compared to a proper
-        # phase vocoder, but needs no extra dependency beyond numpy — a real
-        # deployment can swap in a DSP library (e.g. rubberband) here
-        # without touching merge_train_audio() or any caller.
-        stretched_len = max(1, int(round(n / factor)))
-        src_idx = np.linspace(0, n - 1, num=n)
-        mid_idx = np.linspace(0, n - 1, num=stretched_len)
-        stretched = np.stack(
-            [np.interp(mid_idx, src_idx, audio[:, c]) for c in range(ch)], axis=1)
-
-        mid2_idx = np.linspace(0, stretched_len - 1, num=stretched_len)
-        dst_idx  = np.linspace(0, stretched_len - 1, num=n)
-        shifted = np.stack(
-            [np.interp(dst_idx, mid2_idx, stretched[:, c]) for c in range(ch)], axis=1)
-
-    out_p = Path(output_path)
-    out_p.parent.mkdir(parents=True, exist_ok=True)
-    sf.write(str(out_p), shifted.astype(np.float32), sr, subtype="PCM_16")
-
-    return {
-        "output_path":  str(out_p),
-        "duration_sec": round(shifted.shape[0] / sr, 3),
-        "sample_rate":  sr,
-        "semitones":    semitones,
-    }
 
 
 # ── Ticket 20: merge + package ──────────────────────────────────────────────

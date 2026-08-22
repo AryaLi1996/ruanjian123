@@ -29,12 +29,20 @@ export interface TrainedModel {
 // remote audio_url directly. Session-only, like selectedModel above — it's
 // meant to persist "until changed" within a running session, not survive a
 // restart.
+//
+// pitchShift/shiftedAudioPath (Ticket 19): the Tune slider's applied key
+// change and the local, engine-cached result of running
+// librosa.effects.pitch_shift on audioPath at that shift. shiftedAudioPath
+// is null at shift 0 (nothing to shift — audioPath is used as-is); see
+// CoverView's handleSeparate for where the two are chosen between.
 export interface TargetSong {
-  id:          string
-  title:       string
-  artist:      string
-  originalKey: string | null
-  audioPath:   string
+  id:               string
+  title:            string
+  artist:           string
+  originalKey:      string | null
+  audioPath:        string
+  pitchShift:       number
+  shiftedAudioPath: string | null
 }
 
 interface AppState {
@@ -56,6 +64,10 @@ interface AppState {
   updateModelDemo:  (id: string, demoAudioUrl: string) => void
   hydrateModels:    (models: TrainedModel[]) => void
   setTargetSong:    (song: TargetSong | null) => void
+  // Ticket 19: records a newly-applied pitch shift (and its cached shifted
+  // audio) on the current target song. No-ops if the song has since been
+  // cleared/changed from under an in-flight shift request.
+  setTargetSongShift: (shift: number, shiftedAudioPath: string | null) => void
 }
 
 export const useAppStore = create<AppState>((set) => ({
@@ -79,4 +91,6 @@ export const useAppStore = create<AppState>((set) => ({
     })),
   hydrateModels:    (models) => set({ trainedModels: models, modelsHydrated: true }),
   setTargetSong:    (song)   => set({ targetSong: song }),
+  setTargetSongShift: (shift, shiftedAudioPath) =>
+    set((s) => (s.targetSong ? { targetSong: { ...s.targetSong, pitchShift: shift, shiftedAudioPath } } : s)),
 }))

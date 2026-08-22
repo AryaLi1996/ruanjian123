@@ -4,10 +4,6 @@ import { notify } from '../../store/useNotificationStore'
 import type { TargetSong } from '../../store/useAppStore'
 
 // ── Engine response shapes (engine/train_dataset.py) ─────────────────────────
-interface ShiftResult {
-  output_path: string
-  duration_sec: number
-}
 interface MergeResult {
   output_path: string
   duration_sec: number
@@ -31,8 +27,14 @@ interface Props {
   vocalProtected: boolean
   /** The clean dry vocal from separation, offered as an optional extra training track. */
   dryVocalPath?: string | null
-  /** Ticket 18's Cloud Library selection — the "target song" Ticket 19 pitch-shifts. */
+  /** Ticket 18's Cloud Library selection, carrying Ticket 19's applied
+   * pitchShift/shiftedAudioPath (see useAppStore's TargetSong) — set from
+   * step ①'s Tune slider, not by this panel. */
   targetSong: TargetSong | null
+  /** True while step ①'s Tune slider has a shift in flight — merging
+   * against a target song mid-recompute would grab a stale/about-to-change
+   * file. */
+  pitchShiftBusy?: boolean
   /** Marks the wizard's step 5 complete once a merge succeeds. */
   onMerged?: () => void
 }
@@ -52,30 +54,22 @@ function combinedPercent(phase: UploadPhase, subPercent: number): number {
 }
 
 export function TrainingDatasetPanel({
-  vocalPath, vocalProtected, dryVocalPath, targetSong, onMerged,
+  vocalPath, vocalProtected, dryVocalPath, targetSong, pitchShiftBusy = false, onMerged,
 }: Props): JSX.Element {
   const { t } = useTranslation()
   const taskIdRef = useRef<string>(crypto.randomUUID())
 
-  // ── Ticket 19: pitch shift ────────────────────────────────
-  const [semitones, setSemitones]     = useState(0)
-  const [shifting, setShifting]       = useState(false)
-  const [shiftRes, setShiftRes]       = useState<ShiftResult | null>(null)
-  const [shiftError, setShiftError]   = useState<string | null>(null)
   const [includeDryVocal, setIncludeDryVocal] = useState(false)
-
-  // A newly-picked target song invalidates whatever shift was already
-  // applied — otherwise switching songs could silently merge in a shift
-  // computed against the previous one.
-  useEffect(() => { setShiftRes(null); setShiftError(null); setMergeRes(null) }, [targetSong?.id])
-  // A fresh (or freshly re-protected) AI vocal invalidates any merge that
-  // was built from the old one.
-  useEffect(() => { setMergeRes(null) }, [vocalPath, vocalProtected])
 
   // ── Ticket 20: merge ──────────────────────────────────────
   const [merging, setMerging]         = useState(false)
   const [mergeRes, setMergeRes]       = useState<MergeResult | null>(null)
   const [mergeError, setMergeError]   = useState<string | null>(null)
+
+  // A fresh (or freshly re-protected) AI vocal, a newly-picked target song,
+  // or a re-shifted target invalidates any merge that was built from the
+  // old inputs.
+  useEffect(() => { setMergeRes(null) }, [vocalPath, vocalProtected, targetSong?.shiftedAudioPath, targetSong?.id])
 
   // ── Ticket 20: package → upload → train ──────────────────
   const [phase, setPhase]             = useState<UploadPhase>('idle')
@@ -87,35 +81,34 @@ export function TrainingDatasetPanel({
 
   useEffect(() => () => { if (pollTimer.current) clearInterval(pollTimer.current) }, [])
 
-  async function handlePitchShift(): Promise<void> {
-    if (!targetSong) return
-    setShifting(true); setShiftError(null)
-    try {
-      const res = await window.engine.call('pitch_shift', {
-        input_path: targetSong.audioPath, semitones, task_id: taskIdRef.current,
-      }) as ShiftResult
-      setShiftRes(res)
-    } catch (err) {
-      setShiftError(String(err))
-    } finally {
-      setShifting(false)
-    }
-  }
-
-  // ── Prerequisites (Tickets 17/18/19, enforced) ────────────
+  // ── Prerequisites (Tickets 17/18, enforced) ───────────────
+  // Ticket 19's pitch shift doesn't need its own checklist entry: the Tune
+  // slider (step ①) always carries a value once a target song is picked —
+  // 0 semitones ("same key") is as valid an applied value as any other, not
+  // a missing one — so "target song selected" already covers it. A shift
+  // still being computed is instead a (separate) disable-with-tooltip
+  // condition below, not a listed prerequisite.
   const missing: string[] = []
   if (!vocalProtected) missing.push(t('cover.prereqProtection'))
   if (!targetSong)     missing.push(t('cover.prereqTargetSong'))
-  if (!shiftRes)        missing.push(t('cover.prereqPitchShift'))
   const prereqsMet = missing.length === 0
+  const mergeDisabled = !prereqsMet || merging || pitchShiftBusy
+  const mergeTooltip = !prereqsMet
+    ? t('cover.mergeBlockedTooltip', { reasons: missing.join('、') })
+    : pitchShiftBusy
+      ? t('cover.mergeBlockedShifting')
+      : undefined
 
   async function handleMerge(): Promise<void> {
-    if (!prereqsMet || !vocalPath || !shiftRes) return
+    if (mergeDisabled || !vocalPath || !targetSong) return
     setMerging(true); setMergeError(null); setMergeRes(null)
     try {
+      // Same resolution CoverView's handleSeparate uses: the pitch-shifted
+      // cache when a shift is applied, the original download otherwise.
+      const targetPath = targetSong.shiftedAudioPath ?? targetSong.audioPath
       const res = await window.engine.call('merge_train_audio', {
         vocal_path:        vocalPath,
-        target_path:       shiftRes.output_path,
+        target_path:       targetPath,
         task_id:           taskIdRef.current,
         align_mode:        'pad',
         include_dry_vocal: includeDryVocal,
@@ -150,7 +143,7 @@ export function TrainingDatasetPanel({
       const taskId = taskIdRef.current
       const started = await window.engine.uploadTrainDataset(pkg.zip_path, taskId, {
         mode:                 'standard',
-        pitchShiftSemitones:  semitones,
+        pitchShiftSemitones:  targetSong?.pitchShift ?? 0,
         highPitchProtection:  true,
         includeDryVocal,
       })
@@ -218,37 +211,6 @@ export function TrainingDatasetPanel({
         {vocalPath && vocalProtected && <div style={{ fontSize: 12, color: 'var(--success)' }}>{t('cover.protectionApplied')}</div>}
       </div>
 
-      {/* ── Ticket 19: pitch shift ────────────────────────────── */}
-      <div className="field">
-        <label>{t('cover.pitchShiftTitle')}</label>
-        {!targetSong && <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{t('cover.pitchShiftNeedsSong')}</div>}
-        {targetSong && (
-          <>
-            <div className="row" style={{ gap: 8, alignItems: 'center' }}>
-              <label style={{ fontSize: 13, color: 'var(--text-muted)' }}>{t('cover.pitchShiftSemitones')}</label>
-              <input
-                className="input" type="number" min={-12} max={12} step={1}
-                style={{ width: 80 }}
-                value={semitones}
-                onChange={(e) => {
-                  setSemitones(Number(e.target.value))
-                  setShiftRes(null); setMergeRes(null)
-                }}
-              />
-              <button className="btn btn-ghost" onClick={handlePitchShift} disabled={shifting}>
-                {shifting ? `⏳ ${t('cover.pitchShiftApplying')}` : `🎚 ${t('cover.pitchShiftApply')}`}
-              </button>
-            </div>
-            {shiftError && <div className="error-banner" style={{ marginTop: 8 }}>{shiftError}</div>}
-            {shiftRes && (
-              <div style={{ fontSize: 12, color: 'var(--success)', marginTop: 8 }}>
-                {t('cover.pitchShiftApplied', { semitones })}
-              </div>
-            )}
-          </>
-        )}
-      </div>
-
       {dryVocalPath && (
         <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, marginBottom: 16 }}>
           <input
@@ -267,8 +229,8 @@ export function TrainingDatasetPanel({
           className="btn btn-primary"
           style={{ width: '100%' }}
           onClick={handleMerge}
-          disabled={!prereqsMet || merging}
-          title={prereqsMet ? undefined : t('cover.mergeBlockedTooltip', { reasons: missing.join('、') })}
+          disabled={mergeDisabled}
+          title={mergeTooltip}
         >
           {merging ? `⏳ ${t('cover.merging')}` : `🔀 ${t('cover.mergeAction')}`}
         </button>

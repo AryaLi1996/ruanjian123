@@ -230,6 +230,23 @@ def synthesize_cover(args):
     }
 
 
+def pitch_shift(args):
+    """Ticket 19: shift a target song's cached audio by up to ±12 semitones
+    via librosa.effects.pitch_shift, caching the result under a writable
+    scratch dir — see pitch_tools.shift_pitch."""
+    from pitch_tools import shift_pitch  # noqa: PLC0415
+
+    params     = args[0] if args and isinstance(args[0], dict) else {}
+    input_path = params.get("input_path")
+    if not input_path:
+        return {"error": "input_path is required"}
+
+    semitones = max(-12.0, min(12.0, float(params.get("semitones", 0))))
+    cache_key = params.get("cache_key")
+
+    return shift_pitch(input_path, semitones, cache_dir=_writable_dir() / "pitch-shift-cache", cache_key=cache_key)
+
+
 def export_audio(args):
     """Save mixed PCM audio from the renderer to a file on disk.
 
@@ -486,20 +503,6 @@ def _task_dir(task_id) -> Path:
     return d
 
 
-def pitch_shift(args):
-    """Ticket 19: shift the target song's pitch by N semitones while
-    keeping its original duration."""
-    from train_dataset import pitch_shift_file  # noqa: PLC0415
-
-    params = args[0] if args and isinstance(args[0], dict) else {}
-    input_path = params.get("input_path")
-    if not input_path:
-        return {"error": "input_path is required"}
-
-    output_path = params.get("output_path") or str(_task_dir(params.get("task_id")) / "target_shifted.wav")
-    return pitch_shift_file(input_path, float(params.get("semitones", 0)), output_path=output_path)
-
-
 def merge_train_audio(args):
     """Ticket 20: merge the (high-pitch-protected) vocal and the
     (pitch-shifted) target song into a single merged_train.wav."""
@@ -551,10 +554,12 @@ HANDLERS = {
     "apply_high_pitch_protection": apply_high_pitch_protection,
     # Ticket 16 (already on main): pitch analysis ("分析音高").
     "analyze_pitch":               analyze_pitch,
-    # Ticket 19/20 (this branch): pitch shift + merge/package for the
-    # training-dataset upload flow — see train_dataset.py. Reuses Ticket
-    # 17's apply_high_pitch_protection above for the protection step.
+    # Ticket 19 (already on main): pitch shift / Tune slider — see
+    # pitch_tools.shift_pitch.
     "pitch_shift":                 pitch_shift,
+    # Ticket 20 (this branch): merge/package for the training-dataset
+    # upload flow — see train_dataset.py. Reuses Ticket 17's
+    # apply_high_pitch_protection and Ticket 19's pitch_shift above.
     "merge_train_audio":           merge_train_audio,
     "package_train_dataset":       package_train_dataset,
 }
