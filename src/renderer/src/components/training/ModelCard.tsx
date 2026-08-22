@@ -6,9 +6,10 @@ interface Props {
   onDelete: () => void
   onRetrain: () => void
   onPlay:   () => void
+  onDownload: () => void
 }
 
-export function ModelCard({ model, onDelete, onRetrain, onPlay }: Props): JSX.Element {
+export function ModelCard({ model, onDelete, onRetrain, onPlay, onDownload }: Props): JSX.Element {
   const { t } = useTranslation()
   const date = new Date(model.trainedAt).toLocaleDateString(undefined, {
     month: 'short', day: 'numeric', year: 'numeric',
@@ -30,6 +31,7 @@ export function ModelCard({ model, onDelete, onRetrain, onPlay }: Props): JSX.El
           <span className={`badge badge-mode-${model.mode}`}>
             {model.mode === 'standard' ? t('training.standard') : t('training.pro')}
           </span>
+          <span className="badge" style={{ color: 'var(--success)' }}>{t('training.ready')}</span>
           <span className="model-card-date">{date}</span>
         </div>
         {model.bestLoss != null && (
@@ -54,6 +56,14 @@ export function ModelCard({ model, onDelete, onRetrain, onPlay }: Props): JSX.El
           title={t('training.retrain')}
         >
           🔁
+        </button>
+        <button
+          className="btn btn-ghost"
+          style={{ fontSize: 12, padding: '6px 10px' }}
+          onClick={onDownload}
+          title={t('training.download')}
+        >
+          ⬇
         </button>
         <button
           className="btn btn-ghost"

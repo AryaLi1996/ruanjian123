@@ -50,6 +50,9 @@ contextBridge.exposeInMainWorld('engine', {
     ipcRenderer.invoke('model:encrypt', modelPath),
   decryptVerify:    (encPath: string): Promise<{ decrypted: boolean; error?: string }> =>
     ipcRenderer.invoke('model:decrypt-verify', encPath),
+  // Encrypt + save-dialog a trained model to a user-chosen location (Ticket 21)
+  downloadModel:    (modelPath: string, defaultName: string): Promise<string | null> =>
+    ipcRenderer.invoke('model:download', modelPath, defaultName),
 
   // Trained-model library persistence (survives app restart)
   loadModels: (): Promise<unknown[]> => ipcRenderer.invoke('models:load'),
