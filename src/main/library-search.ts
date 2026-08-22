@@ -16,6 +16,13 @@ export interface LibrarySong {
   artist:        string
   original_key:  string | null
   audio_url:     string
+  /**
+   * Album art, when the upstream catalogue carries it (Ticket UI-08's
+   * cover grid). Null is the normal case for the offline mock and for
+   * deployments whose API doesn't return one — the grid draws a generated
+   * placeholder rather than a broken image.
+   */
+  cover_url:     string | null
 }
 
 export interface LibrarySearchResult {
@@ -36,7 +43,7 @@ export const MAX_PAGE_SIZE = 50
 // ordinary https:// URLs and never take that path. Includes "浮夸" so the
 // ticket's acceptance criterion ("searching 浮夸 returns relevant results")
 // holds without any server configured.
-export const MOCK_CATALOG: readonly LibrarySong[] = [
+const MOCK_ROWS = [
   { id: 'lib-001', title: '浮夸',     artist: '陈奕迅', original_key: 'F#m', audio_url: 'mock://lib-001' },
   { id: 'lib-002', title: '十年',     artist: '陈奕迅', original_key: 'C',   audio_url: 'mock://lib-002' },
   { id: 'lib-003', title: '好久不见', artist: '陈奕迅', original_key: 'G',   audio_url: 'mock://lib-003' },
@@ -48,6 +55,12 @@ export const MOCK_CATALOG: readonly LibrarySong[] = [
   { id: 'lib-009', title: '起风了',   artist: '买辣椒也用券', original_key: 'C', audio_url: 'mock://lib-009' },
   { id: 'lib-010', title: '海阔天空', artist: 'Beyond', original_key: 'C',  audio_url: 'mock://lib-010' },
 ] as const
+
+// The mock catalogue ships no artwork — the cover is added here rather than
+// repeated as `cover_url: null` on every row above, and the grid draws its
+// generated placeholder for a null cover (Ticket UI-08).
+export const MOCK_CATALOG: readonly LibrarySong[] =
+  MOCK_ROWS.map((row) => ({ ...row, cover_url: null }))
 
 export function clampPage(page: unknown): number {
   const n = Math.floor(Number(page))
@@ -76,12 +89,19 @@ export function normalizeSong(raw: unknown): LibrarySong | null {
   if (!raw || typeof raw !== 'object') return null
   const o = raw as Record<string, unknown>
   if (!o.id || !o.title) return null
+  // Cover art has no settled field name across music catalogues, so accept
+  // the handful that actually turn up rather than forcing every deployment
+  // to reshape its payload.
+  const cover = [o.cover_url, o.coverUrl, o.pic_url, o.picUrl, o.album_art, o.cover]
+    .find((v): v is string => typeof v === 'string' && v.length > 0)
+
   return {
     id:            String(o.id),
     title:         String(o.title),
     artist:        typeof o.artist === 'string' ? o.artist : '',
     original_key:  typeof o.original_key === 'string' ? o.original_key : null,
     audio_url:     typeof o.audio_url === 'string' ? o.audio_url : '',
+    cover_url:     cover ?? null,
   }
 }
 

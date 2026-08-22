@@ -151,6 +151,7 @@ export function CoverView(): JSX.Element {
       artist:           song.artist,
       originalKey:      song.original_key,
       audioPath,
+      coverUrl:         song.cover_url,
       pitchShift:       0,
       shiftedAudioPath: null,
     })

@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 
-export type ActiveView = 'training' | 'cover' | 'audio-tools' | 'waveform' | 'playback' | 'subscription' | 'settings'
+export type ActiveView = 'training' | 'cover' | 'audio-tools' | 'waveform' | 'playback' | 'library' | 'subscription' | 'settings'
 
 export interface TrainedModel {
   id:            string
@@ -41,6 +41,8 @@ export interface TargetSong {
   artist:           string
   originalKey:      string | null
   audioPath:        string
+  /** Album art when the catalogue carried one; the status pin (Ticket UI-09) falls back to a generated tile. */
+  coverUrl:         string | null
   pitchShift:       number
   shiftedAudioPath: string | null
 }

@@ -5,6 +5,7 @@ import { useAppStore } from '../store/useAppStore'
 import { useSubscriptionStore } from '../store/useSubscriptionStore'
 import { notify } from '../store/useNotificationStore'
 import { NotificationCenter } from './notifications/NotificationCenter'
+import { TargetSongPin } from './library/TargetSongPin'
 
 interface UpdateInfo { version?: string }
 
@@ -119,6 +120,9 @@ export function TopToolbar(): JSX.Element {
           <span className="tb-context-text" title={contextText}>{contextText}</span>
         )}
       </div>
+
+      {/* Ticket UI-09: persistent "which song am I covering" indicator. */}
+      <TargetSongPin />
 
       <div className="tb-right">
         {/* PATCH-02 §4: a sticky status outlives the busy flag, so an

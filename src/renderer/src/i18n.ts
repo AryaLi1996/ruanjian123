@@ -103,8 +103,12 @@ const resources = {
         title: '云曲库', close: '关闭', searchPlaceholder: '搜索歌曲或歌手',
         searching: '搜索中…', searchError: '搜索失败，请检查网络连接后重试',
         noResults: '未找到结果', emptyPrompt: '输入关键词开始搜索',
-        select: '选择', downloading: '下载中…',
+        select: '选用此歌', downloading: '下载中…',
         prevPage: '上一页', nextPage: '下一页', pageOf: '第 {{page}} / {{totalPages}} 页',
+        pageDescription: '搜索并选定要翻唱的目标歌曲。',
+        clearSearch: '清除搜索', selectSong: '选用《{{title}}》',
+        targetSong: '当前目标歌曲', clearTarget: '清除当前目标歌曲',
+        originalKey: '原调', pitchShiftValue: '{{value}} 个调',
       },
       audioTools: { title: '音频工具', description: '批量音源分离 — 拖入文件、选择模式、全部处理。', detect: '检测设备', drop: '拖入音频文件，或点击浏览', formats: '多个文件 · WAV · FLAC · OGG', files: '{{count}} 个文件', done: '{{count}} 个完成', pending: '{{count}} 个等待', failed: '{{count}} 个失败', process: '处理 {{count}} 个', processing: '处理中…', clear: '清空', pendingStatus: '● 等待中', errorStatus: '✕ 错误', downloadAll: '全部下载（{{count}}）', standard: '标准', enhanced: '增强' },
       // Ticket 16: pitch analysis ("分析音高") panel — waveform region selection
@@ -145,6 +149,16 @@ const resources = {
       // titled 波形编辑. Copy here is fixed by the ticket (逐字对照 against the
       // reference screenshot), so prefer adding a new key over rewording one.
       toolbar: { more: '更多操作', scrollLeft: '向左翻页', scrollRight: '向右翻页' },
+      playbackPanels: {
+        dragSplit: '拖动调整左右面板比例', infoPanel: '信息面板',
+        tabLyrics: '歌词', tabRecord: '录音', tabConfig: '训练配置', tabStructure: '模型结构',
+        noModel: '尚无已训练的模型 — 请先训练一个。',
+        showingLatest: '当前显示最近训练的模型（尚未应用任何模型）。',
+        configName: '模型名称', configMode: '训练模式', configQuality: '相似度',
+        stageInput: '输入音频', stageEncoder: '音色编码器', stageDecoder: '声码器', stageOutput: '输出音频',
+        structureNote: '推理流程示意，非完整计算图。',
+      },
+      immersive: { exit: '退出沉浸模式', enter: '沉浸模式', hint: '按 F 进入/退出沉浸模式' },
       dataPrep: {
         title: '模型数据准备',
         description: '处理干音 → 设定保护 → 选目标歌 → 合并训练。',
@@ -418,7 +432,11 @@ const resources = {
         title: 'Cloud Library', close: 'Close', searchPlaceholder: 'Search songs or artists',
         searching: 'Searching…', searchError: 'Search failed — check your connection and try again',
         noResults: 'No results found', emptyPrompt: 'Type a keyword to start searching',
-        select: 'Select', downloading: 'Downloading…',
+        select: 'Use this song', downloading: 'Downloading…',
+        pageDescription: 'Search for and pick the song you want to cover.',
+        clearSearch: 'Clear search', selectSong: 'Use "{{title}}"',
+        targetSong: 'Target song', clearTarget: 'Clear target song',
+        originalKey: 'Original key', pitchShiftValue: '{{value}} semitones',
         prevPage: 'Prev', nextPage: 'Next', pageOf: 'Page {{page}} of {{totalPages}}',
       },
       audioTools: { title: 'Audio Tools', description: 'Batch source separation — drop files, choose modes, process all.', detect: 'Detect Device', drop: 'Drop audio files here, or click to browse', formats: 'Multiple files · WAV · FLAC · OGG', files: '{{count}} file(s)', done: '{{count}} done', pending: '{{count}} pending', failed: '{{count}} failed', process: 'Process {{count}}', processing: 'Processing…', clear: 'Clear', pendingStatus: '● Pending', errorStatus: '✕ Error', downloadAll: 'Download All ({{count}})', standard: 'Standard', enhanced: 'Enhanced' },
@@ -458,6 +476,15 @@ const resources = {
       },
       // PATCH-03: Model Data Preparation workspace (formerly Waveform Editor).
       toolbar: { more: 'More actions', scrollLeft: 'Scroll left', scrollRight: 'Scroll right' },
+      playbackPanels: {
+        dragSplit: 'Drag to resize the panels', infoPanel: 'Info panel',
+        tabLyrics: 'Lyrics', tabRecord: 'Record', tabConfig: 'Training config', tabStructure: 'Model',
+        noModel: 'No trained models yet — train one first.',
+        showingLatest: 'Showing the most recently trained model (none applied yet).',
+        configName: 'Model name', configMode: 'Training mode', configQuality: 'Similarity',
+        stageInput: 'Input audio', stageEncoder: 'Timbre encoder', stageDecoder: 'Vocoder', stageOutput: 'Output audio',
+        structureNote: 'Schematic of the inference path, not the full graph.',
+      },
       dataPrep: {
         title: 'Model Data Preparation',
         description: 'Process the dry vocal → set protection → pick a target song → merge for training.',
