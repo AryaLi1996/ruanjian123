@@ -84,3 +84,35 @@ export function computeRecommendedShift(
   const raw = Math.round(keyMidi - vocalRangeMaxMidi)
   return Math.max(PITCH_SHIFT_MIN, Math.min(PITCH_SHIFT_MAX, raw))
 }
+
+/**
+ * Ticket 22 ("应用高音提示" → auto-recommend a shift for the target song):
+ * on top of computeRecommendedShift()'s single value, gives the "fits a
+ * shift of N to M semitones, we recommend N" range the confirmation message
+ * shows. `recommended` is the minimal shift needed (computeRecommendedShift,
+ * unchanged); `cushioned` extends that by SHIFT_RANGE_CUSHION_SEMITONES
+ * further in the same direction — a comfortable margin beyond the bare
+ * minimum, capped at the slider's ±12 range same as `recommended` is. Null
+ * whenever computeRecommendedShift is (no key/range yet) or resolves to 0
+ * (no shift needed — there's no "direction" for a range to extend into).
+ */
+export const SHIFT_RANGE_CUSHION_SEMITONES = 2
+
+export interface RecommendedShiftRange {
+  recommended: number
+  cushioned:   number
+}
+
+export function computeRecommendedShiftRange(
+  originalKey: string | null | undefined,
+  vocalRangeMaxMidi: number | null | undefined,
+): RecommendedShiftRange | null {
+  const recommended = computeRecommendedShift(originalKey, vocalRangeMaxMidi)
+  if (recommended == null || recommended === 0) return null
+  const sign = Math.sign(recommended)
+  const cushioned = Math.max(
+    PITCH_SHIFT_MIN,
+    Math.min(PITCH_SHIFT_MAX, recommended + sign * SHIFT_RANGE_CUSHION_SEMITONES),
+  )
+  return { recommended, cushioned }
+}

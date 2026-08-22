@@ -4,6 +4,7 @@ import { useAppStore } from '../../store/useAppStore'
 import { notify } from '../../store/useNotificationStore'
 import { computePeaks, drawWaveform } from '../../utils/waveform'
 import { formatDuration } from '../../utils/audio'
+import { computeRecommendedShiftRange, type RecommendedShiftRange } from '../../utils/pitch'
 
 interface HighPitchProtectionResult {
   output_path:       string
@@ -15,11 +16,27 @@ interface HighPitchProtectionResult {
   elapsed_sec:       number
 }
 
+interface AnalyzePitchResponse {
+  max_midi: number
+  avg_midi: number
+  contour:  number[]
+  error?:   string
+}
+
 interface Props {
   /** Path to the AI vocal stem to correct (e.g. coverResult.ai_vocal_path). */
   audioPath: string
   /** Called with the corrected file's path once protection has been applied. */
   onApplied?: (outputPath: string) => void
+  /** Ticket 22: the selected cloud-library song's original key (Ticket 18),
+   *  if any — needed to recommend a Tune-slider shift from the *protected*
+   *  vocal's re-analyzed range. null/undefined (no target song, or a local
+   *  upload with no catalog key) means no recommendation can be made. */
+  originalKey?: string | null
+  /** Ticket 22: fired with the recommended shift (semitones) once protection
+   *  and the re-analysis it triggers both complete and a recommendation was
+   *  computed. Never fired when originalKey is unset or no shift is needed. */
+  onRecommendedShift?: (shift: number) => void
 }
 
 const PEAK_BUCKETS = 1200
@@ -30,8 +47,15 @@ const CANVAS_HEIGHT = 64
  * engine.apply_high_pitch_protection on the AI vocal stem, then renders its
  * waveform with the corrected spans highlighted in red so the user can see
  * exactly where 强制修音 fired.
+ *
+ * Ticket 22: once protection succeeds, also re-analyzes the corrected vocal
+ * (engine.analyze_pitch) and — given the target song's original key via
+ * `originalKey` — computes a recommended Tune-slider shift from its new,
+ * post-protection range. `onRecommendedShift` hands that back to the parent
+ * (CoverView) to auto-set the slider; the user can still drag it to any
+ * other value afterward, same as any other change to that slider.
  */
-export function HighPitchProtection({ audioPath, onApplied }: Props): JSX.Element {
+export function HighPitchProtection({ audioPath, onApplied, originalKey, onRecommendedShift }: Props): JSX.Element {
   const { t } = useTranslation()
   const setEngineStatus = useAppStore((s) => s.setEngineStatus)
 
@@ -40,6 +64,10 @@ export function HighPitchProtection({ audioPath, onApplied }: Props): JSX.Elemen
   const [peaks,    setPeaks]    = useState<Float32Array | null>(null)
   const [duration, setDuration] = useState(0)
   const [error,    setError]    = useState<string | null>(null)
+  // Ticket 22: recommendation computed from the *protected* vocal's range,
+  // once re-analysis (below) completes. null until then, and stays null
+  // when no target song/key is selected or no shift turns out to be needed.
+  const [shiftRange, setShiftRange] = useState<RecommendedShiftRange | null>(null)
 
   const containerRef = useRef<HTMLDivElement | null>(null)
   const canvasRef     = useRef<HTMLCanvasElement | null>(null)
@@ -67,7 +95,7 @@ export function HighPitchProtection({ audioPath, onApplied }: Props): JSX.Elemen
   }, [peaks, canvasWidth])
 
   async function handleApply(): Promise<void> {
-    setApplying(true); setError(null)
+    setApplying(true); setError(null); setShiftRange(null)
     setEngineStatus(t('status.applyingHighPitchProtection'))
     try {
       const res = await window.engine.call('apply_high_pitch_protection', {
@@ -85,8 +113,40 @@ export function HighPitchProtection({ audioPath, onApplied }: Props): JSX.Elemen
       setResult(res)
       onApplied?.(res.output_path)
 
-      // Ticket 17: fixed top-status-bar copy once protection has been applied.
-      setEngineStatus(t('status.highPitchProtectionApplied'))
+      // Ticket 22: re-analyze the just-protected vocal (its highest note is
+      // now at/under D#4, wherever the protection clamp fired) so the
+      // recommended Tune-slider shift for the target song reflects the
+      // vocal's *post-protection* range, not the raw pre-protection one.
+      // Best-effort: a bad/corrupt output or an engine error here shouldn't
+      // undo the protection that already succeeded above — protection and
+      // its confirmation notification (below) still stand either way.
+      let recRange: RecommendedShiftRange | null = null
+      if (originalKey) {
+        try {
+          const analysis = await window.engine.call('analyze_pitch', {
+            audio_path: res.output_path,
+          }) as AnalyzePitchResponse
+          if (!analysis.error && analysis.max_midi > 0) {
+            recRange = computeRecommendedShiftRange(originalKey, analysis.max_midi)
+          }
+        } catch {
+          // no recommendation this time — protection itself already applied fine
+        }
+      }
+      setShiftRange(recRange)
+
+      if (recRange) {
+        onRecommendedShift?.(recRange.recommended)
+        const direction = t(recRange.recommended < 0 ? 'cover.shiftDirectionDown' : 'cover.shiftDirectionUp')
+        // Ticket 22: combined top-status-bar copy — "已应用模型音域，高音保护起点为
+        // D#4 | 建议降4个调" — once a recommendation could be computed.
+        setEngineStatus(t('status.highPitchProtectionAppliedWithShift', {
+          direction, count: Math.abs(recRange.recommended),
+        }))
+      } else {
+        // Ticket 17: fixed top-status-bar copy once protection has been applied.
+        setEngineStatus(t('status.highPitchProtectionApplied'))
+      }
 
       notify({
         category: 'taskCompletion',
@@ -156,6 +216,20 @@ export function HighPitchProtection({ audioPath, onApplied }: Props): JSX.Elemen
               {t('cover.highPitchProtectionLegend')}
             </div>
           )}
+        </div>
+      )}
+
+      {/* Ticket 22: confirmation message + recommended Tune-slider shift,
+          computed from the just-protected vocal's re-analyzed range against
+          the target song's original key. */}
+      {shiftRange && (
+        <div className="hpp-shift-suggestion">
+          🎚️ {t('cover.highPitchProtectionShiftSuggestion', {
+            direction: t(shiftRange.recommended < 0 ? 'cover.shiftDirectionDown' : 'cover.shiftDirectionUp'),
+            min: Math.min(Math.abs(shiftRange.recommended), Math.abs(shiftRange.cushioned)),
+            max: Math.max(Math.abs(shiftRange.recommended), Math.abs(shiftRange.cushioned)),
+            rec: Math.abs(shiftRange.recommended),
+          })}
         </div>
       )}
     </div>
