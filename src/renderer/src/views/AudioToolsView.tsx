@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useAppStore } from '../store/useAppStore'
 import { notify } from '../store/useNotificationStore'
+import { stemLabelKey } from '../utils/stems'
 
 type SepMode  = 'standard' | 'enhanced'
 type JobStatus = 'pending' | 'processing' | 'done' | 'error'
@@ -16,7 +17,11 @@ interface SepJob {
   elapsed: number | null
 }
 
-const STEM_LABELS: Record<string, string> = {
+// Short ASCII suffixes for downloaded WAV filenames — kept stable and
+// untranslated regardless of app language (Ticket 46: the on-screen stem
+// labels are localized via stemLabelKey()/`tracks.*`, but exported
+// filenames stay ASCII-safe).
+const STEM_FILE_SUFFIX: Record<string, string> = {
   vocals:        'Vocals',
   accompaniment: 'Accomp.',
   lead_dry:      'Lead',
@@ -166,7 +171,7 @@ export function AudioToolsView(): JSX.Element {
       for (const job of jobs.filter((j) => j.status === 'done' && j.stems)) {
         const base = job.file.name.replace(/\.[^.]+$/, '')
         for (const [key, path] of Object.entries(job.stems!)) {
-          await triggerDownload(path, `${base}_${STEM_LABELS[key] ?? key}.wav`)
+          await triggerDownload(path, `${base}_${STEM_FILE_SUFFIX[key] ?? key}.wav`)
           await new Promise((r) => setTimeout(r, 120))  // brief gap so browser doesn't block
         }
       }
@@ -310,12 +315,12 @@ export function AudioToolsView(): JSX.Element {
                       onClick={() =>
                         triggerDownload(
                           path,
-                          `${job.file.name.replace(/\.[^.]+$/, '')}_${STEM_LABELS[key] ?? key}.wav`
+                          `${job.file.name.replace(/\.[^.]+$/, '')}_${STEM_FILE_SUFFIX[key] ?? key}.wav`
                         )
                       }
-                      title={`Download ${STEM_LABELS[key] ?? key}`}
+                      title={`${t('common.download')} ${t(stemLabelKey(key))}`}
                     >
-                      ⬇ {STEM_LABELS[key] ?? key}
+                      ⬇ {t(stemLabelKey(key))}
                     </button>
                   ))
                 }

@@ -3,6 +3,8 @@ numpy>=1.26.0
 onnx>=1.16.0
 onnxruntime>=1.18.0
 soundfile>=0.12.0
+librosa>=0.10.0         # pitch analysis + pitch_shift (Ticket 16, Ticket 19; librosa.pyin/pitch_shift)
+soxr>=0.4.0             # fast direct resampling for pitch analysis (bypasses librosa.resample's slower dispatch)
 cryptography>=42.0.0   # AES-256-GCM model encryption
 torch>=2.0.0           # training only; CPU wheel: pip install torch --index-url https://download.pytorch.org/whl/cpu
 # On Windows, swap onnxruntime for onnxruntime-directml to enable DirectML EP.

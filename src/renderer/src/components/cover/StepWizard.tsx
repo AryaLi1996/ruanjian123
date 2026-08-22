@@ -22,7 +22,7 @@ export function StepWizard({ current, completed, onNavigate }: Props): JSX.Eleme
   ]
 
   return (
-    <nav className="wizard-steps" aria-label="Workflow steps">
+    <nav className="wizard-steps" aria-label={t('cover.workflowSteps')}>
       {steps.map((step, i) => {
         const isDone   = completed.has(step.number)
         const isActive = current === step.number

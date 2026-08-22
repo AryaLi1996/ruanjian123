@@ -18,7 +18,7 @@ import json
 import os
 import time
 from pathlib import Path
-from typing import Literal
+from typing import Literal, TypedDict
 
 import numpy as np
 import soundfile as sf
@@ -31,6 +31,12 @@ SYNTH_SR      = 22_050
 SYNTH_HOP     = 256
 CHUNK_FRAMES  = 256          # frames per training sample → 256 × 256 = 65536 ≈ 3 s
 TARGET_RMS_DB = -20.0        # loudness normalisation target
+
+# Ticket 48 §2: minimum training material per mode, and the SNR floor below
+# which uploaded vocals are noisy/reverberant enough that the model is
+# likely to learn and reproduce the noise instead of the singer's timbre.
+MIN_DURATION_SEC: dict[str, float] = {"standard": 300.0, "professional": 900.0}
+MIN_SNR_DB = 15.0
 
 
 # ── Model ─────────────────────────────────────────────────────────────────────
@@ -196,6 +202,107 @@ def preprocess_vocals(
             chunk_idx += 1
 
     return chunk_idx
+
+
+def estimate_snr_db(audio: np.ndarray, frame_size: int = 1024) -> float:
+    """
+    Coarse SNR estimate from frame-RMS statistics: treats the quietest 10%
+    of frames as the noise floor and the median frame as signal+noise — a
+    standard proxy for source material that has no separate noise
+    reference (which training uploads never provide).
+    """
+    audio = np.asarray(audio, dtype=np.float32)
+    n = (len(audio) // frame_size) * frame_size
+    if n < frame_size:
+        return 0.0
+    frames    = audio[:n].reshape(-1, frame_size)
+    frame_rms = np.sqrt(np.mean(frames ** 2, axis=1)) + 1e-10
+    noise_rms  = float(np.percentile(frame_rms, 10))
+    signal_rms = float(np.percentile(frame_rms, 50))
+    return float(20.0 * np.log10((signal_rms + 1e-10) / (noise_rms + 1e-10)))
+
+
+class DataQualityReport(TypedDict):
+    n_files:          int
+    duration_sec:     float
+    min_required_sec: float
+    duration_ok:      bool
+    snr_db:           float | None
+    snr_ok:           bool
+    warnings:         list[str]
+    passed:           bool
+
+
+def validate_training_data(
+    input_dir: Path, mode: Literal["standard", "professional"],
+) -> DataQualityReport:
+    """
+    Check uploaded vocal material against the minimum duration/cleanliness
+    bar for `mode` (Ticket 48 §2) before training spends time on it.
+
+    Duration is read from file metadata only (sf.info — no full decode), so
+    this stays cheap even for a folder of long files; SNR needs actual
+    samples, so it's estimated from up to 3 representative files. When
+    `input_dir` has no readable audio files at all, this reports
+    passed=True with n_files=0 — that's the synthetic-dummy-data code path
+    (see VocalDataset), not a data-quality failure to warn the user about.
+    """
+    import soundfile as sf  # noqa: PLC0415
+
+    exts  = {".wav", ".flac", ".ogg", ".mp3"}
+    files = ([f for f in sorted(input_dir.iterdir())
+              if f.is_file() and f.suffix.lower() in exts]
+             if input_dir.exists() else [])
+
+    warnings: list[str] = []
+    min_required = MIN_DURATION_SEC[mode]
+
+    total_sec = 0.0
+    for f in files:
+        try:
+            info = sf.info(str(f))
+            total_sec += info.frames / info.samplerate
+        except Exception:
+            warnings.append(f"Could not read '{f.name}' — file skipped.")
+
+    duration_ok = total_sec >= min_required
+
+    snr_db: float | None = None
+    if files:
+        samples: list[np.ndarray] = []
+        for f in files[:3]:
+            try:
+                audio, _sr = sf.read(str(f), dtype="float32", always_2d=True)
+                samples.append(audio.mean(axis=1))
+            except Exception:
+                continue
+        if samples:
+            snr_db = float(np.mean([estimate_snr_db(s) for s in samples]))
+
+    snr_ok = snr_db is None or snr_db >= MIN_SNR_DB
+
+    if files and not duration_ok:
+        warnings.append(
+            f"Training material is {total_sec / 60:.1f} min — {mode} mode "
+            f"recommends at least {min_required / 60:.0f} min for reliable "
+            "timbre quality. Model quality may be low due to insufficient data.")
+    if snr_db is not None and not snr_ok:
+        warnings.append(
+            f"Training material's estimated SNR ({snr_db:.1f} dB) is low — "
+            "background noise or reverb in the source recordings may be "
+            "learned and reproduced by the model. Consider re-recording or "
+            "denoising the source audio, then retraining.")
+
+    return DataQualityReport(
+        n_files=len(files),
+        duration_sec=round(total_sec, 1),
+        min_required_sec=min_required,
+        duration_ok=duration_ok,
+        snr_db=round(snr_db, 2) if snr_db is not None else None,
+        snr_ok=snr_ok,
+        warnings=warnings,
+        passed=bool(duration_ok and snr_ok) if files else True,
+    )
 
 
 class VocalDataset(Dataset):
@@ -387,6 +494,18 @@ def _pick_device() -> str:
     return "cpu"
 
 
+def _si_snr(ref: np.ndarray, est: np.ndarray) -> float:
+    """Scale-invariant SNR — same proxy metric _test_suite.py uses for
+    synthesis quality, reused here (not imported, since _test_suite.py is a
+    test-only module) to score how faithfully the exported model
+    reconstructs its own training material."""
+    ref = ref - ref.mean(); est = est - est.mean()
+    alpha  = float(np.dot(est, ref) / (np.dot(ref, ref) + 1e-8))
+    target = alpha * ref
+    error  = est - target
+    return float(10.0 * np.log10(np.sum(target ** 2) / (np.sum(error ** 2) + 1e-8)))
+
+
 def _configure_backend(device: str) -> None:
     """One-time perf knobs. No-ops on backends that don't support them."""
     if device == "cuda":
@@ -418,6 +537,13 @@ def train(
     device = device or _pick_device()
     gc     = (mode == "professional")   # gradient checkpointing in pro mode
     _configure_backend(device)
+
+    # Ticket 48 §2: check the raw upload against the minimum duration/SNR
+    # bar for this mode before spending training time on it. This never
+    # blocks training (a short/noisy upload still trains — it just may
+    # produce a low-quality model) but the warnings/quality_score below
+    # let the caller tell the user why.
+    data_quality = validate_training_data(data_dir, mode)
 
     model = MicroVITSModel(gradient_checkpointing=gc)
     model = apply_lora(model, mode)
@@ -511,6 +637,26 @@ def train(
     model_bytes = export_to_onnx(model, output_path)
     elapsed     = time.perf_counter() - t0
 
+    # Ticket 48 §5: score how faithfully the trained model reproduces its
+    # own training material (SI-SNR of reconstruction vs. the real target)
+    # as a proxy for timbre fidelity, and surface a plain warning when it's
+    # low so a bad model doesn't look identical to a good one in the UI.
+    model.eval()
+    with torch.no_grad():
+        sample_frames, sample_cond = dataset[0]
+        recon = model(sample_frames.unsqueeze(0).to(device), sample_cond.unsqueeze(0).to(device))
+        ref = sample_frames.flatten().detach().cpu().numpy().astype(np.float64)
+        est = recon[0].detach().cpu().numpy().astype(np.float64)
+    quality_snr_db = _si_snr(ref, est)
+    quality_score  = float(np.clip(quality_snr_db / 30.0, 0.0, 1.0))  # 30 dB ≈ excellent
+
+    quality_warning: str | None = None
+    if quality_score < 0.4 or not data_quality["passed"]:
+        quality_warning = (
+            "Model quality may be low due to insufficient or noisy training "
+            "data. Consider retraining with more (or cleaner) vocal recordings."
+        )
+
     final = {
         "status":           "done",
         "mode":             mode,
@@ -522,6 +668,10 @@ def train(
         "output_path":      str(output_path),
         "model_bytes":      model_bytes,
         "device":           device,
+        "quality_score":    round(quality_score, 4),
+        "quality_snr_db":   round(quality_snr_db, 2),
+        "quality_warning":  quality_warning,
+        "data_quality":     dict(data_quality),
         # acceptance: standard ≤ 20 min CPU, professional ≤ 90 min CPU
         "passed":           elapsed <= (1200 if mode == "standard" else 5400),
     }

@@ -17,7 +17,7 @@ const resources = {
         sloganZh: '让每个声音，都舒服入耳', sloganEn: 'Every voice, soothing to the ear.',
       },
       language: { label: '语言', zh: '简体中文', en: 'English' },
-      nav: { training: '模型训练', cover: '翻唱创作', audioTools: '音频工具', playback: '播放/监听', subscription: '订阅' },
+      nav: { training: '模型训练', cover: '翻唱创作', audioTools: '音频工具', waveform: '波形编辑', playback: '播放/监听', subscription: '订阅' },
       common: {
         loading: '加载中…', cancel: '取消', retry: '重试', reset: '重置', refresh: '刷新',
         activate: '激活', deactivate: '停用', download: '下载', error: '错误', done: '完成',
@@ -27,19 +27,72 @@ const resources = {
         ready: '更新已准备安装', install: '重启并安装', available: '发现更新 {{version}}',
         downloading: '正在下载…', download: '下载',
       },
-      status: { running: '正在运行：{{method}}', idle: '引擎就绪', training: '训练中：{{mode}}', separating: '正在分离…', synthesizing: '正在合成（{{mode}}）…', saved: '已保存：{{path}}' },
+      status: { running: '正在运行：{{method}}', idle: '引擎就绪', training: '训练中：{{mode}}', separating: '正在分离…', synthesizing: '正在合成（{{mode}}）…', saved: '已保存：{{path}}', applyingHighPitchProtection: '正在应用高音保护…', highPitchProtectionApplied: '已应用模型音域，高音保护起点为D#4' },
       training: {
-        title: '模型训练', description: '使用干声录音微调 AI 歌手的音色。', info: '模型信息', name: '模型名称 *', namePlaceholder: '例如：我的歌手', epochs: '训练轮数', material: '训练素材', noFiles: '未上传文件，将使用演示数据。', mode: '训练模式', start: '开始本地训练', training: '训练中…', complete: '✓ 训练完成', finalizing: '正在收尾…', finalizingDesc: '训练已完成，正在生成试听音频并保存模型。', audition: '试听', trainAnother: '训练另一个模型', models: '我的模型（{{count}}）', demo: '试听', retrain: '重新训练', delete: '删除', standard: '标准', professional: '专业', gpu: 'GPU', cpu: 'CPU', vram: '显存', epoch: '第 {{current}}/{{total}} 轮', loss: '损失 {{value}}', eta: '预计剩余 {{value}}', waiting: '等待引擎…', materialHint: '拖入干净的人声录音。', standardTagline: 'LoRA rank-4 · 仅训练音色编码器', professionalTagline: 'LoRA+ rank-8 · 全层训练 · 梯度检查点', dropAudio: '拖入音频文件，或点击浏览', audioFormats: 'WAV · FLAC · MP3 · OGG · M4A', fileCount: '{{count}} 个文件', totalDuration: '共 {{duration}}', clearAll: '全部清除', removeFile: '移除文件', loadingWaveform: '正在加载波形…', waveform: '波形', play: '播放', pause: '暂停', volume: '音量', noDemo: '暂无演示音频', lossLabel: '损失：{{value}}', pro: '专业', trainingGpu: 'GPU', trainingCpu: 'CPU', trainingVram: '显存', download: '下载模型', ready: '就绪',
+        title: '模型训练', description: '使用干声录音微调 AI 歌手的音色。', info: '模型信息', name: '模型名称 *', namePlaceholder: '例如：我的歌手', epochs: '训练轮数', material: '训练素材', noFiles: '未上传文件，将使用演示数据。', mode: '训练模式', start: '开始本地训练', training: '训练中…', complete: '✓ 训练完成', finalizing: '正在收尾…', finalizingDesc: '训练已完成，正在生成试听音频并保存模型。', audition: '试听', trainAnother: '训练另一个模型', models: '我的模型（{{count}}）', demo: '试听', retrain: '重新训练', delete: '删除', standard: '标准', professional: '专业', gpu: 'GPU', cpu: 'CPU', vram: '显存', epoch: '第 {{current}}/{{total}} 轮', loss: '损失 {{value}}', eta: '预计剩余 {{value}}', waiting: '等待引擎…', materialHint: '拖入干净的人声录音。', standardTagline: 'LoRA rank-4 · 仅训练音色编码器', professionalTagline: 'LoRA+ rank-8 · 全层训练 · 梯度检查点', dropAudio: '拖入音频文件，或点击浏览', audioFormats: 'WAV · FLAC · MP3 · OGG · M4A', fileCount: '{{count}} 个文件', totalDuration: '共 {{duration}}', clearAll: '全部清除', removeFile: '移除文件', loadingWaveform: '正在加载波形…', waveform: '波形', play: '播放', pause: '暂停', volume: '音量', noDemo: '暂无演示音频', lossLabel: '损失：{{value}}', pro: '专业', trainingGpu: 'GPU', trainingCpu: 'CPU', trainingVram: '显存', download: '下载模型', ready: '就绪', qualityLow: '音质较低',
       },
       cover: {
-        title: '翻唱创作', description: '上传 → 分离 → 合成 → 混音 → 导出', upload: '上传并分离', song: '歌曲文件（WAV / FLAC / MP3）', chooseSong: '点击选择歌曲', separationMode: '分离模式', standard: '标准', enhanced: '增强', standardStems: '2 轨：人声 + 伴奏', enhancedStems: '3 轨：主唱 · 和声 · 伴奏', startSeparation: '开始分离', separating: '分离中…', stems: '音轨 — 点击独奏试听', nextModel: '下一步：选择模型 →', selectModel: '选择 AI 歌手模型', noModels: '还没有训练好的模型。请先前往模型训练。', algorithm: '翻唱算法', v1: 'V1 — 快速', v2: 'V2 — 高精度', synthesize: '合成翻唱', synthesizing: '合成中…', nextSynthesize: '下一步：合成 →', mix: '合成与混音', mixer: '混音台', export: '下一步：导出 →', exportTitle: '导出音频',
+        title: '翻唱创作', description: '上传 → 分离 → 合成 → 混音 → 导出', upload: '上传并分离', song: '歌曲文件（WAV / FLAC / MP3）', chooseSong: '点击选择歌曲', separationMode: '分离模式', standard: '标准', enhanced: '增强', standardStems: '2 轨：人声 + 伴奏', enhancedStems: '3 轨：主唱 · 和声 · 伴奏', startSeparation: '开始分离', separating: '分离中…', stems: '音轨 — 点击独奏试听', nextModel: '下一步：选择模型 →', selectModel: '选择 AI 歌手模型', noModels: '还没有训练好的模型。请先前往模型训练。', algorithm: '翻唱算法', v1: 'V1 — 快速', v2: 'V2 — 高精度', v1Tagline: 'DTW + WSOLA · 实时率 ≤10%', v2Tagline: 'LSTM 表现力编码器 · 实时率 ≤50%', synthesize: '合成翻唱', synthesizing: '合成中…', nextSynthesize: '下一步：合成 →', mix: '合成与混音', mixer: '混音台', export: '下一步：导出 →', exportTitle: '导出音频',
         errUploadFirst: '请先上传一首歌曲。', errSelectModel: '请先选择模型。', errRunSeparation: '请先运行分离。',
         labelVocals: '人声', labelAccompaniment: '伴奏', labelLeadDry: '主唱（干声）', labelHarmonyDry: '和声（干声）',
         labelAiVocal: 'AI 人声', labelOrigHarmony: '原始和声', labelAccomp: '伴奏',
         stepUpload: '上传并分离', stepModel: '选择模型', stepMix: '合成与混音', stepExport: '导出',
         stemsLoading: '正在加载音轨…', unsolo: '取消独奏', mixerLoading: '正在加载音频音轨…', reverb: '混音', eqLow: '低音', eqMid: '中音', eqHigh: '高音',
+        mixInfo: '模型：{{model}} · 算法：{{algo}}',
+        synthesizedInfo: '✓ 翻唱合成完成，用时 {{elapsed}} 秒（音频时长 {{duration}} 秒）',
+        // Ticket 44: Export Audio panel — was entirely hardcoded English.
+        exportFormat: '格式', exportFormatWav: 'WAV（无损）', exportFormatFlac: 'FLAC（无损压缩）', exportFormatOgg: 'OGG Vorbis（有损压缩）',
+        exportQuality: '音质 / 码率', exportAction: '导出音频', exportRendering: '正在渲染并导出…',
+        exportResult: '已导出：{{path}}\n大小：{{size}} MB · 时长：{{duration}}',
+        exportNeedsMix: '请先完成合成与混音步骤。',
+        workflowSteps: '工作流程步骤',
+        // Ticket 17: high-pitch protection (强制修音).
+        highPitchProtection: '高音保护',
+        highPitchProtectionThreshold: '高音保护起点为D#4',
+        highPitchProtectionApply: '应用高音保护',
+        highPitchProtectionApplying: '正在应用高音保护…',
+        highPitchProtectionInfo: '已修正 {{count}} 处高音（约 {{percent}}% 时长）',
+        highPitchProtectionLegend: '红色区域为强制修音修正范围',
+        highPitchProtectionNone: '未检测到超出 D#4 的高音，无需修正。',
+        // Ticket 18: Cloud Library (云曲库) integration.
+        openLibrary: '☁️ 从云曲库选择', targetSongLabel: '当前目标歌曲：{{title}} - {{artist}}',
+        clearTargetSong: '清除', unknownArtist: '未知艺术家',
+        // Ticket 19: Pitch Shift / Tune slider.
+        pitchShift: '调音（半音）', pitchShiftRecommended: '推荐移调：{{value}}',
+        pitchShiftRecommendedTitle: '推荐移调：{{value}} 半音',
+        pitchShiftApplyRecommended: '应用推荐值', pitchShiftProcessing: '正在处理移调音频…',
+      },
+      // Ticket 18: Cloud Library (云曲库) search modal.
+      library: {
+        title: '云曲库', close: '关闭', searchPlaceholder: '搜索歌曲或歌手',
+        searching: '搜索中…', searchError: '搜索失败，请检查网络连接后重试',
+        noResults: '未找到结果', emptyPrompt: '输入关键词开始搜索',
+        select: '选择', downloading: '下载中…',
+        prevPage: '上一页', nextPage: '下一页', pageOf: '第 {{page}} / {{totalPages}} 页',
       },
       audioTools: { title: '音频工具', description: '批量音源分离 — 拖入文件、选择模式、全部处理。', detect: '检测设备', drop: '拖入音频文件，或点击浏览', formats: '多个文件 · WAV · FLAC · OGG', files: '{{count}} 个文件', done: '{{count}} 个完成', pending: '{{count}} 个等待', failed: '{{count}} 个失败', process: '处理 {{count}} 个', processing: '处理中…', clear: '清空', pendingStatus: '● 等待中', errorStatus: '✕ 错误', downloadAll: '全部下载（{{count}}）', standard: '标准', enhanced: '增强' },
+      // Ticket 16: pitch analysis ("分析音高") panel — waveform region selection
+      // + max-note detection, shown after vocal separation in Cover Creation.
+      pitch: {
+        title: '音高分析', analyze: '分析音高', analyzing: '分析中…',
+        selectRegionHint: '在波形上拖动以选择要分析的区域，不选择则自动分析整段音轨。',
+        loadingWaveform: '正在加载波形…',
+        wholeTrackLabel: '未选择区域 — 将分析整段音轨',
+        regionSelected: '已选区域：{{start}}s – {{end}}s', clearRegion: '清除区域',
+        wholeTrackTitle: '已分析整段音轨', wholeTrackMessage: '未选择区域，系统已自动分析整段音轨。',
+        maxDetected: '检测到最高音', suggestedThreshold: '建议高音保护阈值', avgDetected: '平均音高',
+        summary: '检测到最高音: {{maxNote}}, 建议高音保护阈值: {{thresholdNote}}',
+        noPitchDetected: '未检测到有效音高，请确认所选区域包含人声。',
+      },
+      // Ticket 15: waveform display + drag-selected region editor.
+      waveformEditor: {
+        title: '波形编辑', description: '拖入音频文件查看波形，拖动鼠标选取片段用于后续处理。',
+        drop: '拖入 WAV / MP3 文件，或点击浏览', formats: 'WAV · MP3',
+        unsupportedFormat: '不支持的文件格式，请使用 WAV 或 MP3。',
+        play: '播放', pause: '暂停', stop: '停止',
+        loopSelection: '循环播放选区', clearSelection: '清除选区',
+        selectionInfo: '选区：{{start}} – {{end}}（时长 {{dur}}）',
+      },
       // Automatic lyrics recognition status copy (Ticket 43 §6) — shown in the
       // Playback/Monitor lyrics panel while/after an automatic online match runs.
       lyrics: {
@@ -49,8 +102,12 @@ const resources = {
           notfound: '未自动找到歌词，您可以导入 LRC 文件或手动搜索。',
         },
       },
+      // Ticket 46: shared stem-name labels for track lists that render raw
+      // separation-engine identifiers (accompaniment/vocals/lead_dry/
+      // harmony_dry) — see utils/stems.ts's stemLabelKey().
+      tracks: { vocal: '人声', accompaniment: '伴奏', harmony: '和声', other: '其他' },
       playback: { title: '播放/监听', description: '加载音频、分离音轨、对比原唱与 AI 翻唱，并实时录制人声。', trackList: '音轨列表', loadOriginal: '加载原始音频', loadCover: '加载 AI 翻唱', noTracks: '暂无音轨 — 加载音频文件开始。', separate: '分离音轨', separating: '分离中…', separateMode: '分离模式', standard: '标准', enhanced: '增强', mute: '静音', solo: '独奏', volume: '音量', remove: '移除', waveform: '波形显示', zoomIn: '放大', zoomOut: '缩小', play: '播放', pause: '暂停', stop: '停止', abTitle: 'A/B 对比', trackA: '音轨 A', trackB: '音轨 B', switchAB: '切换 A/B', autoAlign: '自动对齐', aligning: '对齐中…', aligned: '已对齐（偏移 {{offset}} 秒）', selectTwoTracks: '请选择两条音轨进行对比', recordingPanel: '实时录音', record: '● 录音', recording: '● 正在录音…', stopRecording: '停止录音', save: '保存录音', discard: '丢弃', micUnavailable: '无法访问麦克风', recordedClip: '录音片段', original: '原始混音', stem: '分离音轨', cover: 'AI 翻唱', clip: '录音', lyrics: '歌词', expand: '展开', collapse: '收起', importLrc: '导入 LRC', searchOnline: '在线搜索', subscribeForSearch: '订阅后可使用在线歌词搜索', noLyrics: '暂无歌词，请导入 .lrc 文件或在线搜索', searchLyricsTitle: '在线搜索歌词', searchQueryPlaceholder: '歌曲名称', searchArtistPlaceholder: '艺术家（可选）', search: '搜索', searching: '搜索中…', searchNoResults: '未找到结果', searchError: '搜索失败，请检查网络连接后重试', useResult: '使用', unsynced: '无时间轴', instrumental: '纯音乐', closeSearch: '关闭', songs: '歌曲列表', addSong: '添加歌曲', noSongs: '暂无歌曲 — 点击上方按钮或将音频文件拖入此处。', noSongSelected: '未选择歌曲', trackCount: '{{count}} 轨', hideSongs: '隐藏歌曲列表', showSongs: '显示歌曲列表', filterSongs: '搜索歌曲或艺术家', sortBy: '排序', sortTitle: '标题', sortArtist: '艺术家', sortDateAdded: '添加时间', ctxPlay: '播放', ctxRemove: '从列表移除', ctxShowInFolder: '在文件夹中显示', like: '喜欢', unlike: '取消喜欢', share: '分享', shareCopied: '已复制到剪贴板', enterFullscreen: '全屏歌词', exitFullscreen: '退出全屏', unknownArtist: '未知艺术家', dragResize: '拖动调整高度', nowPlaying: '正在播放', monitoring: '波形与监听' },
-      subscription: { title: '订阅', description: '管理舒音许可证和订阅计划。', status: '许可证状态', plan: '计划', trial: '试用', validUntil: '有效期至', daysRemaining: '剩余天数', features: '授权功能', active: '✓ 已激活', unlicensed: '○ 未授权', expired: '✕ 已过期', grace: '⚠ 已过期（宽限期）', graceMessage: '订阅已过期，剩余 {{count}} 天宽限期。', invalid: '✕ 无效令牌', manage: '管理订阅', renew: '续订', activateTitle: '激活许可证', renewTitle: '续订订阅', enterKey: '输入许可证密钥以解锁全部功能。', expiredDesc: '订阅已过期。续订后恢复完整访问。', subscribe: '订阅', subscribeNow: '立即订阅', activateKey: '输入现有许可证密钥', keyPlaceholder: 'SOOTHEVOICE-XXXX-XXXX-XXXX', activating: '激活中…', demo: '演示：使用 SOOTHEVOICE-DEMO-2026 获得 30 天试用。', subscribeUnlock: '订阅解锁', lockDescription: '舒音需要有效订阅才能使用 AI 功能。现在开始 30 天免费试用。', haveKey: '已有许可证密钥？请前往订阅页面。', expiredTitle: '订阅已过期', expiredLockDesc: '您的订阅已失效。续订后恢复全部功能。', openCheckout: '打开支付页面',
+      subscription: { title: '订阅', description: '管理舒音许可证和订阅计划。', status: '许可证状态', plan: '计划', trial: '试用', validUntil: '有效期至', daysRemaining: '剩余天数', features: '授权功能', active: '✓ 已激活', unlicensed: '○ 未授权', expired: '✕ 已过期', grace: '⚠ 已过期（宽限期）', graceMessage: '订阅已过期，剩余 {{count}} 天宽限期。', invalid: '✕ 无效令牌', manage: '管理订阅', renew: '续订', activateTitle: '激活许可证', renewTitle: '续订订阅', enterKey: '输入许可证密钥以解锁全部功能。', expiredDesc: '订阅已过期。续订后恢复完整访问。', subscribe: '订阅', subscribeNow: '立即订阅', activateKey: '输入现有许可证密钥', keyPlaceholder: 'SOOTHEVOICE-XXXX-XXXX-XXXX', activating: '激活中…', subscribeUnlock: '订阅解锁', lockDescription: '舒音需要有效订阅才能使用 AI 功能。现在开始 30 天免费试用。', haveKey: '已有许可证密钥？请前往订阅页面。', expiredTitle: '订阅已过期', expiredLockDesc: '您的订阅已失效。续订后恢复全部功能。', openCheckout: '打开支付页面',
         choosePlan: '选择计划', choosePayment: '选择支付方式', payNow: '立即支付',
         // Ticket 34: multi-period plan cards.
         plans: { monthly: '月付', quarterly: '季付', semi_annual: '半年付', annual: '年付', trial: '试用' },
@@ -113,6 +170,10 @@ const resources = {
         synthesis: {
           complete: { title: '合成完成', message: '翻唱合成已完成（{{mode}}）。' },
           failed:   { title: '合成失败', message: '翻唱合成未能完成：{{message}}' },
+        },
+        highPitchProtection: {
+          complete: { title: '高音保护已应用', message: '已修正 {{count}} 处高音，高音保护起点为 D#4。' },
+          failed:   { title: '高音保护失败', message: '高音保护未能完成：{{message}}' },
         },
         trial: {
           activated:     { title: '试用已激活', message: '你的免费试用已开始，尽情体验全部功能吧。' },
@@ -196,19 +257,72 @@ const resources = {
         sloganZh: '让每个声音，都舒服入耳', sloganEn: 'Every voice, soothing to the ear.',
       },
       language: { label: 'Language', zh: '简体中文', en: 'English' },
-      nav: { training: 'Model Training', cover: 'Cover Creation', audioTools: 'Audio Tools', playback: 'Playback / Monitor', subscription: 'Subscription' },
+      nav: { training: 'Model Training', cover: 'Cover Creation', audioTools: 'Audio Tools', waveform: 'Waveform Editor', playback: 'Playback / Monitor', subscription: 'Subscription' },
       common: { loading: 'Loading…', cancel: 'Cancel', retry: 'Retry', reset: 'Reset', refresh: 'Refresh', activate: 'Activate', deactivate: 'Deactivate', download: 'Download', error: 'Error', done: 'Done', unavailable: 'Unavailable' },
       updater: { ready: 'Update ready to install', install: 'Restart & Install', available: 'Update {{version}} available', downloading: 'Downloading…', download: 'Download' },
-      status: { running: 'Running: {{method}}', idle: 'Engine ready', training: 'Training: {{mode}}', separating: 'Separating…', synthesizing: 'Synthesizing ({{mode}})…', saved: 'Saved: {{path}}' },
-      training: { title: 'Model Training', description: 'Fine-tune the AI singer\'s timbre using dry vocal recordings.', info: 'Model Info', name: 'Model name *', namePlaceholder: 'e.g. My Singer', epochs: 'Epochs', material: 'Training Material', noFiles: 'No files uploaded; synthetic demo data will be used.', mode: 'Training Mode', start: 'Start Local Training', training: 'Training…', complete: '✓ Training Complete', finalizing: 'Finalizing…', finalizingDesc: 'Training finished. Generating the demo clip and saving the model.', audition: 'Audition', trainAnother: 'Train Another Model', models: 'Your Models ({{count}})', demo: 'Demo', retrain: 'Retrain', delete: 'Delete', standard: 'Standard', professional: 'Professional', gpu: 'GPU', cpu: 'CPU', vram: 'VRAM', epoch: 'Epoch {{current}}/{{total}}', loss: 'Loss {{value}}', eta: 'ETA {{value}}', waiting: 'Waiting for engine…', materialHint: 'Drop clean vocal recordings here.', standardTagline: 'LoRA rank-4 · timbre encoder only', professionalTagline: 'LoRA+ rank-8 · all layers · gradient checkpointing', dropAudio: 'Drop audio files here, or click to browse', audioFormats: 'WAV · FLAC · MP3 · OGG · M4A', fileCount: '{{count}} file(s)', totalDuration: '{{duration}} total', clearAll: 'Clear all', removeFile: 'Remove file', loadingWaveform: 'Loading waveform…', waveform: 'waveform', play: 'Play', pause: 'Pause', volume: 'Volume', noDemo: 'No demo available', lossLabel: 'Loss: {{value}}', pro: 'Pro', trainingGpu: 'GPU', trainingCpu: 'CPU', trainingVram: 'VRAM', download: 'Download Model', ready: 'Ready' },
-      cover: { title: 'Cover Creation', description: 'Upload → Separate → Synthesize → Mix → Export', upload: 'Upload & Separate', song: 'Song file (WAV / FLAC / MP3)', chooseSong: 'Click to choose a song', separationMode: 'Separation mode', standard: 'Standard', enhanced: 'Enhanced', standardStems: '2 stems — vocals + accompaniment', enhancedStems: '3 stems — lead · harmony · accompaniment', startSeparation: 'Start Separation', separating: 'Separating…', stems: 'Stems — click Solo to preview', nextModel: 'Next: Select Model →', selectModel: 'Select AI Singer Model', noModels: 'No models trained yet. Go to Model Training first.', algorithm: 'Cover algorithm', v1: 'V1 — Fast', v2: 'V2 — High-Precision', synthesize: 'Synthesize Cover', synthesizing: 'Synthesizing…', nextSynthesize: 'Next: Synthesize →', mix: 'Synthesize & Mix', mixer: 'Mixing Console', export: 'Next: Export →', exportTitle: 'Export Audio',
+      status: { running: 'Running: {{method}}', idle: 'Engine ready', training: 'Training: {{mode}}', separating: 'Separating…', synthesizing: 'Synthesizing ({{mode}})…', saved: 'Saved: {{path}}', applyingHighPitchProtection: 'Applying high-pitch protection…', highPitchProtectionApplied: 'Model vocal range applied — high-pitch protection starts at D#4' },
+      training: { title: 'Model Training', description: 'Fine-tune the AI singer\'s timbre using dry vocal recordings.', info: 'Model Info', name: 'Model name *', namePlaceholder: 'e.g. My Singer', epochs: 'Epochs', material: 'Training Material', noFiles: 'No files uploaded; synthetic demo data will be used.', mode: 'Training Mode', start: 'Start Local Training', training: 'Training…', complete: '✓ Training Complete', finalizing: 'Finalizing…', finalizingDesc: 'Training finished. Generating the demo clip and saving the model.', audition: 'Audition', trainAnother: 'Train Another Model', models: 'Your Models ({{count}})', demo: 'Demo', retrain: 'Retrain', delete: 'Delete', standard: 'Standard', professional: 'Professional', gpu: 'GPU', cpu: 'CPU', vram: 'VRAM', epoch: 'Epoch {{current}}/{{total}}', loss: 'Loss {{value}}', eta: 'ETA {{value}}', waiting: 'Waiting for engine…', materialHint: 'Drop clean vocal recordings here.', standardTagline: 'LoRA rank-4 · timbre encoder only', professionalTagline: 'LoRA+ rank-8 · all layers · gradient checkpointing', dropAudio: 'Drop audio files here, or click to browse', audioFormats: 'WAV · FLAC · MP3 · OGG · M4A', fileCount: '{{count}} file(s)', totalDuration: '{{duration}} total', clearAll: 'Clear all', removeFile: 'Remove file', loadingWaveform: 'Loading waveform…', waveform: 'waveform', play: 'Play', pause: 'Pause', volume: 'Volume', noDemo: 'No demo available', lossLabel: 'Loss: {{value}}', pro: 'Pro', trainingGpu: 'GPU', trainingCpu: 'CPU', trainingVram: 'VRAM', download: 'Download Model', ready: 'Ready', qualityLow: 'Quality may be low' },
+      cover: { title: 'Cover Creation', description: 'Upload → Separate → Synthesize → Mix → Export', upload: 'Upload & Separate', song: 'Song file (WAV / FLAC / MP3)', chooseSong: 'Click to choose a song', separationMode: 'Separation mode', standard: 'Standard', enhanced: 'Enhanced', standardStems: '2 stems — vocals + accompaniment', enhancedStems: '3 stems — lead · harmony · accompaniment', startSeparation: 'Start Separation', separating: 'Separating…', stems: 'Stems — click Solo to preview', nextModel: 'Next: Select Model →', selectModel: 'Select AI Singer Model', noModels: 'No models trained yet. Go to Model Training first.', algorithm: 'Cover algorithm', v1: 'V1 — Fast', v2: 'V2 — High-Precision', v1Tagline: 'DTW + WSOLA · ≤10% real-time', v2Tagline: 'LSTM expression encoder · ≤50% RT', synthesize: 'Synthesize Cover', synthesizing: 'Synthesizing…', nextSynthesize: 'Next: Synthesize →', mix: 'Synthesize & Mix', mixer: 'Mixing Console', export: 'Next: Export →', exportTitle: 'Export Audio',
         errUploadFirst: 'Please upload a song first.', errSelectModel: 'Select a model first.', errRunSeparation: 'Run separation first.',
         labelVocals: 'Vocals', labelAccompaniment: 'Accompaniment', labelLeadDry: 'Lead (dry)', labelHarmonyDry: 'Harmony (dry)',
         labelAiVocal: 'AI Vocal', labelOrigHarmony: 'Orig. Harmony', labelAccomp: 'Accomp.',
         stepUpload: 'Upload & Separate', stepModel: 'Select Model', stepMix: 'Synthesize & Mix', stepExport: 'Export',
         stemsLoading: 'Loading stems…', unsolo: 'Un-solo', mixerLoading: 'Loading audio tracks…', reverb: 'Reverb', eqLow: 'Lo', eqMid: 'Mid', eqHigh: 'Hi',
+        mixInfo: 'Model: {{model}} · Algorithm: {{algo}}',
+        synthesizedInfo: '✓ Cover synthesized in {{elapsed}}s ({{duration}}s audio)',
+        // Ticket 44: Export Audio panel — was entirely hardcoded English.
+        exportFormat: 'Format', exportFormatWav: 'WAV (lossless)', exportFormatFlac: 'FLAC (lossless compressed)', exportFormatOgg: 'OGG Vorbis (lossy)',
+        exportQuality: 'Quality / Bitrate', exportAction: 'Export Audio', exportRendering: 'Rendering & exporting…',
+        exportResult: 'Exported: {{path}}\nSize: {{size}} MB · Duration: {{duration}}',
+        exportNeedsMix: 'Complete the mixing step first.',
+        workflowSteps: 'Workflow steps',
+        // Ticket 17: high-pitch protection (forced auto-tune / 强制修音).
+        highPitchProtection: 'High-Pitch Protection',
+        highPitchProtectionThreshold: 'High-pitch protection starts at D#4',
+        highPitchProtectionApply: 'Apply High-Pitch Protection',
+        highPitchProtectionApplying: 'Applying high-pitch protection…',
+        highPitchProtectionInfo: 'Corrected {{count}} high-pitch region(s) (~{{percent}}% of duration)',
+        highPitchProtectionLegend: 'Red regions were corrected by forced auto-tune',
+        highPitchProtectionNone: 'No pitch above D#4 detected — nothing to correct.',
+        // Ticket 18: Cloud Library integration.
+        openLibrary: '☁️ Choose from Cloud Library', targetSongLabel: 'Target song: {{title}} - {{artist}}',
+        clearTargetSong: 'Clear', unknownArtist: 'Unknown Artist',
+        // Ticket 19: Pitch Shift / Tune slider.
+        pitchShift: 'Tune (semitones)', pitchShiftRecommended: 'Recommended shift: {{value}}',
+        pitchShiftRecommendedTitle: 'Recommended shift: {{value}} semitones',
+        pitchShiftApplyRecommended: 'Apply recommended', pitchShiftProcessing: 'Re-processing shifted audio…',
+      },
+      // Ticket 18: Cloud Library search modal.
+      library: {
+        title: 'Cloud Library', close: 'Close', searchPlaceholder: 'Search songs or artists',
+        searching: 'Searching…', searchError: 'Search failed — check your connection and try again',
+        noResults: 'No results found', emptyPrompt: 'Type a keyword to start searching',
+        select: 'Select', downloading: 'Downloading…',
+        prevPage: 'Prev', nextPage: 'Next', pageOf: 'Page {{page}} of {{totalPages}}',
       },
       audioTools: { title: 'Audio Tools', description: 'Batch source separation — drop files, choose modes, process all.', detect: 'Detect Device', drop: 'Drop audio files here, or click to browse', formats: 'Multiple files · WAV · FLAC · OGG', files: '{{count}} file(s)', done: '{{count}} done', pending: '{{count}} pending', failed: '{{count}} failed', process: 'Process {{count}}', processing: 'Processing…', clear: 'Clear', pendingStatus: '● Pending', errorStatus: '✕ Error', downloadAll: 'Download All ({{count}})', standard: 'Standard', enhanced: 'Enhanced' },
+      // Ticket 16: pitch analysis ("Analyze Pitch") panel — waveform region
+      // selection + max-note detection, shown after vocal separation in Cover Creation.
+      pitch: {
+        title: 'Pitch Analysis', analyze: 'Analyze Pitch', analyzing: 'Analyzing…',
+        selectRegionHint: 'Drag on the waveform to select a region to analyze, or leave it unselected to analyze the whole track.',
+        loadingWaveform: 'Loading waveform…',
+        wholeTrackLabel: 'No region selected — the whole track will be analyzed',
+        regionSelected: 'Selected region: {{start}}s – {{end}}s', clearRegion: 'Clear region',
+        wholeTrackTitle: 'Analyzed whole track', wholeTrackMessage: 'No region was selected, so the entire track was analyzed automatically.',
+        maxDetected: 'Detected highest note', suggestedThreshold: 'Suggested high-note protection threshold', avgDetected: 'Average pitch',
+        summary: 'Detected highest note: {{maxNote}}, suggested high-note protection threshold: {{thresholdNote}}',
+        noPitchDetected: 'No pitch detected — make sure the selected region contains vocals.',
+      },
+      // Ticket 15: waveform display + drag-selected region editor.
+      waveformEditor: {
+        title: 'Waveform Editor', description: 'Drop an audio file to view its waveform, then drag on it to select a region for downstream processing.',
+        drop: 'Drop a WAV / MP3 file here, or click to browse', formats: 'WAV · MP3',
+        unsupportedFormat: 'Unsupported file format — please use WAV or MP3.',
+        play: 'Play', pause: 'Pause', stop: 'Stop',
+        loopSelection: 'Loop selection', clearSelection: 'Clear selection',
+        selectionInfo: 'Selection: {{start}} – {{end}} ({{dur}})',
+      },
       lyrics: {
         auto: {
           searching: 'Searching lyrics…',
@@ -216,8 +330,12 @@ const resources = {
           notfound: 'No lyrics found automatically. You can import an LRC file or search manually.',
         },
       },
+      // Ticket 46: shared stem-name labels for track lists that render raw
+      // separation-engine identifiers (accompaniment/vocals/lead_dry/
+      // harmony_dry) — see utils/stems.ts's stemLabelKey().
+      tracks: { vocal: 'Vocal', accompaniment: 'Accompaniment', harmony: 'Harmony', other: 'Other' },
       playback: { title: 'Playback / Monitor', description: 'Load audio, separate stems, A/B compare the original vocal against an AI cover, and record your voice live.', trackList: 'Track List', loadOriginal: 'Load Original Audio', loadCover: 'Load AI Cover', noTracks: 'No tracks yet — load an audio file to get started.', separate: 'Separate', separating: 'Separating…', separateMode: 'Separation mode', standard: 'Standard', enhanced: 'Enhanced', mute: 'Mute', solo: 'Solo', volume: 'Volume', remove: 'Remove', waveform: 'Waveform', zoomIn: 'Zoom in', zoomOut: 'Zoom out', play: 'Play', pause: 'Pause', stop: 'Stop', abTitle: 'A/B Comparison', trackA: 'Track A', trackB: 'Track B', switchAB: 'Switch A/B', autoAlign: 'Auto-Align', aligning: 'Aligning…', aligned: 'Aligned (offset {{offset}}s)', selectTwoTracks: 'Select two tracks to compare', recordingPanel: 'Live Recording', record: '● Record', recording: '● Recording…', stopRecording: 'Stop Recording', save: 'Save Recording', discard: 'Discard', micUnavailable: 'Microphone unavailable', recordedClip: 'Recorded clip', original: 'Original Mix', stem: 'Stem', cover: 'AI Cover', clip: 'Recording', lyrics: 'Lyrics', expand: 'Expand', collapse: 'Collapse', importLrc: 'Import LRC', searchOnline: 'Search Online', subscribeForSearch: 'Subscribe to use online lyrics search', noLyrics: 'No lyrics — import a .lrc file or search online', searchLyricsTitle: 'Search Lyrics Online', searchQueryPlaceholder: 'Song title', searchArtistPlaceholder: 'Artist (optional)', search: 'Search', searching: 'Searching…', searchNoResults: 'No results found', searchError: 'Search failed — check your connection and try again', useResult: 'Use', unsynced: 'Unsynced', instrumental: 'Instrumental', closeSearch: 'Close', songs: 'Songs', addSong: 'Add Song', noSongs: 'No songs yet — use the button above or drop audio files here.', noSongSelected: 'No song selected', trackCount: '{{count}} track(s)', hideSongs: 'Hide songs', showSongs: 'Show songs', filterSongs: 'Search songs or artists', sortBy: 'Sort', sortTitle: 'Title', sortArtist: 'Artist', sortDateAdded: 'Date added', ctxPlay: 'Play', ctxRemove: 'Remove from list', ctxShowInFolder: 'Show in folder', like: 'Like', unlike: 'Unlike', share: 'Share', shareCopied: 'Copied to clipboard', enterFullscreen: 'Fullscreen lyrics', exitFullscreen: 'Exit fullscreen', unknownArtist: 'Unknown Artist', dragResize: 'Drag to resize', nowPlaying: 'Now Playing', monitoring: 'Waveform & Monitoring' },
-      subscription: { title: 'Subscription', description: 'Manage your SootheVoice license and plan.', status: 'License Status', plan: 'Plan', trial: 'Trial', validUntil: 'Valid until', daysRemaining: 'Days remaining', features: 'Licensed features', active: '✓ Active', unlicensed: '○ Unlicensed', expired: '✕ Expired', grace: '⚠ Expired (grace period)', graceMessage: 'Your subscription expired; {{count}} day(s) of grace remain.', invalid: '✕ Invalid token', manage: 'Manage Subscription', renew: 'Renew', activateTitle: 'Activate License', renewTitle: 'Renew Subscription', enterKey: 'Enter your license key to unlock all SootheVoice features.', expiredDesc: 'Your subscription has expired. Renew to restore full access.', subscribe: 'Subscribe', subscribeNow: 'Subscribe Now', activateKey: 'Or enter an existing license key', keyPlaceholder: 'SOOTHEVOICE-XXXX-XXXX-XXXX', activating: 'Activating…', demo: 'Demo: use SOOTHEVOICE-DEMO-2026 for a free 30-day trial.', subscribeUnlock: 'Subscribe to Unlock', lockDescription: 'SootheVoice requires an active subscription to use AI features. Start with a free 30-day trial.', haveKey: 'Already have a key? Go to the Subscription page.', expiredTitle: 'Subscription Expired', expiredLockDesc: 'Your subscription has lapsed. Renew to restore access to all features.', openCheckout: 'Open payment page',
+      subscription: { title: 'Subscription', description: 'Manage your SootheVoice license and plan.', status: 'License Status', plan: 'Plan', trial: 'Trial', validUntil: 'Valid until', daysRemaining: 'Days remaining', features: 'Licensed features', active: '✓ Active', unlicensed: '○ Unlicensed', expired: '✕ Expired', grace: '⚠ Expired (grace period)', graceMessage: 'Your subscription expired; {{count}} day(s) of grace remain.', invalid: '✕ Invalid token', manage: 'Manage Subscription', renew: 'Renew', activateTitle: 'Activate License', renewTitle: 'Renew Subscription', enterKey: 'Enter your license key to unlock all SootheVoice features.', expiredDesc: 'Your subscription has expired. Renew to restore full access.', subscribe: 'Subscribe', subscribeNow: 'Subscribe Now', activateKey: 'Or enter an existing license key', keyPlaceholder: 'SOOTHEVOICE-XXXX-XXXX-XXXX', activating: 'Activating…', subscribeUnlock: 'Subscribe to Unlock', lockDescription: 'SootheVoice requires an active subscription to use AI features. Start with a free 30-day trial.', haveKey: 'Already have a key? Go to the Subscription page.', expiredTitle: 'Subscription Expired', expiredLockDesc: 'Your subscription has lapsed. Renew to restore access to all features.', openCheckout: 'Open payment page',
         choosePlan: 'Choose a plan', choosePayment: 'Payment method', payNow: 'Pay Now',
         // Ticket 34: multi-period plan cards.
         plans: { monthly: 'Monthly', quarterly: 'Quarterly', semi_annual: 'Semi-Annual', annual: 'Annual', trial: 'Trial' },
@@ -280,6 +398,10 @@ const resources = {
         synthesis: {
           complete: { title: 'Synthesis Complete', message: 'Cover synthesis finished ({{mode}}).' },
           failed:   { title: 'Synthesis Failed', message: 'Cover synthesis did not complete: {{message}}' },
+        },
+        highPitchProtection: {
+          complete: { title: 'High-Pitch Protection Applied', message: 'Corrected {{count}} high-pitch region(s); protection starts at D#4.' },
+          failed:   { title: 'High-Pitch Protection Failed', message: 'High-pitch protection did not complete: {{message}}' },
         },
         trial: {
           activated:    { title: 'Trial Activated', message: 'Your free trial has started — enjoy full access.' },

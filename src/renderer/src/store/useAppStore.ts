@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 
-export type ActiveView = 'training' | 'cover' | 'audio-tools' | 'playback' | 'subscription' | 'settings'
+export type ActiveView = 'training' | 'cover' | 'audio-tools' | 'waveform' | 'playback' | 'subscription' | 'settings'
 
 export interface TrainedModel {
   id:            string
@@ -14,6 +14,35 @@ export interface TrainedModel {
                                  // regenerate demoAudioUrl on demand after a restart
   epochs:        number
   bestLoss:      number
+  // Ticket 48: SI-SNR-based proxy (0-1) for how faithfully this model
+  // reproduces its training material, plus the plain-language warning
+  // shown when it's low. Optional so models saved before this ticket keep
+  // loading without either field.
+  qualityScore?:   number
+  qualityWarning?: string | null
+}
+
+// Ticket 18: the song picked in the Cloud Library (云曲库) modal — the
+// "目标音频" that Cover Creation separates and replaces the vocal of.
+// audioPath is a local file already downloaded/cached by the main process
+// (see main/library.ts's fetchLibraryAudio), so consumers never touch the
+// remote audio_url directly. Session-only, like selectedModel above — it's
+// meant to persist "until changed" within a running session, not survive a
+// restart.
+//
+// pitchShift/shiftedAudioPath (Ticket 19): the Tune slider's applied key
+// change and the local, engine-cached result of running
+// librosa.effects.pitch_shift on audioPath at that shift. shiftedAudioPath
+// is null at shift 0 (nothing to shift — audioPath is used as-is); see
+// CoverView's handleSeparate for where the two are chosen between.
+export interface TargetSong {
+  id:               string
+  title:            string
+  artist:           string
+  originalKey:      string | null
+  audioPath:        string
+  pitchShift:       number
+  shiftedAudioPath: string | null
 }
 
 interface AppState {
@@ -24,6 +53,7 @@ interface AppState {
   trainedModels:   TrainedModel[]
   modelsHydrated:  boolean   // true once the persisted library has been loaded — gates autosave
                               // so an early empty render can't overwrite the saved file with []
+  targetSong:      TargetSong | null
 
   setActiveView:    (view: ActiveView) => void
   setSelectedModel: (path: string | null) => void
@@ -33,6 +63,11 @@ interface AppState {
   removeModel:      (id: string) => void
   updateModelDemo:  (id: string, demoAudioUrl: string) => void
   hydrateModels:    (models: TrainedModel[]) => void
+  setTargetSong:    (song: TargetSong | null) => void
+  // Ticket 19: records a newly-applied pitch shift (and its cached shifted
+  // audio) on the current target song. No-ops if the song has since been
+  // cleared/changed from under an in-flight shift request.
+  setTargetSongShift: (shift: number, shiftedAudioPath: string | null) => void
 }
 
 export const useAppStore = create<AppState>((set) => ({
@@ -42,6 +77,7 @@ export const useAppStore = create<AppState>((set) => ({
   engineStatus:   'idle',
   trainedModels:  [],
   modelsHydrated: false,
+  targetSong:     null,
 
   setActiveView:    (view)  => set({ activeView: view }),
   setSelectedModel: (path)  => set({ selectedModel: path }),
@@ -54,4 +90,7 @@ export const useAppStore = create<AppState>((set) => ({
       trainedModels: s.trainedModels.map((m) => m.id === id ? { ...m, demoAudioUrl: url } : m),
     })),
   hydrateModels:    (models) => set({ trainedModels: models, modelsHydrated: true }),
+  setTargetSong:    (song)   => set({ targetSong: song }),
+  setTargetSongShift: (shift, shiftedAudioPath) =>
+    set((s) => (s.targetSong ? { targetSong: { ...s.targetSong, pitchShift: shift, shiftedAudioPath } } : s)),
 }))

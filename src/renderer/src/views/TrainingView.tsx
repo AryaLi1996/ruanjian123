@@ -14,6 +14,17 @@ type Phase = 'idle' | 'training' | 'finalizing' | 'done'
 /** Progress lines are capped so a long professional run can't grow the DOM without bound. */
 const MAX_LOG_LINES = 200
 
+interface DataQualityReport {
+  n_files:          number
+  duration_sec:     number
+  min_required_sec: number
+  duration_ok:      boolean
+  snr_db:           number | null
+  snr_ok:           boolean
+  warnings:         string[]
+  passed:           boolean
+}
+
 interface TrainingResult {
   status:           string
   output_path:      string
@@ -23,6 +34,13 @@ interface TrainingResult {
   elapsed_sec:      number
   model_bytes:      number
   device:           string
+  // Ticket 48: objective proxy for how faithfully the exported model
+  // reproduces its training material, plus a plain-language warning when
+  // it's low (insufficient/noisy data). Optional because older cached
+  // results (or a synthetic-data run) may not carry them.
+  quality_score?:   number
+  quality_warning?: string | null
+  data_quality?:    DataQualityReport
 }
 
 export function TrainingView(): JSX.Element {
@@ -128,8 +146,26 @@ export function TrainingView(): JSX.Element {
     const id = crypto.randomUUID()
 
     try {
+      // Ticket 48: the dropzone only ever collected these File objects into
+      // renderer state — nothing wrote them to disk or told the engine
+      // about them, so every "trained" model was silently fine-tuned on
+      // synthetic dummy sine-wave audio (VocalDataset's CI fallback)
+      // instead of the singer's actual voice, regardless of what the user
+      // uploaded here. That's the root cause behind the reported timbre
+      // mismatch: the model never saw the real training material at all.
+      // saveTrainingFiles() writes the uploaded buffers to a per-session
+      // directory under userData and returns its path for data_dir below.
+      let dataDir: string | undefined
+      if (audioFiles.length > 0) {
+        const files = await Promise.all(
+          audioFiles.map(async (f) => ({ name: f.name, buffer: await f.arrayBuffer() }))
+        )
+        dataDir = await window.engine.saveTrainingFiles(files)
+      }
+
       const res = await window.engine.stream('train_model', {
         mode, epochs, batch: 16, model_id: id,
+        ...(dataDir ? { data_dir: dataDir } : {}),
       }) as TrainingResult
 
       // Leave the training view before doing post-processing so the progress
@@ -152,6 +188,8 @@ export function TrainingView(): JSX.Element {
         demoAudioPath: demo?.path ?? null,
         epochs:        res.epochs,
         bestLoss:      res.best_loss,
+        qualityScore:   res.quality_score,
+        qualityWarning: res.quality_warning ?? null,
       })
 
       setPhase('done')
@@ -369,6 +407,22 @@ export function TrainingView(): JSX.Element {
         <>
           <div className="card">
             <div className="card-title" style={{ color: 'var(--success)' }}>{t('training.complete')}</div>
+
+            {/* Ticket 48 §7: low similarity between the exported model and its
+                training material means the voice likely won't resemble the
+                singer — surface that plainly instead of letting a bad model
+                look identical to a good one in the UI. */}
+            {result.quality_warning && (
+              <div className="cpu-notice" style={{ marginBottom: 12 }}>
+                ⚠ {result.quality_warning}
+              </div>
+            )}
+            {result.data_quality?.warnings.map((w, i) => (
+              <div key={i} className="cpu-notice" style={{ marginBottom: 12 }}>
+                ⚠ {w}
+              </div>
+            ))}
+
             <div className="result-box">
               {JSON.stringify({ ...result, output_path: result.output_path.split('/').pop() }, null, 2)}
             </div>

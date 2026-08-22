@@ -273,7 +273,7 @@ def test_t03_synthesis(duration: float, targets: dict) -> TestResult:
     return r  # type: ignore[return-value]
 
 
-def test_t04_separation_standard(duration: float, targets: dict) -> TestResult:
+def test_t04_separation_standard(duration: float, targets: dict, n_trials: int = 3) -> TestResult:
     r = _make_result("T04", f"Standard separation ({duration}s audio)")
     tmp = Path(__file__).parent / "_test_data"
     tmp.mkdir(exist_ok=True)
@@ -285,27 +285,43 @@ def test_t04_separation_standard(duration: float, targets: dict) -> TestResult:
         inp   = tmp / "sep_std_in.wav"
         _write_wav(inp, audio, 44100)
 
-        t0  = time.perf_counter()
-        res = separate(str(inp), mode="standard", output_dir=str(tmp / "sep_std_out"))
-        elapsed = time.perf_counter() - t0
+        # Scale to a 4-minute equivalent below — but only the part of
+        # elapsed that actually scales with audio duration. ONNX session
+        # creation (model_load_sec) is a one-time cost paid once regardless
+        # of clip length; linearly scaling it along with everything else
+        # overstates real-world time on a short test clip by exactly the
+        # scale factor (240/duration — 12x for a 20s --fast clip), since a
+        # real 4-minute separation only pays that cost once, not 12x over.
+        #
+        # That scale factor is also why a single measurement flakes badly
+        # on a shared/loaded CI runner: ordinary OS scheduling jitter on
+        # this short clip (observed ~1.0s vs ~2.2s elapsed for the same
+        # 20s input across two CI runs) gets amplified 12x into an apparent
+        # ~14s swing in the 4-minute-equivalent estimate — enough to cross
+        # the 10s target on its own, with no code change involved. Same fix
+        # as T06/T07 below: run several times and take the best: noise only
+        # ever adds time, never removes it, so the minimum across identical
+        # runs is the closest estimate of the algorithm's actual cost.
+        scale = 240.0 / duration
+        best: dict | None = None
+        for i in range(n_trials):
+            t0  = time.perf_counter()
+            res = separate(str(inp), mode="standard", output_dir=str(tmp / f"sep_std_out_{i}"))
+            elapsed = time.perf_counter() - t0
 
-        # Objective: reconstruct ≥ targets["sep_crosstalk_db"]
-        orig, _  = sf.read(str(inp), dtype="float32")
-        voc,  _  = sf.read(res["stems"]["vocals"],        dtype="float32")
-        acc,  _  = sf.read(res["stems"]["accompaniment"], dtype="float32")
-        n = min(len(orig), len(voc), len(acc))
-        recon_db = reconstruction_db(orig[:n].mean(1), voc[:n].mean(1), acc[:n].mean(1))
+            scalable = max(0.0, elapsed - res["model_load_sec"])
+            equiv_4m = res["model_load_sec"] + scalable * scale
 
-        # Scale to a 4-minute equivalent — but only the part of elapsed that
-        # actually scales with audio duration. ONNX session creation
-        # (model_load_sec) is a one-time cost paid once regardless of clip
-        # length; linearly scaling it along with everything else overstates
-        # real-world time on a short test clip by exactly the scale factor
-        # (240/duration — 48x for this 5s test), since a real 4-minute
-        # separation only pays that cost once, not 48 times over.
-        scale     = 240.0 / duration
-        scalable  = max(0.0, elapsed - res["model_load_sec"])
-        equiv_4m  = res["model_load_sec"] + scalable * scale
+            orig, _  = sf.read(str(inp), dtype="float32")
+            voc,  _  = sf.read(res["stems"]["vocals"],        dtype="float32")
+            acc,  _  = sf.read(res["stems"]["accompaniment"], dtype="float32")
+            n = min(len(orig), len(voc), len(acc))
+            recon_db = reconstruction_db(orig[:n].mean(1), voc[:n].mean(1), acc[:n].mean(1))
+
+            if best is None or equiv_4m < best["equiv_4m"]:
+                best = {"res": res, "elapsed": elapsed, "equiv_4m": equiv_4m, "recon_db": recon_db}
+
+        res, elapsed, equiv_4m, recon_db = best["res"], best["elapsed"], best["equiv_4m"], best["recon_db"]
 
         r["elapsed"] = elapsed
         r["metrics"] = {
@@ -316,6 +332,7 @@ def test_t04_separation_standard(duration: float, targets: dict) -> TestResult:
             "reconstruction_db": round(recon_db, 2),
             "equiv_4m_sec":    round(equiv_4m, 2),
             "stems":           list(res["stems"].keys()),
+            "n_trials":        n_trials,
         }
         r["targets"] = {
             "sep_standard_sec_4m": targets["sep_standard_sec_4m"],
@@ -324,7 +341,7 @@ def test_t04_separation_standard(duration: float, targets: dict) -> TestResult:
         r["passed"] = (equiv_4m <= targets["sep_standard_sec_4m"]
                        and recon_db >= targets["sep_crosstalk_db"])
         if equiv_4m > targets["sep_standard_sec_4m"]:
-            r["errors"].append(f"4-min equiv {equiv_4m:.1f}s > {targets['sep_standard_sec_4m']}s")
+            r["errors"].append(f"4-min equiv {equiv_4m:.1f}s > {targets['sep_standard_sec_4m']}s (best of {n_trials})")
         if recon_db < targets["sep_crosstalk_db"]:
             r["errors"].append(f"Reconstruction {recon_db:.1f} dB < {targets['sep_crosstalk_db']} dB")
     except Exception as e:
@@ -332,7 +349,7 @@ def test_t04_separation_standard(duration: float, targets: dict) -> TestResult:
     return r  # type: ignore[return-value]
 
 
-def test_t05_separation_enhanced(duration: float, targets: dict) -> TestResult:
+def test_t05_separation_enhanced(duration: float, targets: dict, n_trials: int = 3) -> TestResult:
     r = _make_result("T05", f"Enhanced separation ({duration}s audio)")
     tmp = Path(__file__).parent / "_test_data"
     tmp.mkdir(exist_ok=True)
@@ -343,15 +360,23 @@ def test_t05_separation_enhanced(duration: float, targets: dict) -> TestResult:
         inp   = tmp / "sep_enh_in.wav"
         _write_wav(inp, audio, 44100)
 
-        t0  = time.perf_counter()
-        res = separate(str(inp), mode="enhanced", output_dir=str(tmp / "sep_enh_out"))
-        elapsed = time.perf_counter() - t0
-
         # See T04's comment above — enhanced mode creates four ONNX sessions
-        # (vs. one for standard), so this matters even more here.
-        scale     = 240.0 / duration
-        scalable  = max(0.0, elapsed - res["model_load_sec"])
-        equiv_4m  = res["model_load_sec"] + scalable * scale
+        # (vs. one for standard), so the noise this best-of-N guards against
+        # matters even more here.
+        scale = 240.0 / duration
+        best: dict | None = None
+        for i in range(n_trials):
+            t0  = time.perf_counter()
+            res = separate(str(inp), mode="enhanced", output_dir=str(tmp / f"sep_enh_out_{i}"))
+            elapsed = time.perf_counter() - t0
+
+            scalable = max(0.0, elapsed - res["model_load_sec"])
+            equiv_4m = res["model_load_sec"] + scalable * scale
+
+            if best is None or equiv_4m < best["equiv_4m"]:
+                best = {"res": res, "elapsed": elapsed, "equiv_4m": equiv_4m}
+
+        res, elapsed, equiv_4m = best["res"], best["elapsed"], best["equiv_4m"]
 
         r["elapsed"] = elapsed
         r["metrics"] = {
@@ -361,12 +386,13 @@ def test_t05_separation_enhanced(duration: float, targets: dict) -> TestResult:
             "equiv_4m_sec":  round(equiv_4m, 2),
             "stems":         list(res["stems"].keys()),
             "n_stems":       len(res["stems"]),
+            "n_trials":      n_trials,
         }
         r["targets"] = {"sep_enhanced_sec_4m": targets["sep_enhanced_sec_4m"]}
         r["passed"]  = (equiv_4m <= targets["sep_enhanced_sec_4m"]
                         and len(res["stems"]) == 3)
         if equiv_4m > targets["sep_enhanced_sec_4m"]:
-            r["errors"].append(f"4-min equiv {equiv_4m:.1f}s > {targets['sep_enhanced_sec_4m']}s")
+            r["errors"].append(f"4-min equiv {equiv_4m:.1f}s > {targets['sep_enhanced_sec_4m']}s (best of {n_trials})")
         if len(res["stems"]) != 3:
             r["errors"].append(f"Expected 3 stems, got {len(res['stems'])}")
     except Exception as e:
@@ -471,6 +497,16 @@ def test_t08_training_standard(targets: dict) -> TestResult:
         res = train(data_dir, out_path, mode="standard", epochs=3, batch_size=16)
         elapsed = time.perf_counter() - t0
 
+        # Ticket 48 §5/§6: quality_score/quality_warning/data_quality must be
+        # present and well-formed on every training run, not just wired up
+        # for the happy path — the UI shows them unconditionally.
+        quality_score = res.get("quality_score")
+        data_quality  = res.get("data_quality")
+        quality_ok = (
+            isinstance(quality_score, (int, float)) and 0.0 <= quality_score <= 1.0
+            and isinstance(data_quality, dict) and "warnings" in data_quality
+        )
+
         r["elapsed"] = elapsed
         r["metrics"] = {
             "best_loss":        res["best_loss"],
@@ -478,14 +514,136 @@ def test_t08_training_standard(targets: dict) -> TestResult:
             "model_bytes":      res["model_bytes"],
             "device":           res["device"],
             "elapsed_sec":      res["elapsed_sec"],
+            "quality_score":    quality_score,
+            "quality_warning":  res.get("quality_warning"),
+            "data_quality_n_files": (data_quality or {}).get("n_files"),
         }
         r["targets"] = {"train_std_sec": targets["train_std_sec"]}
-        r["passed"]  = elapsed <= targets["train_std_sec"] and res["model_bytes"] > 0
+        r["passed"]  = elapsed <= targets["train_std_sec"] and res["model_bytes"] > 0 and quality_ok
         if elapsed > targets["train_std_sec"]:
             r["errors"].append(f"Training {elapsed:.1f}s > target {targets['train_std_sec']}s")
+        if not quality_ok:
+            r["errors"].append(f"quality_score/data_quality missing or malformed: {quality_score!r}")
     except ImportError:
         r["errors"].append("PyTorch not available — skip training test")
         r["passed"] = True   # optional if no torch
+    except Exception as e:
+        r["errors"].append(str(e))
+    return r  # type: ignore[return-value]
+
+
+def test_t11_postprocess(duration: float) -> TestResult:
+    """Ticket 48: postprocess_chain must measurably reduce injected broadband
+    noise without destroying the underlying tone or clipping the output."""
+    r = _make_result("T11", f"Post-processing chain ({duration}s audio)")
+    try:
+        from postprocess import postprocess_chain  # noqa: PLC0415
+
+        sr = 44100
+        clean = (_sine(220.0, duration, sr) * 0.5).astype(np.float32)
+        rng   = np.random.default_rng(7)
+        # std=0.15 against a 0.5-amplitude tone ≈ 7.5 dB baseline SNR — a
+        # clearly audible hiss, matching the "significant background noise"
+        # users report (Ticket 48), not a barely-there noise floor.
+        noisy = (clean + rng.standard_normal(len(clean)).astype(np.float32) * 0.15).astype(np.float32)
+
+        t0  = time.perf_counter()
+        res = postprocess_chain(noisy, sr)
+        elapsed = time.perf_counter() - t0
+
+        out = res["audio"]
+        n = min(len(clean), len(out))
+        snr_before = si_snr(clean[:n], noisy[:n])
+        snr_after  = si_snr(clean[:n], out[:n])
+
+        r["elapsed"] = elapsed
+        r["metrics"] = {
+            "snr_before_db":      round(snr_before, 2),
+            "snr_after_db":       round(snr_after, 2),
+            "noise_reduction_db": res["noise_reduction_db"],
+            "final_peak":         res["final_peak"],
+            "is_finite":          bool(np.all(np.isfinite(out))),
+        }
+        r["targets"] = {"min_snr_improvement_db": 2.0, "max_peak": 1.0}
+        r["passed"] = bool(
+            snr_after > snr_before + 2.0
+            and np.all(np.isfinite(out))
+            and res["final_peak"] <= 1.0
+        )
+        if snr_after <= snr_before + 2.0:
+            r["errors"].append(
+                f"SNR improved only {snr_after - snr_before:.2f} dB (want ≥ 2 dB)")
+        if res["final_peak"] > 1.0:
+            r["errors"].append(f"Output peak {res['final_peak']} exceeds 1.0 (clipping)")
+    except Exception as e:
+        r["errors"].append(str(e))
+    return r  # type: ignore[return-value]
+
+
+def test_t12_high_pitch_protection(duration: float) -> TestResult:
+    """Ticket 17: pitch above D#4 (MIDI 63) must be clamped down to the
+    threshold with no clipping/NaNs, unshifted audio must be reported as
+    such, and the whole clip must clear the 5s/30s-clip CPU budget."""
+    r = _make_result("T12", "High-pitch protection (D#4 auto-tune)")
+    try:
+        import tempfile
+        import soundfile as sf_mod  # noqa: PLC0415
+        from pitch_protection import apply_high_pitch_protection, midi_to_hz  # noqa: PLC0415
+
+        sr = 44100
+        threshold_note = 63
+        threshold_hz = midi_to_hz(threshold_note)
+
+        # First half: A5 (880 Hz), well above the threshold — must be
+        # flattened to ~D#4. Second half: A3 (220 Hz), below it — must pass
+        # through unmodified.
+        half = duration / 2
+        high = _sine(880.0, half, sr) * 0.6
+        low  = _sine(220.0, half, sr) * 0.6
+        clip = np.concatenate([high, low]).astype(np.float32)
+
+        tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+        _write_wav(Path(tmp.name), clip, sr)
+
+        t0  = time.perf_counter()
+        res = apply_high_pitch_protection(tmp.name, threshold_note=threshold_note)
+        elapsed = time.perf_counter() - t0
+
+        out, out_sr = sf_mod.read(res["output_path"], dtype="float32")
+
+        # Dominant frequency of the corrected first half, well away from the
+        # seam between the two notes, via the same spectral-peak technique
+        # the module itself uses to detect pitch.
+        seg = out[: int(half * sr) // 2]
+        spec = np.abs(np.fft.rfft(seg * np.hanning(len(seg))))
+        freqs = np.fft.rfftfreq(len(seg), 1.0 / out_sr)
+        band = (freqs >= 80) & (freqs <= 1200)
+        peak_hz = float(freqs[band][np.argmax(spec[band])])
+
+        r["elapsed"] = elapsed
+        r["metrics"] = {
+            "threshold_hz":      round(threshold_hz, 2),
+            "corrected_peak_hz": round(peak_hz, 2),
+            "modified_regions":  len(res["modified_regions"]),
+            "modified_ratio":    res["modified_ratio"],
+            "max_abs":           round(float(np.max(np.abs(out))), 4),
+            "is_finite":         bool(np.all(np.isfinite(out))),
+        }
+        r["targets"] = {"max_elapsed_sec_per_30s": 5.0, "max_pitch_error_hz": 15.0}
+        budget = 5.0 * max(1.0, duration / 30.0)
+        r["passed"] = bool(
+            abs(peak_hz - threshold_hz) <= 15.0
+            and len(res["modified_regions"]) >= 1
+            and np.all(np.isfinite(out))
+            and float(np.max(np.abs(out))) <= 1.0
+            and elapsed <= budget
+        )
+        if abs(peak_hz - threshold_hz) > 15.0:
+            r["errors"].append(f"Corrected pitch {peak_hz:.1f} Hz not near threshold {threshold_hz:.1f} Hz")
+        if len(res["modified_regions"]) < 1:
+            r["errors"].append("No modified regions reported for a clip with a note above threshold")
+        if elapsed > budget:
+            r["errors"].append(f"Processing took {elapsed:.2f}s (budget: {budget:.2f}s)")
     except Exception as e:
         r["errors"].append(str(e))
     return r  # type: ignore[return-value]
@@ -636,7 +794,7 @@ def main() -> None:
     ap.add_argument("--fast",   action="store_true", help="Short durations for CI (≤ 60s total)")
     ap.add_argument("--bench",  action="store_true", help="Run with longer durations for benchmarking")
     ap.add_argument("--skip",   action="append", default=[], metavar="CATEGORY",
-                    help="Skip category: training, cover, separation, watermark")
+                    help="Skip category: training, cover, separation, watermark, pitch_protection")
     ap.add_argument("--output", metavar="FILE",  help="Write JSON report to FILE")
     ap.add_argument("--tier",   metavar="TIER",  help="Override hardware tier detection")
     args = ap.parse_args()
@@ -679,6 +837,14 @@ def main() -> None:
     if "cover" not in args.skip:
         results.append(test_t06_cover_v1(cover_dur, targets))
         results.append(test_t07_cover_v2(cover_dur, targets))
+
+    # Post-processing (Ticket 48)
+    if "postprocess" not in args.skip:
+        results.append(test_t11_postprocess(synth_dur))
+
+    # High-pitch protection (Ticket 17)
+    if "pitch_protection" not in args.skip:
+        results.append(test_t12_high_pitch_protection(synth_dur))
 
     # Training (optional — requires torch)
     if "training" not in args.skip:

@@ -223,27 +223,64 @@ def synthesize_cover(args):
         "elapsed_sec":    result["elapsed_sec"],
         "rt_ratio":       result["rt_ratio"],
         "vibrato_depth":  result["vibrato_depth"],
+        "noise_reduction_db": result["noise_reduction_db"],
         "output_path":    result["output_path"],
         "ai_vocal_path":  result["ai_vocal_path"],
         "passed":         bool(result["passed"]),
     }
 
 
+def pitch_shift(args):
+    """Ticket 19: shift a target song's cached audio by up to ±12 semitones
+    via librosa.effects.pitch_shift, caching the result under a writable
+    scratch dir — see pitch_tools.shift_pitch."""
+    from pitch_tools import shift_pitch  # noqa: PLC0415
+
+    params     = args[0] if args and isinstance(args[0], dict) else {}
+    input_path = params.get("input_path")
+    if not input_path:
+        return {"error": "input_path is required"}
+
+    semitones = max(-12.0, min(12.0, float(params.get("semitones", 0))))
+    cache_key = params.get("cache_key")
+
+    return shift_pitch(input_path, semitones, cache_dir=_writable_dir() / "pitch-shift-cache", cache_key=cache_key)
+
+
 def export_audio(args):
-    """Save mixed PCM audio from the renderer to a file on disk."""
+    """Save mixed PCM audio from the renderer to a file on disk.
+
+    Ticket 44: the renderer used to send the rendered mix inline as a JSON
+    sample array (`audio`), which flows through engine:call into the
+    process argv. That's fine for a toy payload, but a real song is
+    millions of samples — tens of MB of JSON text — and the OS caps a
+    single argv string well below that (Linux MAX_ARG_STRLEN is ~128KB),
+    so the engine process failed to even spawn and every real export
+    failed. The renderer now writes the raw interleaved float32 PCM to a
+    temp file and passes its path as `pcm_path`; `audio` is kept as a
+    fallback for small/inline payloads (e.g. direct engine callers/tests).
+    """
     import numpy as np  # noqa: PLC0415
     import soundfile as sf_mod  # noqa: PLC0415
     import os  # noqa: PLC0415
 
     params      = args[0] if args and isinstance(args[0], dict) else {}
-    audio       = params.get("audio", [])
     sample_rate = int(params.get("sample_rate", 44_100))
     channels    = int(params.get("channels", 1))
     output_path = params.get("output_path",
                              str(_writable_dir() / "_export.wav"))
     fmt         = params.get("format", "wav").lower()
+    pcm_path    = params.get("pcm_path")
 
-    arr = np.array(audio, dtype=np.float32)
+    if pcm_path:
+        arr = np.fromfile(pcm_path, dtype="<f4")
+        try:
+            os.remove(pcm_path)   # best-effort — temp file, not needed after this
+        except OSError:
+            pass
+    else:
+        arr = np.array(params.get("audio", []), dtype=np.float32)
+
     if channels == 2 and len(arr.shape) == 1:
         arr = arr.reshape(-1, 2)   # interleaved → [N, 2]
 
@@ -309,6 +346,23 @@ def train_model(args):
         progress_path = output.parent / f"progress_{mode}.json",
     )
     return {k: (bool(v) if isinstance(v, (bool,)) else v) for k, v in result.items()}
+
+
+def apply_high_pitch_protection(args):
+    """Ticket 17: clamp vocal pitch above the D#4 (MIDI 63) threshold down
+    to exactly that note, returning the corrected regions for UI highlighting."""
+    from pitch_protection import apply_high_pitch_protection as _protect  # noqa: PLC0415
+
+    params         = args[0] if args and isinstance(args[0], dict) else {}
+    audio_path     = params.get("audio_path")
+    threshold_note = int(params.get("threshold_note", 63))
+    output_path    = params.get("output_path")
+
+    if not audio_path:
+        return {"error": "audio_path is required"}
+
+    result = _protect(audio_path, threshold_note=threshold_note, output_path=output_path)
+    return dict(result)
 
 
 def watermark_embed(args):
@@ -385,6 +439,30 @@ def encrypt_model(args):
     }
 
 
+def analyze_pitch(args):
+    """Ticket 16: extract the pitch contour of a region (or the whole track)
+    and report the highest note found, for the "分析音高" button.
+    """
+    from pitch_analysis import analyze_pitch as _analyze  # noqa: PLC0415
+
+    params     = args[0] if args and isinstance(args[0], dict) else {}
+    audio_path = params.get("audio_path", None)
+    start_sec  = params.get("start_sec", None)
+    end_sec    = params.get("end_sec", None)
+
+    if not audio_path:
+        return {"error": "audio_path is required"}
+
+    try:
+        return _analyze(audio_path, start_sec, end_sec)
+    except Exception as exc:
+        # Matches the other file-processing handlers (decrypt_model, etc.):
+        # surface a clean {"error": ...} the renderer can show, instead of
+        # letting a bad/corrupt file or missing codec raise all the way out
+        # to a non-zero exit + raw Python traceback on stderr.
+        return {"error": str(exc)}
+
+
 def decrypt_model(args):
     """Decrypt a .enc model file and verify it loads into ORT (in-memory only)."""
     from model_crypto import load_encrypted_session  # noqa: PLC0415
@@ -420,12 +498,15 @@ HANDLERS = {
     "benchmark_synthesis": benchmark_synthesis,
     "separate":            separate,
     "synthesize_cover":    synthesize_cover,
+    "pitch_shift":         pitch_shift,
     "export_audio":        export_audio,
+    "apply_high_pitch_protection": apply_high_pitch_protection,
     "train_model":         train_model,
     "watermark_embed":     watermark_embed,
     "watermark_verify":    watermark_verify,
     "encrypt_model":       encrypt_model,
     "decrypt_model":       decrypt_model,
+    "analyze_pitch":       analyze_pitch,
 }
 
 

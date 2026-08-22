@@ -70,6 +70,15 @@ jobs:
 
       - name: Upload test report
         if: always()
+        # continue-on-error: this artifact is a debugging aid, not a
+        # correctness check — the "Check all tests passed" step below is
+        # what actually gates the job. Without this, a transient upload
+        # failure (e.g. the repo's Actions artifact storage quota being
+        # hit — unrelated to any PR's code) fails the whole job outright
+        # *and* skips "Check all tests passed" entirely, since a step
+        # failure skips every following step by default. That masked the
+        # real signal: the test suite itself was passing.
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: test-report-${{ matrix.os }}-py${{ matrix.python }}
@@ -126,6 +135,11 @@ jobs:
             --output ../full-bench-report.json
 
       - name: Upload full reports
+        # See the `test` job's "Upload test report" step above — same
+        # reasoning: a debugging artifact, not the correctness gate, and a
+        # step failure here would otherwise skip "Print performance
+        # summary" (the step that actually decides pass/fail) entirely.
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: full-reports

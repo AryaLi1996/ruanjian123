@@ -37,6 +37,12 @@ contextBridge.exposeInMainWorld('engine', {
   lyricsCacheSave: (cache: Record<string, unknown>): Promise<void> =>
     ipcRenderer.invoke('lyrics:cache-save', cache),
 
+  // Cloud Library (云曲库) search + audio caching (Ticket 18)
+  searchLibrary: (keyword: string, page?: number, pageSize?: number): Promise<unknown> =>
+    ipcRenderer.invoke('library:search', keyword, page, pageSize),
+  fetchLibraryAudio: (song: unknown): Promise<{ path: string; cached: boolean }> =>
+    ipcRenderer.invoke('library:fetch-audio', song),
+
   // Report renderer crashes caught by the React error boundary
   logRendererError: (payload: unknown): Promise<void> =>
     ipcRenderer.invoke('log:renderer-error', payload),

@@ -1,0 +1,111 @@
+name: Deploy License Backend
+
+# Automates what scripts/deploy-license.sh (see DEV_GUIDE.md §2.7) previously
+# only ran by hand — the Ticket 42 trial-duration fix's own rollout was
+# blocked on exactly that manual step. Runs the handler.py unit tests as a
+# pre-deploy gate, then sam build/deploy via the same script, authenticating
+# to AWS with short-lived OIDC credentials — no long-lived access keys
+# stored in GitHub.
+#
+# One-time AWS + GitHub setup is required before this can succeed — see
+# serverless/verify-license/CI_DEPLOY_SETUP.md. In short, this needs:
+#   - An IAM OIDC role in AWS account 641628981129 (scripts/deploy-license.sh's
+#     EXPECTED_ACCOUNT guard still applies here — the role must live in that
+#     account) that this workflow can assume.
+#   - Repository secrets:
+#       AWS_DEPLOY_ROLE_ARN     required — the role above, ARN form
+#       LICENSE_SIGNING_SECRET  required — scripts/deploy-license.sh refuses
+#                               to run without it
+#       STRIPE_API_KEY, STRIPE_WEBHOOK_SECRET, LEMON_API_KEY,
+#       SES_SENDER_EMAIL       optional — leave unset to omit that
+#                               parameter override entirely (not "set to
+#                               empty"), which scripts/deploy-license.sh
+#                               handles correctly
+#
+# Until those are configured, this workflow runs and fails cleanly at the
+# credentials/secret check rather than silently doing nothing — deliberate,
+# so a missing secret shows up as a red X in the Actions tab instead of a
+# deploy nobody notices never happened.
+#
+# Deploys automatically on every push to main that touches the license
+# backend — there's no manual approval step baked in.
+#
+# Deliberately does NOT set `environment: production` (or any `environment:`)
+# on the job below, even as an inert placeholder for a future manual-approval
+# gate: naming a GitHub Environment on a job changes the OIDC `sub` claim
+# GitHub issues from `repo:OWNER/REPO:ref:refs/heads/BRANCH` to
+# `repo:OWNER/REPO:environment:ENV_NAME` — *even with zero protection rules
+# configured on that environment* — which breaks IAM role trust policies
+# written for the `ref:` form. That's exactly what happened here: this
+# workflow shipped with `environment: production` as a "no-op until you add
+# reviewers" convenience, and it broke every OIDC role-assumption attempt
+# until removed. If you want that manual-approval gate later, add
+# `environment: production` back *and* add a matching
+# `repo:OWNER/REPO:environment:production` entry to the trust policy's `sub`
+# condition (see CI_DEPLOY_SETUP.md) — don't assume it's a no-op.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'serverless/verify-license/**'
+      - 'scripts/deploy-license.sh'
+      - '.github/workflows/deploy-license.yml'
+
+# A second push landing mid-deploy queues behind the first rather than
+# cancelling it — an interrupted `sam deploy` can leave the CloudFormation
+# stack in UPDATE_ROLLBACK_FAILED, which needs manual intervention to clear.
+concurrency:
+  group: deploy-license
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write # required by aws-actions/configure-aws-credentials's OIDC flow
+
+jobs:
+  deploy:
+    name: Test & Deploy License Backend
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # Fails the whole job before anything touches AWS if the trial-duration
+      # cap logic (or anything else handler.py's suite covers) is broken —
+      # see serverless/verify-license/test_handler.py.
+      - name: Run handler.py unit tests (pre-deploy gate)
+        working-directory: serverless/verify-license
+        run: python3 -m unittest test_handler -v
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: Set up AWS SAM CLI
+        uses: aws-actions/setup-sam@v2
+
+      # scripts/deploy-license.sh already: verifies the assumed identity's
+      # AWS account matches EXPECTED_ACCOUNT, cleans up an unusable
+      # REVIEW_IN_PROGRESS/ROLLBACK_COMPLETE/CREATE_FAILED stack, runs
+      # `sam build` + `sam deploy --parameter-overrides ...`, and prints the
+      # stack outputs (including the Function URL) on success. Passing a
+      # secret through as an empty env var is fine — the script only adds a
+      # parameter override when the value is actually non-empty.
+      - name: Deploy (sam build + sam deploy)
+        env:
+          AWS_REGION: us-east-1
+          LICENSE_SIGNING_SECRET: ${{ secrets.LICENSE_SIGNING_SECRET }}
+          STRIPE_API_KEY: ${{ secrets.STRIPE_API_KEY }}
+          STRIPE_WEBHOOK_SECRET: ${{ secrets.STRIPE_WEBHOOK_SECRET }}
+          LEMON_API_KEY: ${{ secrets.LEMON_API_KEY }}
+          SES_SENDER_EMAIL: ${{ secrets.SES_SENDER_EMAIL }}
+        run: scripts/deploy-license.sh

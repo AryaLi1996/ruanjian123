@@ -10,6 +10,7 @@ import { extractEmbeddedMetadata, parseArtistTitleFromFilename } from '../utils/
 import { LyricsPanel } from '../components/playback/LyricsPanel'
 import { SongList } from '../components/playback/SongList'
 import { NowPlayingCard } from '../components/playback/NowPlayingCard'
+import { stemLabelKey } from '../utils/stems'
 
 type TrackKind = 'original' | 'stem' | 'cover' | 'recording'
 type SepMode = 'standard' | 'enhanced'
@@ -59,16 +60,17 @@ function makeTrack(kind: TrackKind, label: string, buffer: AudioBuffer): Track {
   }
 }
 
-// Kinds with a fixed, translatable name are re-localized on every render instead of
-// trusting the label baked in at creation time (which would stay stuck in whatever
-// language was active when the track was added). 'stem' keeps its stored label since
-// it carries the specific stem name (vocals/drums/...), not a generic kind name.
+// Every kind is re-localized on every render instead of trusting the label baked in
+// at creation time (which would stay stuck in whatever language was active when the
+// track was added). 'stem' tracks store the raw engine stem identifier (vocals/
+// accompaniment/lead_dry/harmony_dry — see engine/separation.py) in `label`, which
+// stemLabelKey() maps to a `tracks.*` translation key (Ticket 46).
 function trackLabel(tr: Track, t: (key: string) => string): string {
   switch (tr.kind) {
     case 'original':  return t('playback.original')
     case 'cover':     return t('playback.cover')
     case 'recording': return t('playback.recordedClip')
-    default:          return tr.label
+    default:          return t(stemLabelKey(tr.label))
   }
 }
 
@@ -337,11 +339,16 @@ export function PlaybackMonitorView(): JSX.Element {
 
       // Song identification (Ticket 43 §1): embedded tags first, filename
       // pattern ("Artist - Title.ext") as the fallback when a tag is missing.
+      // Blank (not just missing) treated the same as missing — some Vorbis
+      // comments come through as an empty string (e.g. a bare "ARTIST=") rather
+      // than absent, which `??` alone wouldn't catch.
       const filenameGuess = parseArtistTitleFromFilename(file.name)
+      const metaTitle = meta.title?.trim() || null
+      const metaArtist = meta.artist?.trim() || null
       const song: Song = {
         id: crypto.randomUUID(),
-        name: meta.title ?? filenameGuess.title ?? file.name.replace(/\.[^.]+$/, ''),
-        artist: meta.artist ?? filenameGuess.artist,
+        name: metaTitle ?? filenameGuess.title ?? file.name.replace(/\.[^.]+$/, ''),
+        artist: metaArtist ?? filenameGuess.artist,
         duration: buffer.duration,
         tracks: [track],
         lyrics: embedded ?? [],

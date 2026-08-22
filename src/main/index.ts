@@ -9,6 +9,7 @@ import { SubscriptionMonitor } from './subscription-monitor'
 import { LICENSE_CONFIG, usingDefaultSigningSecret } from './license-config'
 import { loadModels, saveModels, type PersistedModel } from './model-registry'
 import { loadLyricsCache, saveLyricsCache, type LyricsCache } from './lyrics-cache'
+import { searchLibrary, fetchLibraryAudio, type LibrarySong } from './library'
 import {
   saveBackground, saveBackgroundMeta, loadBackground, loadBackgroundSource, removeBackground,
   type SaveBackgroundPayload, type BackgroundMeta,
@@ -307,12 +308,25 @@ interface WarmupResult {
 // fresh run when the user clicks Retry.
 let warmupPromise: Promise<WarmupResult> | null = null
 
+// test_inference's own matmul run is sub-millisecond (see engine/inference.py)
+// — nearly the entire wall-clock cost here is spawning the process itself:
+// unpacking the PyInstaller bundle, `import onnxruntime`, and initializing
+// the execution provider. On Windows that provider is usually DirectML,
+// whose first-ever session init compiles/caches shaders and can easily run
+// several seconds; a freshly-written, unsigned .exe can also get held up by
+// Windows Defender scanning it before it's even allowed to run. This is the
+// *coldest* engine invocation of the app's lifetime, so it needs at least as
+// much budget as every other callPythonEngine() call gets by default — a
+// tighter timeout here just turns a slow-but-healthy machine into a bogus
+// "warm-up failed" on every launch.
+const WARMUP_TIMEOUT_MS = 30_000
+
 function warmUpEngine(): Promise<WarmupResult> {
   if (!warmupPromise) {
     warmupPromise = (async () => {
       const started = Date.now()
       try {
-        const result = await callPythonEngine('test_inference', [], 5_000) as {
+        const result = await callPythonEngine('test_inference', [], WARMUP_TIMEOUT_MS) as {
           passed?: boolean
           ep?: string
           elapsed_ms?: number
@@ -476,8 +490,14 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
 })
 
+// Ticket 44: exporting a full mixdown (FLAC/OGG encoding of a real song, on
+// a slower machine) can legitimately take longer than the 30s budget every
+// other engine:call gets by default — give it its own, more generous
+// ceiling instead of timing out an export that's simply still working.
+const EXPORT_TIMEOUT_MS = 5 * 60_000
+
 ipcMain.handle('engine:call', (_event, method: string, args: unknown[]) =>
-  callPythonEngine(method, args)
+  callPythonEngine(method, args, method === 'export_audio' ? EXPORT_TIMEOUT_MS : undefined)
 )
 
 // Streaming handler: emits engine:progress events for each JSON line from Python
@@ -562,6 +582,20 @@ ipcMain.handle(
       clearTimeout(timeout)
     }
   },
+)
+
+// ── Cloud Library (云曲库) search + audio caching (Ticket 18) ──────────────
+// See library.ts — search proxies through main for the same CSP reason as
+// lyrics:search above; fetch-audio downloads (or reuses a cached copy of)
+// the selected song's full audio so Cover Creation has a local file to feed
+// into separation as the "目标音频".
+ipcMain.handle(
+  'library:search',
+  (_event, keyword: string, page?: number, pageSize?: number) => searchLibrary(keyword, page, pageSize),
+)
+ipcMain.handle(
+  'library:fetch-audio',
+  (_event, song: LibrarySong) => fetchLibraryAudio(song),
 )
 
 // Save a recorded WAV clip to a user-selected location (Playback/Monitor page).

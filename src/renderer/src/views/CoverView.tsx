@@ -6,6 +6,13 @@ import { StepWizard } from '../components/cover/StepWizard'
 import { StemPlayer, type StemTrack } from '../components/cover/StemPlayer'
 import { MixingConsole, type MixTrack } from '../components/cover/MixingConsole'
 import { ExportPanel } from '../components/cover/ExportPanel'
+import { PitchShiftSlider } from '../components/cover/PitchShiftSlider'
+import { PitchAnalysisPanel } from '../components/cover/PitchAnalysisPanel'
+import { HighPitchProtection } from '../components/cover/HighPitchProtection'
+import { CloudLibraryModal } from '../components/library/CloudLibraryModal'
+import { usePitchStore } from '../store/usePitchStore'
+import { computeRecommendedShift } from '../utils/pitch'
+import type { LibrarySong } from '../global'
 
 type SepMode  = 'standard' | 'enhanced'
 type AlgoVer  = 'v1' | 'v2'
@@ -22,6 +29,29 @@ export function CoverView(): JSX.Element {
   const trainedModels = useAppStore((s) => s.trainedModels)
   const setEngineBusy  = useAppStore((s) => s.setEngineBusy)
   const setEngineStatus = useAppStore((s) => s.setEngineStatus)
+  // Ticket 18: the 云曲库-selected song, if any — see useAppStore's TargetSong.
+  const targetSong    = useAppStore((s) => s.targetSong)
+  const setTargetSong = useAppStore((s) => s.setTargetSong)
+  const [libraryOpen, setLibraryOpen] = useState(false)
+
+  // ── Pitch Shift / Tune slider (Ticket 19) ────────────────
+  // The user's vocal range comes from Ticket 16's pitch analysis panel
+  // (usePitchStore, populated when the user runs "分析音高" below on the
+  // separated lead vocal stem). maxMidi === 0 is that panel's "nothing
+  // voiced detected" sentinel (see engine/pitch_analysis.py), not a real
+  // note — treated the same as "not analyzed yet": no recommendation shown.
+  const vocalRangeMaxMidi  = usePitchStore((s) => (s.result && s.result.maxMidi > 0 ? s.result.maxMidi : null))
+  const setTargetSongShift = useAppStore((s) => s.setTargetSongShift)
+  const [shifting,   setShifting]   = useState(false)
+  const [shiftError, setShiftError] = useState<string | null>(null)
+  const recommendedShift = targetSong
+    ? computeRecommendedShift(targetSong.originalKey, vocalRangeMaxMidi)
+    : null
+  // Guards against a fast re-drag: if the user commits a second shift before
+  // the first's engine call returns, only the response matching the latest
+  // request may write into the store — otherwise an in-flight response for
+  // an already-abandoned value could land after (and overwrite) it.
+  const shiftRequestRef = useRef(0)
 
   // ── Wizard state ─────────────────────────────────────────
   const [step,      setStep]      = useState(1)
@@ -56,15 +86,21 @@ export function CoverView(): JSX.Element {
   // Step 1: upload + separate
   // ─────────────────────────────────────────────────────────
   async function handleSeparate(): Promise<void> {
-    if (!songFile) { setSepError(t('cover.errUploadFirst')); return }
+    if (!songFile && !targetSong) { setSepError(t('cover.errUploadFirst')); return }
     setSepError(null); setSeparating(true)
     setEngineBusy(true); setEngineStatus(t('status.separating'))
     try {
-      const dir = await window.engine.saveTrainingFiles([{
-        name: songFile.name,
-        buffer: await songFile.arrayBuffer(),
-      }])
-      const inputPath = `${dir}/${songFile.name}`
+      // A local upload and a 云曲库 selection are mutually exclusive (each
+      // clears the other — see handleLibrarySelect and the file input's
+      // onChange below), so at most one of these branches applies. The
+      // library song's audio is already a local, cached file — see
+      // main/library.ts's fetchLibraryAudio — so it needs no upload step.
+      // Ticket 19: a pitch-shifted target song uses its cached shifted audio
+      // (shiftedAudioPath) as the training target instead of the original
+      // download — null at shift 0, where there's nothing to shift.
+      const inputPath = songFile
+        ? `${await window.engine.saveTrainingFiles([{ name: songFile.name, buffer: await songFile.arrayBuffer() }])}/${songFile.name}`
+        : targetSong!.shiftedAudioPath ?? targetSong!.audioPath
       const res = await window.engine.call('separate', {
         mode:       sepMode,
         input_path: inputPath,
@@ -94,6 +130,53 @@ export function CoverView(): JSX.Element {
   }
 
   // ─────────────────────────────────────────────────────────
+  // Cloud Library (云曲库) selection — Ticket 18
+  // ─────────────────────────────────────────────────────────
+  function handleLibrarySelect(song: LibrarySong, audioPath: string): void {
+    setSongFile(null)   // mutually exclusive with a local upload — see handleSeparate
+    setShiftError(null)
+    setTargetSong({
+      id:               song.id,
+      title:            song.title,
+      artist:           song.artist,
+      originalKey:      song.original_key,
+      audioPath,
+      pitchShift:       0,
+      shiftedAudioPath: null,
+    })
+    setLibraryOpen(false)
+  }
+
+  // ─────────────────────────────────────────────────────────
+  // Pitch Shift / Tune slider (Ticket 19)
+  // ─────────────────────────────────────────────────────────
+  async function handlePitchShiftChange(nextShift: number): Promise<void> {
+    if (!targetSong || nextShift === targetSong.pitchShift) return
+    setShiftError(null)
+    const requestId = ++shiftRequestRef.current
+
+    if (nextShift === 0) {
+      setTargetSongShift(0, null)
+      setShifting(false)   // supersedes any shift still in flight — see requestId above
+      return
+    }
+
+    setShifting(true)
+    try {
+      const res = await window.engine.call('pitch_shift', {
+        input_path: targetSong.audioPath,
+        semitones:  nextShift,
+        cache_key:  targetSong.id,
+      }) as { output_path: string }
+      if (shiftRequestRef.current === requestId) setTargetSongShift(nextShift, res.output_path)
+    } catch (err) {
+      if (shiftRequestRef.current === requestId) setShiftError(String(err))
+    } finally {
+      if (shiftRequestRef.current === requestId) setShifting(false)
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────
   // Step 3: synthesize cover
   // ─────────────────────────────────────────────────────────
   async function handleSynthesize(): Promise<void> {
@@ -115,8 +198,18 @@ export function CoverView(): JSX.Element {
         accompaniment: acc,
       }) as CoverResult
 
+      // Ticket 45: don't auto-advance to the export step here. Doing so used
+      // to skip straight from "synthesizing" to step 4 in the same update
+      // that set coverResult, so the mixer (step 3's `coverResult && (...)`
+      // branch, which mounts <MixingConsole> and is the only place that
+      // calls onExportRequest to register the render function) never got a
+      // chance to mount. renderMixRef.current stayed null forever, so the
+      // export button stayed disabled and "请先完成合成与混音步骤" showed no
+      // matter how complete synthesis actually was. Stay on step 3 so the
+      // mixer renders; the user (or the mixer's own "proceed" button) is
+      // what should trigger the move to step 4, once mixing is registered.
       setCoverResult(res)
-      complete(3, 4)
+      setCompleted((s) => new Set([...s, 3]))
       notify({
         category: 'taskCompletion',
         titleKey: 'notification.synthesis.complete.title',
@@ -162,12 +255,38 @@ export function CoverView(): JSX.Element {
 
   const selectedModel = trainedModels.find((m) => m.id === selectedModelId)
 
+  // Ticket 16: prefer the driest lead vocal available for pitch analysis —
+  // same fallback chain used to pick the reference vocal for synthesis.
+  // Label mirrors whichever key the path actually came from (not just the
+  // first two candidates) so the panel never claims to be analyzing
+  // "Vocals" when it fell back to some other stem.
+  const pitchStemKey = sepResult
+    ? (['lead_dry', 'vocals'].find((k) => sepResult.stems[k]) ?? Object.keys(sepResult.stems)[0])
+    : null
+  const pitchStemPath  = pitchStemKey && sepResult ? sepResult.stems[pitchStemKey] : null
+  const pitchStemLabel = pitchStemKey
+    ? stemTracks.find((s) => s.key === pitchStemKey)?.label ?? pitchStemKey
+    : ''
+
   return (
     <>
       <div className="view-header">
         <h1 className="view-title">{t('cover.title')}</h1>
         <p className="view-desc">{t('cover.description')}</p>
       </div>
+
+      {/* Ticket 18: the 云曲库-selected target song, shown prominently in the
+          main workspace and persisted (via useAppStore) until changed. */}
+      {targetSong && (
+        <div className="target-song-banner">
+          <span className="target-song-banner-text">
+            🎯 {t('cover.targetSongLabel', { title: targetSong.title, artist: targetSong.artist || t('cover.unknownArtist') })}
+          </span>
+          <button className="btn btn-ghost pbm-mini-btn" onClick={() => setTargetSong(null)}>
+            {t('cover.clearTargetSong')}
+          </button>
+        </div>
+      )}
 
       <StepWizard current={step} completed={completed} onNavigate={setStep} />
 
@@ -178,16 +297,41 @@ export function CoverView(): JSX.Element {
 
           <div className="field">
             <label>{t('cover.song')}</label>
-            <div className="song-drop" onClick={() => document.getElementById('song-input')?.click()}>
-              <input
-                id="song-input" type="file" accept="audio/*" style={{ display: 'none' }}
-                onChange={(e) => { const f = e.target.files?.[0]; if (f) setSongFile(f) }}
-              />
-              {songFile
-                ? <span style={{ color: 'var(--text)' }}>🎵 {songFile.name}</span>
-                : <span style={{ color: 'var(--text-muted)' }}>{t('cover.chooseSong')}</span>}
+            <div className="row" style={{ gap: 8 }}>
+              <div className="song-drop" style={{ flex: 1 }} onClick={() => document.getElementById('song-input')?.click()}>
+                <input
+                  id="song-input" type="file" accept="audio/*" style={{ display: 'none' }}
+                  onChange={(e) => {
+                    const f = e.target.files?.[0]
+                    if (f) { setSongFile(f); setTargetSong(null) }   // local upload wins over any 云曲库 selection
+                  }}
+                />
+                {songFile
+                  ? <span style={{ color: 'var(--text)' }}>🎵 {songFile.name}</span>
+                  : targetSong
+                    ? <span style={{ color: 'var(--text)' }}>☁️ {targetSong.title} - {targetSong.artist}</span>
+                    : <span style={{ color: 'var(--text-muted)' }}>{t('cover.chooseSong')}</span>}
+              </div>
+              <button type="button" className="btn btn-ghost" onClick={() => setLibraryOpen(true)}>
+                {t('cover.openLibrary')}
+              </button>
             </div>
           </div>
+
+          {/* Ticket 19: only meaningful for a 云曲库 song — a local upload has
+              no catalog `original_key` to shift against and is meant to be
+              used as-is. */}
+          {targetSong && (
+            <div className="field">
+              <PitchShiftSlider
+                value={targetSong.pitchShift}
+                recommended={recommendedShift}
+                busy={shifting}
+                onChange={(v) => void handlePitchShiftChange(v)}
+              />
+              {shiftError && <div className="error-banner">{shiftError}</div>}
+            </div>
+          )}
 
           <div className="field">
             <label>{t('cover.separationMode')}</label>
@@ -218,6 +362,11 @@ export function CoverView(): JSX.Element {
             <div style={{ marginTop: 20 }}>
               <div className="card-title">{t('cover.stems')}</div>
               <StemPlayer stems={stemTracks} />
+              {pitchStemPath && (
+                <div style={{ marginTop: 16 }}>
+                  <PitchAnalysisPanel audioPath={pitchStemPath} label={pitchStemLabel} />
+                </div>
+              )}
               <button className="btn btn-primary" style={{ marginTop: 16 }}
                 onClick={() => complete(1, 2)}>
                 {t('cover.nextModel')}
@@ -268,7 +417,7 @@ export function CoverView(): JSX.Element {
                     {algoVer === v && <span className="mode-card-check">✓</span>}
                   </div>
                   <div className="mode-card-tagline">
-                    {v === 'v1' ? 'DTW + WSOLA · ≤10% real-time' : 'LSTM expression encoder · ≤50% RT'}
+                    {t(v === 'v1' ? 'cover.v1Tagline' : 'cover.v2Tagline')}
                   </div>
                 </button>
               ))}
@@ -291,7 +440,7 @@ export function CoverView(): JSX.Element {
           {!coverResult && (
             <>
               <p style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 12 }}>
-                Model: <strong>{selectedModel?.name ?? '—'}</strong> · Algorithm: <strong>{algoVer.toUpperCase()}</strong>
+                {t('cover.mixInfo', { model: selectedModel?.name ?? '—', algo: algoVer.toUpperCase() })}
               </p>
               {synthError && <div className="error-banner">{synthError}</div>}
               <button className="btn btn-primary" style={{ width: '100%' }}
@@ -304,8 +453,19 @@ export function CoverView(): JSX.Element {
           {coverResult && (
             <>
               <div style={{ fontSize: 12, color: 'var(--success)', marginBottom: 16 }}>
-                ✓ Cover synthesized in {coverResult.elapsed_sec}s ({coverResult.duration_sec}s audio)
+                {t('cover.synthesizedInfo', { elapsed: coverResult.elapsed_sec, duration: coverResult.duration_sec })}
               </div>
+
+              {/* Ticket 17: 强制修音 — clamp any AI-vocal pitch above D#4
+                  before mixing, so the mixer/export downstream always work
+                  from the protected stem once applied. */}
+              <HighPitchProtection
+                audioPath={coverResult.ai_vocal_path}
+                onApplied={(path) =>
+                  setCoverResult((prev) => (prev ? { ...prev, ai_vocal_path: path } : prev))
+                }
+              />
+
               <div className="card-title" style={{ marginBottom: 12 }}>{t('cover.mixer')}</div>
               {mixTracks.length > 0 && (
                 <MixingConsole
@@ -313,8 +473,13 @@ export function CoverView(): JSX.Element {
                   onExportRequest={onExportRequest}
                 />
               )}
+              {/* Guard against the (rare) case where there's nothing to mix:
+                  <MixingConsole> only mounts — and only then registers the
+                  render function export needs — when mixTracks is non-empty.
+                  Without this guard the button below would still let the
+                  user "proceed" into a step 4 that can never export. */}
               <button className="btn btn-primary" style={{ marginTop: 16 }}
-                onClick={() => complete(3, 4)}>
+                onClick={() => complete(3, 4)} disabled={mixTracks.length === 0}>
                 {t('cover.export')}
               </button>
             </>
@@ -331,6 +496,13 @@ export function CoverView(): JSX.Element {
             sampleRate={44_100}
           />
         </div>
+      )}
+
+      {libraryOpen && (
+        <CloudLibraryModal
+          onClose={() => setLibraryOpen(false)}
+          onSelect={handleLibrarySelect}
+        />
       )}
     </>
   )
