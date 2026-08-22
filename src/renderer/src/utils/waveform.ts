@@ -57,6 +57,62 @@ export function drawWaveform(
 }
 
 /**
+ * PATCH-02 §3: draws an analyzed pitch contour over an already-rendered
+ * waveform, so the D#4 threshold line has something to read against and the
+ * user can see which notes actually cross it.
+ *
+ * `contour` is per-frame MIDI (0 = unvoiced) covering the analyzed span
+ * only, which `x0`/`x1` (canvas-width fractions, 0-1) place horizontally —
+ * an analysis over a dragged region occupies just that slice of the track.
+ * `lo`/`hi` are the MIDI values mapped to the bottom and top edges; kept as
+ * plain numbers so this stays a pitch-agnostic canvas helper (see
+ * utils/pitch.ts's computePitchAxis for where they come from).
+ *
+ * Unvoiced frames break the line rather than being drawn as a plunge to the
+ * axis floor — a rest is an absence of pitch, not a very low note.
+ */
+export function drawPitchContour(
+  canvas: HTMLCanvasElement,
+  contour: readonly number[],
+  opts: { lo: number; hi: number; x0?: number; x1?: number; color: string; lineWidth?: number },
+): void {
+  const ctx = canvas.getContext('2d')
+  if (!ctx || contour.length === 0) return
+  const span = opts.hi - opts.lo
+  if (span <= 0) return
+
+  const x0 = (opts.x0 ?? 0) * canvas.width
+  const x1 = (opts.x1 ?? 1) * canvas.width
+  const plotWidth = x1 - x0
+  const h = canvas.height
+
+  ctx.save()
+  ctx.strokeStyle = opts.color
+  ctx.lineWidth = opts.lineWidth ?? 1.5
+  ctx.lineJoin = 'round'
+  ctx.lineCap = 'round'
+
+  let drawing = false
+  for (let i = 0; i < contour.length; i++) {
+    const midi = contour[i]
+    if (midi <= 0) {
+      if (drawing) { ctx.stroke(); drawing = false }
+      continue
+    }
+    // Denominator is length-1 so the last frame lands exactly on x1 rather
+    // than one step short of it.
+    const t = contour.length > 1 ? i / (contour.length - 1) : 0
+    const x = x0 + t * plotWidth
+    const frac = Math.min(1, Math.max(0, (midi - opts.lo) / span))
+    const y = h - frac * h
+    if (!drawing) { ctx.beginPath(); ctx.moveTo(x, y); drawing = true }
+    else ctx.lineTo(x, y)
+  }
+  if (drawing) ctx.stroke()
+  ctx.restore()
+}
+
+/**
  * Estimates the time-shift (seconds) that best aligns `bufB` to `bufA` using
  * cross-correlation over a downsampled mono signal. A positive result means
  * bufB should be delayed by that many seconds to line up with bufA.

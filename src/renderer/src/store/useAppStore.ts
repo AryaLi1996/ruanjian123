@@ -50,6 +50,12 @@ interface AppState {
   selectedModel:   string | null
   engineBusy:      boolean
   engineStatus:    string
+  // PATCH-02 §4: the toolbar only renders engineStatus while the engine is
+  // busy, so an outcome worth *keeping* on screen after the work finishes
+  // (e.g. "已应用模型音域，高音保护起点为D#4") would otherwise be set and
+  // immediately invisible. A sticky status stays shown until the next
+  // setEngineStatus call replaces it.
+  statusSticky:    boolean
   trainedModels:   TrainedModel[]
   modelsHydrated:  boolean   // true once the persisted library has been loaded — gates autosave
                               // so an early empty render can't overwrite the saved file with []
@@ -58,7 +64,8 @@ interface AppState {
   setActiveView:    (view: ActiveView) => void
   setSelectedModel: (path: string | null) => void
   setEngineBusy:    (busy: boolean) => void
-  setEngineStatus:  (status: string) => void
+  /** `sticky` keeps the status on the toolbar after the engine goes idle — see statusSticky. */
+  setEngineStatus:  (status: string, sticky?: boolean) => void
   addModel:         (m: TrainedModel) => void
   removeModel:      (id: string) => void
   updateModelDemo:  (id: string, demoAudioUrl: string) => void
@@ -75,6 +82,7 @@ export const useAppStore = create<AppState>((set) => ({
   selectedModel:  null,
   engineBusy:     false,
   engineStatus:   'idle',
+  statusSticky:   false,
   trainedModels:  [],
   modelsHydrated: false,
   targetSong:     null,
@@ -82,7 +90,7 @@ export const useAppStore = create<AppState>((set) => ({
   setActiveView:    (view)  => set({ activeView: view }),
   setSelectedModel: (path)  => set({ selectedModel: path }),
   setEngineBusy:    (busy)  => set({ engineBusy: busy }),
-  setEngineStatus:  (status) => set({ engineStatus: status }),
+  setEngineStatus:  (status, sticky = false) => set({ engineStatus: status, statusSticky: sticky }),
   addModel:         (m)     => set((s) => ({ trainedModels: [m, ...s.trainedModels] })),
   removeModel:      (id)    => set((s) => ({ trainedModels: s.trainedModels.filter((m) => m.id !== id) })),
   updateModelDemo:  (id, url) =>

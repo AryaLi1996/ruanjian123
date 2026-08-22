@@ -58,6 +58,7 @@ const CANVAS_HEIGHT = 64
 export function HighPitchProtection({ audioPath, onApplied, originalKey, onRecommendedShift }: Props): JSX.Element {
   const { t } = useTranslation()
   const setEngineStatus = useAppStore((s) => s.setEngineStatus)
+  const setEngineBusy    = useAppStore((s) => s.setEngineBusy)
 
   const [applying, setApplying] = useState(false)
   const [result,   setResult]   = useState<HighPitchProtectionResult | null>(null)
@@ -96,6 +97,10 @@ export function HighPitchProtection({ audioPath, onApplied, originalKey, onRecom
 
   async function handleApply(): Promise<void> {
     setApplying(true); setError(null); setShiftRange(null)
+    // PATCH-02 §4: the toolbar only renders engineStatus while the engine
+    // reads as busy, so without this the applying/applied copy below was set
+    // but never actually shown.
+    setEngineBusy(true)
     setEngineStatus(t('status.applyingHighPitchProtection'))
     try {
       const res = await window.engine.call('apply_high_pitch_protection', {
@@ -140,12 +145,14 @@ export function HighPitchProtection({ audioPath, onApplied, originalKey, onRecom
         const direction = t(recRange.recommended < 0 ? 'cover.shiftDirectionDown' : 'cover.shiftDirectionUp')
         // Ticket 22: combined top-status-bar copy — "已应用模型音域，高音保护起点为
         // D#4 | 建议降4个调" — once a recommendation could be computed.
+        // Sticky (PATCH-02 §4) — this is an outcome to keep on the bar, not
+        // a progress line that should vanish the moment the engine idles.
         setEngineStatus(t('status.highPitchProtectionAppliedWithShift', {
           direction, count: Math.abs(recRange.recommended),
-        }))
+        }), true)
       } else {
         // Ticket 17: fixed top-status-bar copy once protection has been applied.
-        setEngineStatus(t('status.highPitchProtectionApplied'))
+        setEngineStatus(t('status.highPitchProtectionApplied'), true)
       }
 
       notify({
@@ -167,6 +174,7 @@ export function HighPitchProtection({ audioPath, onApplied, originalKey, onRecom
       })
     } finally {
       setApplying(false)
+      setEngineBusy(false)
     }
   }
 
