@@ -133,6 +133,7 @@ const resources = {
       // PATCH-03: the Model Data Preparation workspace — the page formerly
       // titled 波形编辑. Copy here is fixed by the ticket (逐字对照 against the
       // reference screenshot), so prefer adding a new key over rewording one.
+      toolbar: { more: '更多操作', scrollLeft: '向左翻页', scrollRight: '向右翻页' },
       dataPrep: {
         title: '模型数据准备',
         description: '处理干音 → 设定保护 → 选目标歌 → 合并训练。',
@@ -434,6 +435,7 @@ const resources = {
         selectionInfo: 'Selection: {{start}} – {{end}} ({{dur}})',
       },
       // PATCH-03: Model Data Preparation workspace (formerly Waveform Editor).
+      toolbar: { more: 'More actions', scrollLeft: 'Scroll left', scrollRight: 'Scroll right' },
       dataPrep: {
         title: 'Model Data Preparation',
         description: 'Process the dry vocal → set protection → pick a target song → merge for training.',
