@@ -3324,3 +3324,125 @@ html, body, #root {
 }
 .at-arrow:hover:not(:disabled) { border-color: var(--accent); color: var(--text); }
 .at-arrow:disabled { opacity: 0.3; cursor: default; }
+
+
+/* ── Pitch analysis floating card (Ticket UI-07) ─────────────
+   Fixed to the viewport rather than placed in flow: it's dismissible,
+   draggable, and must never push the editor around when it appears. The
+   z-index sits above the player bar (10) but below modals/toasts (1100+),
+   so it floats over the workspace without covering a dialog. */
+.pitch-card {
+  position: fixed;
+  z-index: 900;
+  width: 300px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px 16px 16px;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg-panel) 92%, transparent);
+  backdrop-filter: blur(16px) saturate(130%);
+  -webkit-backdrop-filter: blur(16px) saturate(130%);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.42);
+  animation: pitch-card-in 0.2s ease-out;
+  transition: box-shadow 0.6s ease, border-color 0.6s ease;
+}
+@keyframes pitch-card-in {
+  from { opacity: 0; transform: translateY(-8px) scale(0.98); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+/* The attention glow, dropped after 3s (see GLOW_MS) — the transition above
+   is what makes it settle rather than snap. */
+.pitch-card.glowing {
+  border-color: color-mix(in srgb, var(--accent) 60%, transparent);
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent),
+    0 0 28px color-mix(in srgb, var(--accent) 38%, transparent),
+    0 18px 48px rgba(0, 0, 0, 0.42);
+}
+
+.pitch-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: -2px -4px 0;
+  padding: 2px 4px 8px;
+  border-bottom: 1px solid var(--border);
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+}
+.pitch-card-header:active { cursor: grabbing; }
+.pitch-card-title { font-size: 12.5px; font-weight: 700; color: var(--text); }
+.pitch-card-close {
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1;
+  padding: 2px 4px;
+  cursor: pointer;
+  border-radius: 4px;
+}
+.pitch-card-close:hover { color: var(--text); background: var(--bg-hover); }
+
+.pitch-card-stats { display: flex; flex-direction: column; gap: 9px; margin: 0; }
+.pitch-card-stat {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+.pitch-card-stat dt {
+  font-size: 11.5px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+.pitch-card-value {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+.pitch-card-max       { color: var(--accent); }
+.pitch-card-threshold { color: var(--warning); }
+
+.pitch-card-empty { margin: 0; font-size: 12px; color: var(--text-muted); line-height: 1.6; }
+
+/* The card's one action, as the pill-shaped primary the ticket asks for. */
+.pitch-card-apply {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  width: 100%;
+  height: 38px;
+  padding: 0 18px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-pill);
+  background: var(--accent-gradient);
+  color: var(--on-accent);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: filter 0.15s, transform 0.12s, background 0.2s, color 0.2s;
+}
+.pitch-card-apply:hover:not(:disabled)  { filter: brightness(1.08); transform: translateY(-1px); }
+.pitch-card-apply:active:not(:disabled) { filter: brightness(0.94); transform: none; }
+.pitch-card-apply:disabled {
+  cursor: not-allowed;
+  background: var(--bg);
+  border-color: var(--border);
+  color: var(--text-muted);
+  filter: none;
+  transform: none;
+}
+.pitch-card-apply.applied:disabled {
+  background: color-mix(in srgb, var(--success) 20%, transparent);
+  border-color: var(--success);
+  color: var(--success);
+}
