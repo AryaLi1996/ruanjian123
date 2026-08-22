@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { WaveformEditor } from '../components/waveform/WaveformEditor'
 import { ActionToolbar, type ToolbarAction } from '../components/toolbar/ActionToolbar'
+import { PitchResultCard } from '../components/pitch/PitchResultCard'
 import { useWaveformStore } from '../store/useWaveformStore'
 import { useAppStore } from '../store/useAppStore'
 import { midiToNoteName } from '../utils/pitch'
@@ -68,6 +69,12 @@ export function DataPrepView(): JSX.Element {
   // ── 分析音高 / 应用高音保护 ────────────────────────────────
   const [analyzing, setAnalyzing]   = useState(false)
   const [maxMidi, setMaxMidi]       = useState<number | null>(null)
+  // avg_midi has always come back from analyze_pitch; UI-07's card is the
+  // first thing to surface it, so it stops being discarded here.
+  const [avgMidi, setAvgMidi]       = useState<number>(0)
+  // Dismissed by the card's ✕. Re-shown by the next analysis rather than
+  // being sticky, so re-running 分析音高 always brings the result back.
+  const [cardOpen, setCardOpen]     = useState(false)
   const [applying, setApplying]     = useState(false)
   const [justApplied, setJustApplied] = useState(false)
   const [protectedPath, setProtectedPath] = useState<string | null>(null)
@@ -127,6 +134,8 @@ export function DataPrepView(): JSX.Element {
       }) as AnalyzePitchResponse
       if (res.error) throw new Error(res.error)
       setMaxMidi(res.max_midi)
+      setAvgMidi(res.avg_midi ?? 0)
+      setCardOpen(true)
     } catch (err) {
       setError(String(err))
     } finally {
@@ -313,6 +322,9 @@ export function DataPrepView(): JSX.Element {
             behind "更多操作" in a scrollable carousel. */}
         <ActionToolbar ariaLabel={t('dataPrep.title')} actions={toolbarActions} />
 
+        {/* The inline one-liner stays as the persistent record of the last
+            analysis; the floating card (Ticket UI-07) is the actionable
+            surface and can be dismissed. */}
         {maxMidi != null && maxMidi > 0 && (
           <div className="dp-analysis-info">
             {t('dataPrep.analyzedMax', { note: midiToNoteName(maxMidi) })}
@@ -320,6 +332,19 @@ export function DataPrepView(): JSX.Element {
         )}
         {error && <div className="error-banner" style={{ marginTop: 10 }}>{error}</div>}
       </div>
+
+      {cardOpen && maxMidi != null && (
+        <PitchResultCard
+          maxMidi={maxMidi}
+          avgMidi={avgMidi}
+          applying={applying}
+          applied={justApplied}
+          canApply={!!filePath && maxMidi > 0}
+          disabledHint={!filePath ? pathHint : t('dataPrep.needsAnalysis')}
+          onApply={() => void handleApplyProtection()}
+          onClose={() => setCardOpen(false)}
+        />
+      )}
 
       {/* ── §2: cloud model training ─────────────────────────────── */}
       <div className="card dp-training">

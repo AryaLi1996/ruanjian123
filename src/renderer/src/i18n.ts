@@ -25,7 +25,7 @@ const resources = {
         openPlayback: '播放/监听',
       },
       common: {
-        loading: '加载中…', cancel: '取消', retry: '重试', reset: '重置', refresh: '刷新',
+        loading: '加载中…', cancel: '取消', retry: '重试', reset: '重置', refresh: '刷新', close: '关闭',
         activate: '激活', deactivate: '停用', download: '下载', error: '错误', done: '完成',
         unavailable: '不可用',
       },
@@ -109,7 +109,8 @@ const resources = {
         wholeTrackLabel: '未选择区域 — 将分析整段音轨',
         regionSelected: '已选区域：{{start}}s – {{end}}s', clearRegion: '清除区域',
         wholeTrackTitle: '已分析整段音轨', wholeTrackMessage: '未选择区域，系统已自动分析整段音轨。',
-        maxDetected: '检测到最高音', suggestedThreshold: '建议高音保护阈值', avgDetected: '平均音高',
+        maxDetected: '检测到最高音', suggestedThreshold: '建议高音保护阈值', avgDetected: '平均音域',
+        cardTitle: '音高分析结果',
         summary: '检测到最高音: {{maxNote}}, 建议高音保护阈值: {{thresholdNote}}',
         noPitchDetected: '未检测到有效音高，请确认所选区域包含人声。',
         // PATCH-02: 强制修音 触发按钮与波形阈值线可视化。
@@ -341,7 +342,7 @@ const resources = {
         play: 'Play', pause: 'Pause', stop: 'Stop', seek: 'Playback position',
         openPlayback: 'Playback',
       },
-      common: { loading: 'Loading…', cancel: 'Cancel', retry: 'Retry', reset: 'Reset', refresh: 'Refresh', activate: 'Activate', deactivate: 'Deactivate', download: 'Download', error: 'Error', done: 'Done', unavailable: 'Unavailable' },
+      common: { loading: 'Loading…', cancel: 'Cancel', retry: 'Retry', reset: 'Reset', refresh: 'Refresh', close: 'Close', activate: 'Activate', deactivate: 'Deactivate', download: 'Download', error: 'Error', done: 'Done', unavailable: 'Unavailable' },
       updater: { ready: 'Update ready to install', install: 'Restart & Install', available: 'Update {{version}} available', downloading: 'Downloading…', download: 'Download' },
       status: { running: 'Running: {{method}}', idle: 'Engine ready', training: 'Training: {{mode}}', separating: 'Separating…', synthesizing: 'Synthesizing ({{mode}})…', saved: 'Saved: {{path}}', applyingHighPitchProtection: 'Applying high-pitch protection…', highPitchProtectionApplied: 'Model vocal range applied — high-pitch protection starts at D#4', highPitchProtectionAppliedWithShift: 'Model vocal range applied — high-pitch protection starts at D#4 | Recommended: shift {{direction}} by {{count}} semitone(s)' },
       training: { title: 'Model Training', description: 'Fine-tune the AI singer\'s timbre using dry vocal recordings.', info: 'Model Info', name: 'Model name *', namePlaceholder: 'e.g. My Singer', epochs: 'Epochs', material: 'Training Material', noFiles: 'No files uploaded; synthetic demo data will be used.', mode: 'Training Mode', start: 'Start Local Training', training: 'Training…', complete: '✓ Training Complete', finalizing: 'Finalizing…', finalizingDesc: 'Training finished. Generating the demo clip and saving the model.', audition: 'Audition', trainAnother: 'Train Another Model', models: 'Your Models ({{count}})', demo: 'Demo', retrain: 'Retrain', delete: 'Delete', standard: 'Standard', professional: 'Professional', gpu: 'GPU', cpu: 'CPU', vram: 'VRAM', epoch: 'Epoch {{current}}/{{total}}', loss: 'Loss {{value}}', eta: 'ETA {{value}}', waiting: 'Waiting for engine…', materialHint: 'Drop clean vocal recordings here.', standardTagline: 'LoRA rank-4 · timbre encoder only', professionalTagline: 'LoRA+ rank-8 · all layers · gradient checkpointing', dropAudio: 'Drop audio files here, or click to browse', audioFormats: 'WAV · FLAC · MP3 · OGG · M4A', fileCount: '{{count}} file(s)', totalDuration: '{{duration}} total', clearAll: 'Clear all', removeFile: 'Remove file', loadingWaveform: 'Loading waveform…', waveform: 'waveform', play: 'Play', pause: 'Pause', volume: 'Volume', noDemo: 'No demo available', lossLabel: 'Loss: {{value}}', pro: 'Pro', trainingGpu: 'GPU', trainingCpu: 'CPU', trainingVram: 'VRAM', download: 'Download Model', ready: 'Ready', qualityLow: 'Quality may be low' },
@@ -416,7 +417,8 @@ const resources = {
         wholeTrackLabel: 'No region selected — the whole track will be analyzed',
         regionSelected: 'Selected region: {{start}}s – {{end}}s', clearRegion: 'Clear region',
         wholeTrackTitle: 'Analyzed whole track', wholeTrackMessage: 'No region was selected, so the entire track was analyzed automatically.',
-        maxDetected: 'Detected highest note', suggestedThreshold: 'Suggested high-note protection threshold', avgDetected: 'Average pitch',
+        maxDetected: 'Detected highest note', suggestedThreshold: 'Suggested high-note protection threshold', avgDetected: 'Average range',
+        cardTitle: 'Pitch analysis',
         summary: 'Detected highest note: {{maxNote}}, suggested high-note protection threshold: {{thresholdNote}}',
         noPitchDetected: 'No pitch detected — make sure the selected region contains vocals.',
         // PATCH-02: forced auto-tune trigger + waveform threshold-line overlay.
