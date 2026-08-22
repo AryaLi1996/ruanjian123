@@ -3121,31 +3121,10 @@ html, body, #root {
   color: var(--text-muted);
 }
 
-/* §1: three cognitive groups — 录音播放 → 分析保护 → 降噪导出 — separated by
-   a rule so the grouping survives wrapping on a narrow window (where pure
-   spacing would read as one long run of buttons). */
-.dp-toolbar {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 10px;
-  margin-top: 16px;
-  padding-top: 14px;
-  border-top: 1px solid var(--border);
-}
-.dp-tool-group {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-.dp-tool-divider {
-  width: 1px;
-  align-self: stretch;
-  min-height: 22px;
-  background: var(--border);
-  flex-shrink: 0;
-}
+/* The three-group toolbar these rules laid out was replaced by
+   <ActionToolbar> (Ticket UI-06); .dp-tool itself is still worn by the
+   cloud-training buttons further down the page, so only the group/divider
+   layout is gone. */
 .dp-tool {
   display: inline-flex;
   align-items: center;
@@ -3203,3 +3182,145 @@ html, body, #root {
   font-size: 14px;
   font-weight: 600;
 }
+
+
+/* ── Operations toolbar (Ticket UI-06) ───────────────────────
+   A short row of always-visible core actions, plus everything else behind
+   a "more" disclosure that opens a horizontally-scrollable carousel. */
+.at-toolbar {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.at-core { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
+.at-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 16px;
+  border-radius: var(--radius-pill);
+  border: 1px solid transparent;
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition: background 0.15s, border-color 0.15s, color 0.15s, filter 0.15s, transform 0.12s;
+}
+.at-icon  { font-size: 13px; line-height: 1; }
+.at-label { line-height: 1; }
+
+/* Core actions carry the accent fill that marks them as the primary path
+   (Ticket UI-06 §4) — but only while they're actually actionable. A
+   disabled action drops to the neutral treatment rather than sitting there
+   in full accent inviting a click that would do nothing. */
+.at-btn-core {
+  background: var(--accent-gradient);
+  color: var(--on-accent);
+}
+.at-btn-core:hover:not(:disabled) { filter: brightness(1.08); transform: translateY(-1px); }
+.at-btn-core:active:not(:disabled) { filter: brightness(0.94); transform: none; }
+
+.at-btn-overflow {
+  background: var(--bg);
+  border-color: var(--border);
+  color: var(--text-muted);
+}
+.at-btn-overflow:hover:not(:disabled) { border-color: var(--accent); color: var(--text); }
+
+.at-btn:disabled {
+  cursor: not-allowed;
+  background: var(--bg);
+  border-color: var(--border);
+  color: var(--text-muted);
+  opacity: 0.55;
+  filter: none;
+  transform: none;
+}
+
+/* A completed action reads as success rather than as "still the primary
+   thing to do". */
+.at-btn-done:not(:disabled) {
+  background: color-mix(in srgb, var(--success) 20%, transparent);
+  border-color: var(--success);
+  color: var(--success);
+}
+
+.at-btn-loading { cursor: progress; }
+.at-spinner {
+  width: 12px; height: 12px;
+  border-radius: 50%;
+  border: 2px solid color-mix(in srgb, currentColor 35%, transparent);
+  border-top-color: currentColor;
+  animation: sub-spin 0.8s linear infinite;
+  flex-shrink: 0;
+}
+
+.at-more {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 14px;
+  border-radius: var(--radius-pill);
+  border: 1px dashed var(--border);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12.5px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: border-color 0.15s, color 0.15s;
+}
+.at-more:hover           { border-color: var(--accent); color: var(--text); }
+.at-more.expanded        { border-style: solid; border-color: var(--accent); color: var(--accent); }
+
+/* ── Overflow carousel ───────────────────────────────────── */
+.at-overflow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--bg) 60%, transparent);
+  animation: at-overflow-in 0.18s ease-out;
+}
+@keyframes at-overflow-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.at-rail {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  scroll-behavior: smooth;
+  /* The rail is its own scroll region; its scrollbar would sit awkwardly
+     under a single row of pills, and the arrows plus wheel cover paging. */
+  scrollbar-width: none;
+}
+.at-rail::-webkit-scrollbar { display: none; }
+
+.at-arrow {
+  display: flex; align-items: center; justify-content: center;
+  width: 26px; height: 26px;
+  flex-shrink: 0;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text-muted);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s, opacity 0.15s;
+}
+.at-arrow:hover:not(:disabled) { border-color: var(--accent); color: var(--text); }
+.at-arrow:disabled { opacity: 0.3; cursor: default; }

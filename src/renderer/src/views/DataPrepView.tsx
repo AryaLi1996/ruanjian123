@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { WaveformEditor } from '../components/waveform/WaveformEditor'
+import { ActionToolbar, type ToolbarAction } from '../components/toolbar/ActionToolbar'
 import { useWaveformStore } from '../store/useWaveformStore'
 import { useAppStore } from '../store/useAppStore'
 import { midiToNoteName } from '../utils/pitch'
@@ -236,6 +237,57 @@ export function DataPrepView(): JSX.Element {
     : phase === 'error'     ? (error ?? t('dataPrep.waitingToTrain'))
     : t('dataPrep.waitingToTrain')
 
+  // Ticket UI-06: the four high-frequency actions are promoted to the
+  // always-visible core row; the rest ride in the overflow carousel. Play
+  // and pause collapse into one core button — they're the same intent and
+  // two mutually-exclusive pills would waste the scarce core slots.
+  const toolbarActions: ToolbarAction[] = [
+    {
+      id: 'playPause',
+      core: true,
+      icon: isPlaying ? '⏸' : '▶',
+      label: isPlaying ? t('dataPrep.pause') : t('dataPrep.play'),
+      onClick: () => (isPlaying ? controls?.pause() : controls?.play()),
+      disabled: !hasFile || !controls,
+      title: hasFile ? undefined : pathHint,
+    },
+    {
+      id: 'analyzePitch',
+      core: true,
+      icon: '🎼',
+      label: t('dataPrep.analyzePitch'),
+      loading: analyzing,
+      loadingLabel: t('dataPrep.analyzing'),
+      onClick: () => void handleAnalyze(),
+      disabled: !filePath,
+      title: filePath ? t('dataPrep.analyzePitch') : pathHint,
+    },
+    {
+      id: 'applyProtection',
+      core: true,
+      icon: '🛡',
+      label: justApplied ? t('dataPrep.applied') : t('dataPrep.applyProtection'),
+      done: justApplied,
+      loading: applying,
+      loadingLabel: t('dataPrep.applying'),
+      onClick: () => void handleApplyProtection(),
+      disabled: !filePath || maxMidi == null,
+      title: !filePath ? pathHint : maxMidi == null ? t('dataPrep.needsAnalysis') : t('dataPrep.applyProtection'),
+    },
+    // Named by the ticket as a core action, so it holds its slot even though
+    // the backing call doesn't exist yet — it renders plainly disabled with
+    // the "not available" reason rather than as an accent pill inviting a
+    // click that would do nothing.
+    { id: 'saveChanges', core: true, icon: '💾', label: t('dataPrep.saveChanges'), disabled: true, title: soon },
+
+    { id: 'newRecord',     icon: '⏺', label: t('dataPrep.newRecord'),         disabled: true, title: soon },
+    { id: 'muteSelection', icon: '🔇', label: t('dataPrep.muteSelection'),     disabled: true, title: soon },
+    { id: 'undo',          icon: '↩', label: t('dataPrep.undo'),              disabled: true, title: soon },
+    { id: 'noiseSample',   icon: '🎚', label: t('dataPrep.getNoiseSample'),    disabled: true, title: soon },
+    { id: 'denoise',       icon: '✨', label: t('dataPrep.denoise'),           disabled: true, title: soon },
+    { id: 'loudness',      icon: '📶', label: t('dataPrep.loudnessNormalize'), disabled: true, title: soon },
+  ]
+
   return (
     <>
       <div className="view-header">
@@ -256,78 +308,10 @@ export function DataPrepView(): JSX.Element {
       <div className="card">
         <WaveformEditor showTransportButtons={false} />
 
-        {/* ── §1: three-group toolbar ─────────────────────────────── */}
-        <div className="dp-toolbar" role="toolbar" aria-label={t('dataPrep.title')}>
-          <div className="dp-tool-group" aria-label={t('dataPrep.groupRecord')}>
-            <button className="btn btn-ghost dp-tool" disabled title={soon}>
-              ⏺ {t('dataPrep.newRecord')}
-            </button>
-            <button
-              className="btn btn-ghost dp-tool"
-              onClick={() => controls?.play()}
-              disabled={!hasFile || !controls || isPlaying}
-              title={hasFile ? t('dataPrep.play') : pathHint}
-            >
-              ▶ {t('dataPrep.play')}
-            </button>
-            <button
-              className="btn btn-ghost dp-tool"
-              onClick={() => controls?.pause()}
-              disabled={!hasFile || !controls || !isPlaying}
-              title={hasFile ? t('dataPrep.pause') : pathHint}
-            >
-              ⏸ {t('dataPrep.pause')}
-            </button>
-            <button className="btn btn-ghost dp-tool" disabled title={soon}>
-              🔇 {t('dataPrep.muteSelection')}
-            </button>
-          </div>
-
-          <span className="dp-tool-divider" aria-hidden="true" />
-
-          <div className="dp-tool-group" aria-label={t('dataPrep.groupAnalyze')}>
-            <button
-              className="btn btn-ghost dp-tool"
-              onClick={() => void handleAnalyze()}
-              disabled={!filePath || analyzing}
-              title={filePath ? t('dataPrep.analyzePitch') : pathHint}
-            >
-              {analyzing ? `⏳ ${t('dataPrep.analyzing')}` : `🎼 ${t('dataPrep.analyzePitch')}`}
-            </button>
-            <button
-              className={`btn dp-tool pitch-protect-btn${justApplied ? ' applied' : ''}`}
-              onClick={() => void handleApplyProtection()}
-              disabled={!filePath || maxMidi == null || applying}
-              title={!filePath ? pathHint : maxMidi == null ? t('dataPrep.needsAnalysis') : t('dataPrep.applyProtection')}
-            >
-              {applying
-                ? <><span className="pitch-protect-spinner" aria-hidden="true" /> {t('dataPrep.applying')}</>
-                : justApplied
-                  ? `✓ ${t('dataPrep.applied')}`
-                  : `🛡 ${t('dataPrep.applyProtection')}`}
-            </button>
-            <button className="btn btn-ghost dp-tool" disabled title={soon}>
-              ↩ {t('dataPrep.undo')}
-            </button>
-          </div>
-
-          <span className="dp-tool-divider" aria-hidden="true" />
-
-          <div className="dp-tool-group" aria-label={t('dataPrep.groupDenoise')}>
-            <button className="btn btn-ghost dp-tool" disabled title={soon}>
-              🎚 {t('dataPrep.getNoiseSample')}
-            </button>
-            <button className="btn btn-ghost dp-tool" disabled title={soon}>
-              ✨ {t('dataPrep.denoise')}
-            </button>
-            <button className="btn btn-ghost dp-tool" disabled title={soon}>
-              📶 {t('dataPrep.loudnessNormalize')}
-            </button>
-            <button className="btn btn-ghost dp-tool" disabled title={soon}>
-              💾 {t('dataPrep.saveChanges')}
-            </button>
-          </div>
-        </div>
+        {/* ── §1: operations toolbar (Ticket UI-06) ───────────────
+            Core actions stay visible as pills; everything else lives
+            behind "更多操作" in a scrollable carousel. */}
+        <ActionToolbar ariaLabel={t('dataPrep.title')} actions={toolbarActions} />
 
         {maxMidi != null && maxMidi > 0 && (
           <div className="dp-analysis-info">
