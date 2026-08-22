@@ -57,6 +57,10 @@ const resources = {
         // Ticket 18: Cloud Library (云曲库) integration.
         openLibrary: '☁️ 从云曲库选择', targetSongLabel: '当前目标歌曲：{{title}} - {{artist}}',
         clearTargetSong: '清除', unknownArtist: '未知艺术家',
+        // Ticket 19: Pitch Shift / Tune slider.
+        pitchShift: '调音（半音）', pitchShiftRecommended: '推荐移调：{{value}}',
+        pitchShiftRecommendedTitle: '推荐移调：{{value}} 半音',
+        pitchShiftApplyRecommended: '应用推荐值', pitchShiftProcessing: '正在处理移调音频…',
       },
       // Ticket 18: Cloud Library (云曲库) search modal.
       library: {
@@ -281,6 +285,10 @@ const resources = {
         // Ticket 18: Cloud Library integration.
         openLibrary: '☁️ Choose from Cloud Library', targetSongLabel: 'Target song: {{title}} - {{artist}}',
         clearTargetSong: 'Clear', unknownArtist: 'Unknown Artist',
+        // Ticket 19: Pitch Shift / Tune slider.
+        pitchShift: 'Tune (semitones)', pitchShiftRecommended: 'Recommended shift: {{value}}',
+        pitchShiftRecommendedTitle: 'Recommended shift: {{value}} semitones',
+        pitchShiftApplyRecommended: 'Apply recommended', pitchShiftProcessing: 'Re-processing shifted audio…',
       },
       // Ticket 18: Cloud Library search modal.
       library: {

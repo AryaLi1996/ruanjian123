@@ -230,6 +230,23 @@ def synthesize_cover(args):
     }
 
 
+def pitch_shift(args):
+    """Ticket 19: shift a target song's cached audio by up to ±12 semitones
+    via librosa.effects.pitch_shift, caching the result under a writable
+    scratch dir — see pitch_tools.shift_pitch."""
+    from pitch_tools import shift_pitch  # noqa: PLC0415
+
+    params     = args[0] if args and isinstance(args[0], dict) else {}
+    input_path = params.get("input_path")
+    if not input_path:
+        return {"error": "input_path is required"}
+
+    semitones = max(-12.0, min(12.0, float(params.get("semitones", 0))))
+    cache_key = params.get("cache_key")
+
+    return shift_pitch(input_path, semitones, cache_dir=_writable_dir() / "pitch-shift-cache", cache_key=cache_key)
+
+
 def export_audio(args):
     """Save mixed PCM audio from the renderer to a file on disk.
 
@@ -481,6 +498,7 @@ HANDLERS = {
     "benchmark_synthesis": benchmark_synthesis,
     "separate":            separate,
     "synthesize_cover":    synthesize_cover,
+    "pitch_shift":         pitch_shift,
     "export_audio":        export_audio,
     "apply_high_pitch_protection": apply_high_pitch_protection,
     "train_model":         train_model,
