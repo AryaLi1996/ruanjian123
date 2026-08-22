@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   midiToNoteName, suggestedProtectionThreshold,
   keyToMidi, computeRecommendedShift, PITCH_SHIFT_MIN, PITCH_SHIFT_MAX,
+  computeRecommendedShiftRange, SHIFT_RANGE_CUSHION_SEMITONES,
 } from './pitch'
 
 describe('midiToNoteName', () => {
@@ -89,5 +90,33 @@ describe('computeRecommendedShift', () => {
   it('returns null when the vocal range is not yet known', () => {
     expect(computeRecommendedShift('C', null)).toBeNull()
     expect(computeRecommendedShift('C', undefined)).toBeNull()
+  })
+})
+
+describe('computeRecommendedShiftRange', () => {
+  it('extends the recommendation by the cushion, in the same direction (ticket example: -4 to -6)', () => {
+    // "Ab" tonic (MIDI 68) against a protected vocal max of MIDI 72 (C5)
+    // recommends -4; the range should extend to -6, i.e. "适合降4到6个调，建议降4个".
+    expect(computeRecommendedShift('Ab', 72)).toBe(-4)
+    expect(computeRecommendedShiftRange('Ab', 72)).toEqual({ recommended: -4, cushioned: -6 })
+  })
+
+  it('extends upward when the recommendation is positive', () => {
+    expect(computeRecommendedShift('C', 55)).toBe(5)
+    expect(computeRecommendedShiftRange('C', 55)).toEqual({ recommended: 5, cushioned: 5 + SHIFT_RANGE_CUSHION_SEMITONES })
+  })
+
+  it('caps the cushioned end at PITCH_SHIFT_MIN/MAX', () => {
+    expect(computeRecommendedShiftRange('C', 20)).toEqual({ recommended: PITCH_SHIFT_MAX, cushioned: PITCH_SHIFT_MAX })
+    expect(computeRecommendedShiftRange('C', 100)).toEqual({ recommended: PITCH_SHIFT_MIN, cushioned: PITCH_SHIFT_MIN })
+  })
+
+  it('returns null when no shift is recommended (already in range)', () => {
+    expect(computeRecommendedShiftRange('C', 60)).toBeNull()
+  })
+
+  it('returns null when the underlying recommendation is null', () => {
+    expect(computeRecommendedShiftRange(null, 60)).toBeNull()
+    expect(computeRecommendedShiftRange('C', null)).toBeNull()
   })
 })

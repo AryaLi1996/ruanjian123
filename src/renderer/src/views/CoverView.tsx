@@ -464,13 +464,20 @@ export function CoverView(): JSX.Element {
 
               {/* Ticket 17: 强制修音 — clamp any AI-vocal pitch above D#4
                   before mixing, so the mixer/export downstream always work
-                  from the protected stem once applied. */}
+                  from the protected stem once applied.
+                  Ticket 22: also re-analyzes the protected vocal and, when a
+                  云曲库 song is selected, auto-applies the recommended Tune
+                  shift (see handlePitchShiftChange) — same engine call and
+                  caching the slider itself uses, so the user can still drag
+                  it to override afterward. */}
               <HighPitchProtection
                 audioPath={coverResult.ai_vocal_path}
                 onApplied={(path) => {
                   setCoverResult((prev) => (prev ? { ...prev, ai_vocal_path: path } : prev))
                   setVocalProtected(true)
                 }}
+                originalKey={targetSong?.originalKey}
+                onRecommendedShift={(shift) => void handlePitchShiftChange(shift)}
               />
 
               <div className="card-title" style={{ marginBottom: 12 }}>{t('cover.mixer')}</div>

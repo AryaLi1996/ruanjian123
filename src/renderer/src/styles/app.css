@@ -940,6 +940,18 @@ html, body, #root {
   border: 1px solid var(--danger);
 }
 
+/* Ticket 22: confirmation banner for the pitch-shift recommendation
+   computed from the just-protected vocal's re-analyzed range. */
+.hpp-shift-suggestion {
+  margin-top: 10px;
+  padding: 8px 12px;
+  font-size: 12px;
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  border-radius: 6px;
+}
+
 /* ── Mixing console ──────────────────────────────────────── */
 .mixer { padding: 4px 0; }
 
