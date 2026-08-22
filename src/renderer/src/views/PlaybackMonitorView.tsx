@@ -100,8 +100,10 @@ export function PlaybackMonitorView(): JSX.Element {
 
   const [playing, setPlaying] = useState(false)
   const [playhead, setPlayhead] = useState(0)
-  const [masterVolume, setMasterVolume] = useState(0.85)
-  const [loopPlayback, setLoopPlayback] = useState(false)
+  // Seeded from the store so the persisted volume/loop survive a restart —
+  // the store is the source of truth for both (see usePlayerStore).
+  const [masterVolume, setMasterVolume] = useState(() => usePlayerStore.getState().volume)
+  const [loopPlayback, setLoopPlayback] = useState(() => usePlayerStore.getState().loop)
   const [zoom, setZoom] = useState(1)
   const [sepMode, setSepMode] = useState<SepMode>('standard')
   const [separating, setSeparating] = useState(false)
@@ -199,6 +201,13 @@ export function PlaybackMonitorView(): JSX.Element {
 
   const play = useCallback((fromSec: number) => {
     const ctx = ensurePlayCtx()
+    // Cancel any frame loop already in flight. play() is re-entered by
+    // seek() (and by the loop-around at the end of the material) while
+    // already playing; without this each re-entry leaves its predecessor
+    // running and they compound, every one of them driving setPlayhead and
+    // the lyric sync on their own. Dragging the progress bar makes that
+    // reachable in bulk.
+    if (rafRef.current != null) cancelAnimationFrame(rafRef.current)
     stopSources()
     const now = ctx.currentTime
     playStartRef.current = now
@@ -582,13 +591,37 @@ export function PlaybackMonitorView(): JSX.Element {
     })
   }, [])
 
+  // Waveform thumbnail for the player bar's left zone (Ticket UI-03 §1).
+  // The tracks already carry precomputed peaks, so this is a cheap redraw
+  // onto a small offscreen canvas rather than a second pass over the audio.
+  // Drawn at 2x the CSS box for HiDPI, and left transparent so the tile's
+  // own accent gradient shows through behind the trace.
+  const thumbTrack = tracks[0]
+  const thumbTrackId = thumbTrack?.id ?? null
+  const [waveformThumb, setWaveformThumb] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!thumbTrack) { setWaveformThumb(null); return }
+    const canvas = document.createElement('canvas')
+    canvas.width = 128
+    canvas.height = 88
+    const accent = getComputedStyle(document.documentElement)
+      .getPropertyValue('--accent').trim() || '#6366f1'
+    drawWaveform(canvas, thumbTrack.peaks, accent, { heightScale: 0.9 })
+    setWaveformThumb(canvas.toDataURL())
+    // Keyed by track id: a track's peaks never change in place, so depending
+    // on the object identity would redraw on every unrelated render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [thumbTrackId])
+
   useEffect(() => {
     usePlayerStore.getState().setNowPlaying({
       title:       activeSong?.name ?? null,
       artist:      activeSong?.artist ?? null,
       coverArtUrl: activeSong?.coverArtUrl ?? null,
+      waveformUrl: waveformThumb,
     })
-  }, [activeSong?.name, activeSong?.artist, activeSong?.coverArtUrl])
+  }, [activeSong?.name, activeSong?.artist, activeSong?.coverArtUrl, waveformThumb])
 
   // `playhead` updates every animation frame while playing, so publishing it
   // straight through would re-render the player bar at 60fps for a readout

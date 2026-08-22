@@ -498,6 +498,9 @@ html, body, #root {
   background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 35%, var(--bg)), var(--bg));
 }
 .pb-cover img { width: 100%; height: 100%; object-fit: cover; }
+/* The waveform thumbnail is drawn transparent so the tile's accent gradient
+   shows through behind the trace; `contain` keeps the peaks undistorted. */
+.pb-cover img.pb-cover-wave { object-fit: contain; }
 .pb-cover-placeholder { font-size: 22px; opacity: 0.7; }
 .pb-cover-placeholder {
   width: 36px; height: 20px;
@@ -546,27 +549,48 @@ html, body, #root {
 .pb-btn-play:hover:not(:disabled) { filter: brightness(1.08); }
 
 .pb-progress-row { display: flex; align-items: center; gap: 10px; width: 100%; }
-.pb-time {
-  flex-shrink: 0;
-  font-size: 10.5px;
-  color: var(--text-muted);
-  font-variant-numeric: tabular-nums;
-  min-width: 34px;
-  text-align: center;
-}
 
 .pb-progress {
-  appearance: none;
-  -webkit-appearance: none;
-  flex: 1;
+  position: relative;
+  width: 100%;
   min-width: 0;
   height: 4px;
   border-radius: 2px;
-  background: linear-gradient(90deg, var(--accent) var(--progress), var(--bg-hover) var(--progress));
+  background: var(--bg-hover);
 }
-.pb-progress:not(:disabled) { cursor: pointer; }
-.pb-progress:disabled { opacity: .55; }
-.pb-progress::-webkit-slider-thumb, .pb-volume::-webkit-slider-thumb {
+/* Widens the pointer target to ~20px without changing the 4px visual track
+   or the surrounding layout — a 4px-tall drag handle is unusable otherwise. */
+.pb-progress::before {
+  content: '';
+  position: absolute;
+  inset: -8px 0;
+}
+.pb-progress.seekable { cursor: pointer; }
+.pb-progress:focus-visible { outline: 2px solid var(--accent); outline-offset: 6px; }
+.pb-progress-fill {
+  height: 100%;
+  border-radius: 2px;
+  background: var(--accent-gradient);
+  pointer-events: none;
+}
+/* Revealed on hover/focus/drag only, the way YouTube Music and Spotify do
+   it: the resting bar stays a clean 4px line. */
+.pb-progress-handle {
+  position: absolute;
+  top: 50%;
+  width: 11px; height: 11px;
+  border-radius: 50%;
+  background: #e8e9ff;
+  transform: translate(-50%, -50%) scale(0);
+  transition: transform 0.12s ease;
+  pointer-events: none;
+  box-shadow: 0 1px 5px rgba(0, 0, 0, .45);
+}
+.pb-progress.seekable:hover .pb-progress-handle,
+.pb-progress.seekable:focus-visible .pb-progress-handle,
+.pb-progress.scrubbing .pb-progress-handle { transform: translate(-50%, -50%) scale(1); }
+
+.pb-volume::-webkit-slider-thumb {
   appearance: none;
   -webkit-appearance: none;
   width: 11px; height: 11px;
@@ -574,19 +598,43 @@ html, body, #root {
   background: #e8e9ff;
   box-shadow: 0 1px 5px rgba(0, 0, 0, .45);
 }
-.pb-progress:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 
-.pb-right { display: flex; align-items: center; justify-content: flex-end; min-width: 0; }
+.pb-right { display: flex; align-items: center; justify-content: flex-end; gap: 12px; min-width: 0; }
+
+.pb-clock {
+  flex-shrink: 0;
+  font-size: 11.5px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.pb-clock-sep { opacity: 0.5; margin: 0 1px; }
+
 .pb-goto-btn { font-size: 11.5px; padding: 6px 14px; white-space: nowrap; }
 .pb-loop.active { border-color: var(--accent); color: var(--accent); }
-.pb-volume { appearance: none; -webkit-appearance: none; width: 72px; height: 4px; border-radius: 2px; accent-color: var(--accent); cursor: pointer; }
-.pb-volume:disabled { cursor: not-allowed; opacity: .45; }
+/* flex-shrink:0: as the only shrinkable item in the row the volume would
+   otherwise absorb every shortfall and collapse to 0px long before any
+   breakpoint fires. It either fits at full size or the media queries below
+   hide it outright — never squashed to an unusable sliver. */
+.pb-volume {
+  appearance: none; -webkit-appearance: none;
+  width: 72px; height: 4px;
+  border-radius: 2px;
+  accent-color: var(--accent);
+  cursor: pointer;
+  flex-shrink: 0;
+}
 
-/* Narrow windows: drop the right-hand shortcut and let the transport take
-   the freed space, rather than letting three zones fight over the width. */
+/* Narrow windows shed the right zone's optional items in order — the
+   shortcut first, then volume — so the readout, loop and transport keep
+   their space instead of three zones fighting over the width. The zone
+   itself is never hidden: the clock and loop are required at every size. */
+@media (max-width: 1200px) {
+  .pb-goto-btn { display: none; }
+}
 @media (max-width: 900px) {
-  .player-bar { grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); }
-  .pb-right   { display: none; }
+  .player-bar { grid-template-columns: minmax(0, 1fr) minmax(0, 2fr) auto; }
+  .pb-volume  { display: none; }
 }
 
 /* ── Views ───────────────────────────────────────────────── */
