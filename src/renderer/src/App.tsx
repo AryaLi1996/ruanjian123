@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Layout }          from './components/Layout'
 import { ErrorBoundary }   from './components/ErrorBoundary'
+import { MagicBackdrop }   from './components/MagicBackdrop'
 import { OnboardingFlow, ONBOARDING_DISMISSED_KEY }  from './components/onboarding/OnboardingFlow'
 import { WarmupScreen }    from './components/onboarding/WarmupScreen'
 import { useModelLibrary } from './hooks/useModelLibrary'
@@ -55,6 +56,9 @@ function App(): JSX.Element {
   return (
     <>
       <div className="app-bg-layer" aria-hidden="true" />
+      {/* Ticket UI-12: animated cover-derived backdrop. Always mounted so
+          its colours can transition between songs rather than popping. */}
+      <MagicBackdrop />
       <ErrorBoundary label="root">
         <Layout />
       </ErrorBoundary>

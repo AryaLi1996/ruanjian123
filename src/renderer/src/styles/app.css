@@ -3522,3 +3522,90 @@ html, body, #root {
 .tc-cancel-btn:disabled { opacity: 0.6; cursor: progress; }
 
 .tc-keep-btn { height: 34px; padding: 0 16px; font-size: 12.5px; }
+
+
+/* ── Immersive mode + 魔法色 backdrop (Ticket UI-12) ──────────
+   Two radial gradients built from the cover art's palette, drifting on a
+   10s loop. It stays mounted at all times and only changes opacity, so the
+   colours can transition between songs instead of the layer popping in and
+   out of the tree. z-index sits below the shell but above the window
+   background. */
+.magic-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  opacity: 0;
+  /* The long colour transition is what makes a song change read as a fade
+     rather than a cut (Ticket UI-12 acceptance: "颜色过渡自然"). */
+  transition: opacity 0.9s ease, background-color 1.2s ease;
+  background-color: var(--magic-a);
+  background-image:
+    radial-gradient(60% 55% at 22% 28%, color-mix(in srgb, var(--magic-a) 85%, transparent), transparent 70%),
+    radial-gradient(55% 60% at 78% 72%, color-mix(in srgb, var(--magic-b) 80%, transparent), transparent 72%);
+  background-repeat: no-repeat;
+  animation: magic-drift 10s ease-in-out infinite alternate;
+  filter: saturate(1.1);
+}
+.magic-backdrop.active   { opacity: 0.42; }
+/* Immersive leans on it much harder — it's most of what's on screen. */
+.magic-backdrop.immersive.active { opacity: 0.78; }
+
+@keyframes magic-drift {
+  from { background-position: 0% 0%, 100% 100%; }
+  to   { background-position: 18% 12%, 82% 88%; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .magic-backdrop { animation: none; }
+}
+
+/* ── Immersive shell ─────────────────────────────────────────
+   The sidebar and top bar fade and lift out of the way rather than
+   unmounting: collapsing the grid tracks would reflow the content area and
+   force the waveform to re-render mid-transition. Keeping the tracks and
+   animating opacity/transform means only compositing changes. */
+.app-layout.immersive .app-sidebar,
+.app-layout.immersive .top-toolbar {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.3s ease, transform 0.3s ease;
+}
+.app-layout.immersive .app-sidebar { transform: translateX(-12px); }
+.app-layout.immersive .top-toolbar { transform: translateY(-8px); }
+
+/* No hover-to-reveal here on purpose: the faded chrome carries
+   pointer-events:none so it can't swallow clicks over the content beneath
+   it, and an element with pointer-events:none can never match :hover — a
+   reveal-on-hover rule would be dead CSS promising behaviour it cannot
+   deliver. Immersive mode is left with F, Escape, or the exit button. */
+
+.app-sidebar, .top-toolbar { transition: opacity 0.3s ease, transform 0.3s ease; }
+
+/* The content area gets the space the chrome vacated. */
+.app-layout.immersive .content-area {
+  padding-top: 12px;
+  transition: padding 0.3s ease;
+}
+
+.immersive-exit {
+  position: fixed;
+  top: 14px;
+  right: 18px;
+  z-index: 1000;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 14px;
+  border-radius: var(--radius-pill);
+  border: 1px solid color-mix(in srgb, var(--text) 18%, transparent);
+  background: color-mix(in srgb, var(--bg-panel) 72%, transparent);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  color: var(--text-muted);
+  font-size: 12px;
+  cursor: pointer;
+  opacity: 0.5;
+  transition: opacity 0.2s, color 0.2s, border-color 0.2s;
+}
+.immersive-exit:hover { opacity: 1; color: var(--text); border-color: var(--accent); }
