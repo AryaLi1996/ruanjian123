@@ -13,6 +13,9 @@ contextBridge.exposeInMainWorld('engine', {
   stream: (method: string, ...args: unknown[]): Promise<unknown> =>
     ipcRenderer.invoke('engine:stream', method, args),
 
+  /** Ticket UI-10: kills the streaming run in flight. Resolves true if one was killed. */
+  cancelStream: (): Promise<boolean> => ipcRenderer.invoke('engine:cancel'),
+
   saveTrainingFiles: (files: Array<{ name: string; buffer: ArrayBuffer }>): Promise<string> =>
     ipcRenderer.invoke('engine:save-files', files),
 
