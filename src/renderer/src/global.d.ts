@@ -29,6 +29,8 @@ export interface LibrarySong {
   artist:        string
   original_key:  string | null
   audio_url:     string
+  /** Album art when the catalogue provides it; null otherwise (Ticket UI-08). */
+  cover_url:     string | null
 }
 export interface LibrarySearchResult {
   results:  LibrarySong[]

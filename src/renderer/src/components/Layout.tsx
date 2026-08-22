@@ -14,6 +14,7 @@ import { CoverView }      from '../views/CoverView'
 import { AudioToolsView } from '../views/AudioToolsView'
 import { DataPrepView } from '../views/DataPrepView'
 import { PlaybackMonitorView } from '../views/PlaybackMonitorView'
+import { LibraryView } from '../views/LibraryView'
 import { SubscriptionView } from '../views/SubscriptionView'
 import { SettingsView } from '../views/SettingsView'
 import { SubscriptionGate } from './SubscriptionGate'
@@ -72,6 +73,7 @@ export function Layout(): JSX.Element {
     activeView === 'cover'     ? <CoverView />         :
     activeView === 'waveform'  ? <DataPrepView /> :
     activeView === 'playback'  ? <PlaybackMonitorView /> :
+    activeView === 'library'   ? <LibraryView /> :
                                  <AudioToolsView />
 
   // Ticket UI-02: the four-module shell — sidebar | (header / main) with a

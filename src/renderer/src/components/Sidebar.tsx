@@ -31,18 +31,16 @@ export function Sidebar(): JSX.Element {
   const { t } = useTranslation()
   const activeView      = useAppStore((s) => s.activeView)
   const setActiveView   = useAppStore((s) => s.setActiveView)
-  const setLibraryOpen  = useAppStore((s) => s.setLibraryOpen)
   const collapsed       = useLayoutStore((s) => s.sidebarCollapsed)
   const toggleSidebar   = useLayoutStore((s) => s.toggleSidebar)
   const subStatus       = useSubscriptionStore((s) => s.status)
   const avatarDataUrl   = useSettingsStore((s) => s.avatarDataUrl)
 
-  // 云曲库 is a modal owned by the Cover page rather than a view of its own,
-  // so this entry navigates there and asks it to open — see useAppStore's
-  // libraryOpen.
+  // 云曲库 became a page of its own in Ticket UI-08 (it used to be a modal
+  // owned by the Cover page). The modal still exists and is still reachable
+  // from Cover's own "browse" button, so useAppStore.libraryOpen stays.
   function openLibrary(): void {
-    setActiveView('cover')
-    setLibraryOpen(true)
+    setActiveView('library')
   }
 
   // Collapsed, every row is icon-only, so the accessible name has to come
@@ -75,8 +73,9 @@ export function Sidebar(): JSX.Element {
         {PRIMARY_NAV.map(renderNavButton)}
 
         <button
-          className="sb-nav-item"
+          className={`sb-nav-item${activeView === 'library' ? ' active' : ''}`}
           onClick={openLibrary}
+          aria-current={activeView === 'library' ? 'page' : undefined}
           title={collapsed ? t('nav.library') : undefined}
         >
           <span className="sb-nav-icon" aria-hidden="true">☁️</span>
