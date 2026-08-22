@@ -14,6 +14,13 @@
      --bg-panel; not applied everywhere by default since most panels here
      sit over other opaque panels, not the blurred backdrop. */
   --surface-glass:  rgba(255, 255, 255, 0.05);
+  /* Glassmorphism (Ticket UI-15 §1) — one definition for every floating
+     surface, so the top bar, player bar, popovers and floating cards can't
+     drift apart. Built from --bg-panel rather than a literal rgba so it
+     tracks the theme instead of pinning the dark palette. */
+  --glass-bg:     color-mix(in srgb, var(--bg-panel) 62%, transparent);
+  --glass-border: color-mix(in srgb, #fff 8%, transparent);
+  --glass-blur:   blur(20px) saturate(140%);
   --accent:         #6366f1;
   --accent-hover:   #a0a1f4;
   --accent-active:  #4346ff;
@@ -114,6 +121,10 @@
   --text:           #1a1d27;
   --text-muted:     #64748b;
   --border:         #dde1ec;
+  /* The dark theme's glass hairline is a white highlight, which vanishes on
+     a white surface — light gets a dark hairline instead so the glass
+     edges stay visible in both. */
+  --glass-border:   color-mix(in srgb, #0b0d12 10%, transparent);
 }
 
 /* Custom background image (Ticket 27/30) — surfaces go semi-transparent so
@@ -359,8 +370,14 @@ html, body, #root {
   min-width: 0;
   height: var(--topbar-h);
   padding: 0 20px;
-  background: var(--bg-panel);
-  border-bottom: 1px solid var(--border);
+  /* Glass (Ticket UI-15 §1): translucent so the magic backdrop and any
+     custom background image read through it. */
+  background: var(--glass-bg);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  border-bottom: 1px solid var(--glass-border);
+  position: relative;
+  z-index: 5;
 }
 
 .tb-context { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
@@ -3484,6 +3501,7 @@ html, body, #root {
 
 /* Skeletons keep the grid's exact geometry so results don't jump into
    place when they land. */
+/* Shares the .skeleton shimmer defined with the other motion utilities. */
 .lib-skel {
   background: linear-gradient(
     90deg,
@@ -3492,12 +3510,8 @@ html, body, #root {
     var(--bg-hover) 63%
   );
   background-size: 400% 100%;
-  animation: lib-shimmer 1.4s ease infinite;
+  animation: shimmer 1.4s ease infinite;
   border-radius: var(--radius);
-}
-@keyframes lib-shimmer {
-  from { background-position: 100% 50%; }
-  to   { background-position: 0 50%; }
 }
 .lib-skel-line { height: 11px; border-radius: 4px; }
 .lib-skel-line.short { width: 60%; }
@@ -3931,3 +3945,101 @@ html, body, #root {
 .ui-tab:hover  { color: var(--text); }
 .ui-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
 .immersive-exit:hover { opacity: 1; color: var(--text); border-color: var(--accent); }
+
+
+/* ── Micro-interactions & motion (Ticket UI-15) ──────────────
+   Everything below is transform/opacity only — those two are the
+   properties a browser can animate on the compositor, so a hover on a
+   crowded grid doesn't force layout on every sibling. */
+
+/* Hover lift for the app's clickable primitives. Scoped to the shared
+   button classes rather than a bare `button` selector: the app has plenty
+   of buttons that are icons inside dense rows, and lifting those would make
+   toolbars jitter as the pointer crosses them. */
+.btn:hover:not(:disabled),
+.ui-btn:hover:not(:disabled),
+.at-btn-core:hover:not(:disabled),
+.lib-select-btn:hover:not(:disabled),
+.pitch-card-apply:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.3);
+}
+.btn:active:not(:disabled),
+.ui-btn:active:not(:disabled),
+.at-btn-core:active:not(:disabled),
+.lib-select-btn:active:not(:disabled),
+.pitch-card-apply:active:not(:disabled) {
+  transform: translateY(0);
+  box-shadow: none;
+}
+.btn { transition: background 0.15s, opacity 0.15s, filter 0.15s, transform 0.14s ease, box-shadow 0.14s ease; }
+
+/* Card lift. .card is the app's panel primitive and many are static
+   containers, so only the ones that are actually a target for the pointer
+   opt in via .is-interactive. */
+.card.is-interactive,
+.mode-card,
+.sub-plan-card,
+.sub-method-card {
+  transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s;
+}
+.card.is-interactive:hover,
+.mode-card:hover,
+.sub-plan-card:hover,
+.sub-method-card:hover {
+  transform: scale(1.01);
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.28);
+}
+
+/* ── Page transition ─────────────────────────────────────────
+   <main> carries key={activeView} in Layout, so switching pages remounts
+   it and this runs on mount. animation-fill-mode is deliberately left at
+   the default: once it finishes, `transform` stops applying, so the
+   element does not remain a containing block for the fixed-position
+   cards and dialogs its subtree can render. */
+.content-area {
+  animation: page-enter 0.3s cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+@keyframes page-enter {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ── Shimmer skeleton ────────────────────────────────────────
+   Generalised from the library grid's own skeleton so any page can use it.
+   .lib-skel keeps working — it now just layers sizing on top of this. */
+.skeleton {
+  background: linear-gradient(
+    90deg,
+    var(--bg-hover) 25%,
+    color-mix(in srgb, var(--text) 12%, var(--bg-hover)) 37%,
+    var(--bg-hover) 63%
+  );
+  background-size: 400% 100%;
+  animation: shimmer 1.4s ease infinite;
+  border-radius: var(--radius);
+}
+@keyframes shimmer {
+  from { background-position: 100% 50%; }
+  to   { background-position: 0 50%; }
+}
+.skeleton-line { height: 11px; border-radius: 4px; }
+.skeleton-line.short { width: 60%; }
+
+/* Motion is decoration here; every effect above has a still resting state,
+   so switching them off costs nothing but the movement. */
+@media (prefers-reduced-motion: reduce) {
+  .content-area { animation: none; }
+  .skeleton, .lib-skel { animation: none; }
+  .btn:hover:not(:disabled),
+  .ui-btn:hover:not(:disabled),
+  .at-btn-core:hover:not(:disabled),
+  .lib-select-btn:hover:not(:disabled),
+  .pitch-card-apply:hover:not(:disabled),
+  .card.is-interactive:hover,
+  .mode-card:hover,
+  .sub-plan-card:hover,
+  .sub-method-card:hover {
+    transform: none;
+  }
+}
