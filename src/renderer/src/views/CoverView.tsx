@@ -6,6 +6,7 @@ import { StepWizard } from '../components/cover/StepWizard'
 import { StemPlayer, type StemTrack } from '../components/cover/StemPlayer'
 import { MixingConsole, type MixTrack } from '../components/cover/MixingConsole'
 import { ExportPanel } from '../components/cover/ExportPanel'
+import { TrainingDatasetPanel } from '../components/cover/TrainingDatasetPanel'
 import { PitchShiftSlider } from '../components/cover/PitchShiftSlider'
 import { PitchAnalysisPanel } from '../components/cover/PitchAnalysisPanel'
 import { HighPitchProtection } from '../components/cover/HighPitchProtection'
@@ -77,6 +78,10 @@ export function CoverView(): JSX.Element {
   const [synthesizing, setSynthesizing] = useState(false)
   const [coverResult,  setCoverResult]  = useState<CoverResult | null>(null)
   const [synthError,   setSynthError]   = useState<string | null>(null)
+  // Ticket 20 gates on Ticket 17 having actually run (not just that a vocal
+  // exists) — see <HighPitchProtection>'s onApplied below, and
+  // TrainingDatasetPanel's prereqProtection.
+  const [vocalProtected, setVocalProtected] = useState(false)
   const renderMixRef = useRef<(() => Promise<Float32Array>) | null>(null)
   const onExportRequest = useCallback((fn: () => Promise<Float32Array>) => {
     renderMixRef.current = fn
@@ -209,6 +214,7 @@ export function CoverView(): JSX.Element {
       // mixer renders; the user (or the mixer's own "proceed" button) is
       // what should trigger the move to step 4, once mixing is registered.
       setCoverResult(res)
+      setVocalProtected(false)   // fresh AI vocal — Ticket 17 hasn't run on it yet
       setCompleted((s) => new Set([...s, 3]))
       notify({
         category: 'taskCompletion',
@@ -466,9 +472,10 @@ export function CoverView(): JSX.Element {
                   it to override afterward. */}
               <HighPitchProtection
                 audioPath={coverResult.ai_vocal_path}
-                onApplied={(path) =>
+                onApplied={(path) => {
                   setCoverResult((prev) => (prev ? { ...prev, ai_vocal_path: path } : prev))
-                }
+                  setVocalProtected(true)
+                }}
                 originalKey={targetSong?.originalKey}
                 onRecommendedShift={(shift) => void handlePitchShiftChange(shift)}
               />
@@ -501,6 +508,24 @@ export function CoverView(): JSX.Element {
           <ExportPanel
             renderMix={renderMixRef.current}
             sampleRate={44_100}
+          />
+        </div>
+      )}
+
+      {/* ── Step 5 (Ticket 20) ───────────────────────────────
+          Reachable once synthesis (step 3) has produced an AI vocal —
+          independent of whether the user has exported a mixdown (step 4),
+          since building a training dataset doesn't need one. */}
+      {step === 5 && (
+        <div className="card">
+          <div className="card-title">⑤ {t('cover.trainingDataTitle')}</div>
+          <TrainingDatasetPanel
+            vocalPath={coverResult?.ai_vocal_path ?? null}
+            vocalProtected={vocalProtected}
+            dryVocalPath={sepResult?.stems['lead_dry'] ?? null}
+            targetSong={targetSong}
+            pitchShiftBusy={shifting}
+            onMerged={() => setCompleted((s) => new Set([...s, 5]))}
           />
         </div>
       )}

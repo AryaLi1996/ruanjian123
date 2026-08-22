@@ -29,7 +29,7 @@ const resources = {
       },
       status: { running: '正在运行：{{method}}', idle: '引擎就绪', training: '训练中：{{mode}}', separating: '正在分离…', synthesizing: '正在合成（{{mode}}）…', saved: '已保存：{{path}}', applyingHighPitchProtection: '正在应用高音保护…', highPitchProtectionApplied: '已应用模型音域，高音保护起点为D#4', highPitchProtectionAppliedWithShift: '已应用模型音域，高音保护起点为D#4 | 建议{{direction}}{{count}}个调' },
       training: {
-        title: '模型训练', description: '使用干声录音微调 AI 歌手的音色。', info: '模型信息', name: '模型名称 *', namePlaceholder: '例如：我的歌手', epochs: '训练轮数', material: '训练素材', noFiles: '未上传文件，将使用演示数据。', mode: '训练模式', start: '开始本地训练', training: '训练中…', complete: '✓ 训练完成', finalizing: '正在收尾…', finalizingDesc: '训练已完成，正在生成试听音频并保存模型。', audition: '试听', trainAnother: '训练另一个模型', models: '我的模型（{{count}}）', demo: '试听', retrain: '重新训练', delete: '删除', standard: '标准', professional: '专业', gpu: 'GPU', cpu: 'CPU', vram: '显存', epoch: '第 {{current}}/{{total}} 轮', loss: '损失 {{value}}', eta: '预计剩余 {{value}}', waiting: '等待引擎…', materialHint: '拖入干净的人声录音。', standardTagline: 'LoRA rank-4 · 仅训练音色编码器', professionalTagline: 'LoRA+ rank-8 · 全层训练 · 梯度检查点', dropAudio: '拖入音频文件，或点击浏览', audioFormats: 'WAV · FLAC · MP3 · OGG · M4A', fileCount: '{{count}} 个文件', totalDuration: '共 {{duration}}', clearAll: '全部清除', removeFile: '移除文件', loadingWaveform: '正在加载波形…', waveform: '波形', play: '播放', pause: '暂停', volume: '音量', noDemo: '暂无演示音频', lossLabel: '损失：{{value}}', pro: '专业', trainingGpu: 'GPU', trainingCpu: 'CPU', trainingVram: '显存', qualityLow: '音质较低',
+        title: '模型训练', description: '使用干声录音微调 AI 歌手的音色。', info: '模型信息', name: '模型名称 *', namePlaceholder: '例如：我的歌手', epochs: '训练轮数', material: '训练素材', noFiles: '未上传文件，将使用演示数据。', mode: '训练模式', start: '开始本地训练', training: '训练中…', complete: '✓ 训练完成', finalizing: '正在收尾…', finalizingDesc: '训练已完成，正在生成试听音频并保存模型。', audition: '试听', trainAnother: '训练另一个模型', models: '我的模型（{{count}}）', demo: '试听', retrain: '重新训练', delete: '删除', standard: '标准', professional: '专业', gpu: 'GPU', cpu: 'CPU', vram: '显存', epoch: '第 {{current}}/{{total}} 轮', loss: '损失 {{value}}', eta: '预计剩余 {{value}}', waiting: '等待引擎…', materialHint: '拖入干净的人声录音。', standardTagline: 'LoRA rank-4 · 仅训练音色编码器', professionalTagline: 'LoRA+ rank-8 · 全层训练 · 梯度检查点', dropAudio: '拖入音频文件，或点击浏览', audioFormats: 'WAV · FLAC · MP3 · OGG · M4A', fileCount: '{{count}} 个文件', totalDuration: '共 {{duration}}', clearAll: '全部清除', removeFile: '移除文件', loadingWaveform: '正在加载波形…', waveform: '波形', play: '播放', pause: '暂停', volume: '音量', noDemo: '暂无演示音频', lossLabel: '损失：{{value}}', pro: '专业', trainingGpu: 'GPU', trainingCpu: 'CPU', trainingVram: '显存', download: '下载模型', ready: '就绪', qualityLow: '音质较低',
       },
       cover: {
         title: '翻唱创作', description: '上传 → 分离 → 合成 → 混音 → 导出', upload: '上传并分离', song: '歌曲文件（WAV / FLAC / MP3）', chooseSong: '点击选择歌曲', separationMode: '分离模式', standard: '标准', enhanced: '增强', standardStems: '2 轨：人声 + 伴奏', enhancedStems: '3 轨：主唱 · 和声 · 伴奏', startSeparation: '开始分离', separating: '分离中…', stems: '音轨 — 点击独奏试听', nextModel: '下一步：选择模型 →', selectModel: '选择 AI 歌手模型', noModels: '还没有训练好的模型。请先前往模型训练。', algorithm: '翻唱算法', v1: 'V1 — 快速', v2: 'V2 — 高精度', v1Tagline: 'DTW + WSOLA · 实时率 ≤10%', v2Tagline: 'LSTM 表现力编码器 · 实时率 ≤50%', synthesize: '合成翻唱', synthesizing: '合成中…', nextSynthesize: '下一步：合成 →', mix: '合成与混音', mixer: '混音台', export: '下一步：导出 →', exportTitle: '导出音频',
@@ -65,6 +65,25 @@ const resources = {
         pitchShift: '调音（半音）', pitchShiftRecommended: '推荐移调：{{value}}',
         pitchShiftRecommendedTitle: '推荐移调：{{value}} 半音',
         pitchShiftApplyRecommended: '应用推荐值', pitchShiftProcessing: '正在处理移调音频…',
+        // Ticket 20: Merge Audio & Upload Training Dataset (consumes Ticket
+        // 17's 高音保护 and Ticket 19's 变调, both applied earlier in the
+        // wizard — this step just reads their results).
+        stepTrainingData: '训练数据集',
+        trainingDataTitle: '生成训练数据集', trainingDataDesc: '合并已应用高音保护的人声与变调后的目标歌曲，打包上传并开始云端训练。',
+        protectionTitle: '① 高音保护',
+        protectionApplied: '✓ 已应用高音保护（强制修音）',
+        protectionNeedsVocal: '请先完成合成与混音步骤，生成 AI 人声。',
+        protectionNotApplied: '请先在③混音步骤中应用高音保护。',
+        includeDryVocal: '同时包含干声人声轨（用于训练灵活性）',
+        mergeTitle: '② 合并所有音频', mergeAction: '合并所有音频', merging: '合并中…',
+        mergeBlockedTooltip: '请先完成：{{reasons}}',
+        mergeBlockedShifting: '正在处理变调音频，请稍候…',
+        prereqProtection: '高音保护', prereqTargetSong: '选择目标歌曲',
+        mergeResultInfo: '✓ 已合并：时长 {{duration}} 秒 · {{sampleRate}} Hz',
+        mergePadded: '（已用静音填充 {{sec}} 秒）', mergeTruncated: '（已截断 {{sec}} 秒）',
+        uploadTitle: '③ 上传并开始训练', uploadAction: '上传并开始训练', uploadNeedsMerge: '请先合并所有音频。',
+        phasePackaging: '正在打包…', phaseUploading: '正在上传…', phaseTraining: '云端训练中…',
+        phaseDone: '✓ 训练已开始', uploadResult: '模型：{{modelUrl}}',
       },
       // Ticket 18: Cloud Library (云曲库) search modal.
       library: {
@@ -160,6 +179,8 @@ const resources = {
         training: {
           complete: { title: '训练完成', message: '模型“{{modelName}}”已准备好使用。' },
           failed:   { title: '训练失败', message: '训练未能完成：{{message}}' },
+          downloaded: { title: '模型已下载', message: '模型“{{modelName}}”已加密并保存。' },
+          downloadFailed: { title: '模型下载失败', message: '下载未能完成：{{message}}' },
         },
         separation: {
           complete: { title: '分离完成', message: '音轨分离已完成（{{mode}}）。' },
@@ -176,6 +197,10 @@ const resources = {
         highPitchProtection: {
           complete: { title: '高音保护已应用', message: '已修正 {{count}} 处高音，高音保护起点为 D#4。' },
           failed:   { title: '高音保护失败', message: '高音保护未能完成：{{message}}' },
+        },
+        trainUpload: {
+          complete: { title: '训练已开始', message: '训练数据集已上传，云端训练任务已开始。' },
+          failed:   { title: '上传/训练失败', message: '未能上传训练数据集或启动训练：{{message}}' },
         },
         trial: {
           activated:     { title: '试用已激活', message: '你的免费试用已开始，尽情体验全部功能吧。' },
@@ -263,7 +288,7 @@ const resources = {
       common: { loading: 'Loading…', cancel: 'Cancel', retry: 'Retry', reset: 'Reset', refresh: 'Refresh', activate: 'Activate', deactivate: 'Deactivate', download: 'Download', error: 'Error', done: 'Done', unavailable: 'Unavailable' },
       updater: { ready: 'Update ready to install', install: 'Restart & Install', available: 'Update {{version}} available', downloading: 'Downloading…', download: 'Download' },
       status: { running: 'Running: {{method}}', idle: 'Engine ready', training: 'Training: {{mode}}', separating: 'Separating…', synthesizing: 'Synthesizing ({{mode}})…', saved: 'Saved: {{path}}', applyingHighPitchProtection: 'Applying high-pitch protection…', highPitchProtectionApplied: 'Model vocal range applied — high-pitch protection starts at D#4', highPitchProtectionAppliedWithShift: 'Model vocal range applied — high-pitch protection starts at D#4 | Recommended: shift {{direction}} by {{count}} semitone(s)' },
-      training: { title: 'Model Training', description: 'Fine-tune the AI singer\'s timbre using dry vocal recordings.', info: 'Model Info', name: 'Model name *', namePlaceholder: 'e.g. My Singer', epochs: 'Epochs', material: 'Training Material', noFiles: 'No files uploaded; synthetic demo data will be used.', mode: 'Training Mode', start: 'Start Local Training', training: 'Training…', complete: '✓ Training Complete', finalizing: 'Finalizing…', finalizingDesc: 'Training finished. Generating the demo clip and saving the model.', audition: 'Audition', trainAnother: 'Train Another Model', models: 'Your Models ({{count}})', demo: 'Demo', retrain: 'Retrain', delete: 'Delete', standard: 'Standard', professional: 'Professional', gpu: 'GPU', cpu: 'CPU', vram: 'VRAM', epoch: 'Epoch {{current}}/{{total}}', loss: 'Loss {{value}}', eta: 'ETA {{value}}', waiting: 'Waiting for engine…', materialHint: 'Drop clean vocal recordings here.', standardTagline: 'LoRA rank-4 · timbre encoder only', professionalTagline: 'LoRA+ rank-8 · all layers · gradient checkpointing', dropAudio: 'Drop audio files here, or click to browse', audioFormats: 'WAV · FLAC · MP3 · OGG · M4A', fileCount: '{{count}} file(s)', totalDuration: '{{duration}} total', clearAll: 'Clear all', removeFile: 'Remove file', loadingWaveform: 'Loading waveform…', waveform: 'waveform', play: 'Play', pause: 'Pause', volume: 'Volume', noDemo: 'No demo available', lossLabel: 'Loss: {{value}}', pro: 'Pro', trainingGpu: 'GPU', trainingCpu: 'CPU', trainingVram: 'VRAM', qualityLow: 'Quality may be low' },
+      training: { title: 'Model Training', description: 'Fine-tune the AI singer\'s timbre using dry vocal recordings.', info: 'Model Info', name: 'Model name *', namePlaceholder: 'e.g. My Singer', epochs: 'Epochs', material: 'Training Material', noFiles: 'No files uploaded; synthetic demo data will be used.', mode: 'Training Mode', start: 'Start Local Training', training: 'Training…', complete: '✓ Training Complete', finalizing: 'Finalizing…', finalizingDesc: 'Training finished. Generating the demo clip and saving the model.', audition: 'Audition', trainAnother: 'Train Another Model', models: 'Your Models ({{count}})', demo: 'Demo', retrain: 'Retrain', delete: 'Delete', standard: 'Standard', professional: 'Professional', gpu: 'GPU', cpu: 'CPU', vram: 'VRAM', epoch: 'Epoch {{current}}/{{total}}', loss: 'Loss {{value}}', eta: 'ETA {{value}}', waiting: 'Waiting for engine…', materialHint: 'Drop clean vocal recordings here.', standardTagline: 'LoRA rank-4 · timbre encoder only', professionalTagline: 'LoRA+ rank-8 · all layers · gradient checkpointing', dropAudio: 'Drop audio files here, or click to browse', audioFormats: 'WAV · FLAC · MP3 · OGG · M4A', fileCount: '{{count}} file(s)', totalDuration: '{{duration}} total', clearAll: 'Clear all', removeFile: 'Remove file', loadingWaveform: 'Loading waveform…', waveform: 'waveform', play: 'Play', pause: 'Pause', volume: 'Volume', noDemo: 'No demo available', lossLabel: 'Loss: {{value}}', pro: 'Pro', trainingGpu: 'GPU', trainingCpu: 'CPU', trainingVram: 'VRAM', download: 'Download Model', ready: 'Ready', qualityLow: 'Quality may be low' },
       cover: { title: 'Cover Creation', description: 'Upload → Separate → Synthesize → Mix → Export', upload: 'Upload & Separate', song: 'Song file (WAV / FLAC / MP3)', chooseSong: 'Click to choose a song', separationMode: 'Separation mode', standard: 'Standard', enhanced: 'Enhanced', standardStems: '2 stems — vocals + accompaniment', enhancedStems: '3 stems — lead · harmony · accompaniment', startSeparation: 'Start Separation', separating: 'Separating…', stems: 'Stems — click Solo to preview', nextModel: 'Next: Select Model →', selectModel: 'Select AI Singer Model', noModels: 'No models trained yet. Go to Model Training first.', algorithm: 'Cover algorithm', v1: 'V1 — Fast', v2: 'V2 — High-Precision', v1Tagline: 'DTW + WSOLA · ≤10% real-time', v2Tagline: 'LSTM expression encoder · ≤50% RT', synthesize: 'Synthesize Cover', synthesizing: 'Synthesizing…', nextSynthesize: 'Next: Synthesize →', mix: 'Synthesize & Mix', mixer: 'Mixing Console', export: 'Next: Export →', exportTitle: 'Export Audio',
         errUploadFirst: 'Please upload a song first.', errSelectModel: 'Select a model first.', errRunSeparation: 'Run separation first.',
         labelVocals: 'Vocals', labelAccompaniment: 'Accompaniment', labelLeadDry: 'Lead (dry)', labelHarmonyDry: 'Harmony (dry)',
@@ -297,6 +322,25 @@ const resources = {
         pitchShift: 'Tune (semitones)', pitchShiftRecommended: 'Recommended shift: {{value}}',
         pitchShiftRecommendedTitle: 'Recommended shift: {{value}} semitones',
         pitchShiftApplyRecommended: 'Apply recommended', pitchShiftProcessing: 'Re-processing shifted audio…',
+        // Ticket 20: Merge Audio & Upload Training Dataset (consumes Ticket
+        // 17's high-pitch protection and Ticket 19's pitch shift, both
+        // applied earlier in the wizard — this step just reads their results).
+        stepTrainingData: 'Training Dataset',
+        trainingDataTitle: 'Build Training Dataset', trainingDataDesc: 'Merge the high-pitch-protected vocal with the pitch-shifted target song, then package and upload it to start cloud training.',
+        protectionTitle: '① High-Pitch Protection',
+        protectionApplied: '✓ High-pitch protection applied (forced auto-tune)',
+        protectionNeedsVocal: 'Complete the synthesize & mix step first to generate an AI vocal.',
+        protectionNotApplied: 'Apply high-pitch protection in step ③ (Mix) first.',
+        includeDryVocal: 'Also include the dry vocal track (for training flexibility)',
+        mergeTitle: '② Merge All Audio', mergeAction: 'Merge All Audio', merging: 'Merging…',
+        mergeBlockedTooltip: 'Complete first: {{reasons}}',
+        mergeBlockedShifting: 'Pitch-shift processing in progress — please wait…',
+        prereqProtection: 'high-pitch protection', prereqTargetSong: 'target song selection',
+        mergeResultInfo: '✓ Merged: {{duration}}s · {{sampleRate}} Hz',
+        mergePadded: ' (padded with {{sec}}s of silence)', mergeTruncated: ' (truncated {{sec}}s)',
+        uploadTitle: '③ Upload & Start Training', uploadAction: 'Upload & Start Training', uploadNeedsMerge: 'Merge all audio first.',
+        phasePackaging: 'Packaging…', phaseUploading: 'Uploading…', phaseTraining: 'Training in the cloud…',
+        phaseDone: '✓ Training started', uploadResult: 'Model: {{modelUrl}}',
       },
       // Ticket 18: Cloud Library search modal.
       library: {
@@ -390,6 +434,8 @@ const resources = {
         training: {
           complete: { title: 'Training Complete', message: 'Model "{{modelName}}" is ready to use.' },
           failed:   { title: 'Training Failed', message: 'Training did not complete: {{message}}' },
+          downloaded: { title: 'Model Downloaded', message: 'Model "{{modelName}}" was encrypted and saved.' },
+          downloadFailed: { title: 'Model Download Failed', message: 'Download did not complete: {{message}}' },
         },
         separation: {
           complete: { title: 'Separation Complete', message: 'Stem separation finished ({{mode}}).' },
@@ -406,6 +452,10 @@ const resources = {
         highPitchProtection: {
           complete: { title: 'High-Pitch Protection Applied', message: 'Corrected {{count}} high-pitch region(s); protection starts at D#4.' },
           failed:   { title: 'High-Pitch Protection Failed', message: 'High-pitch protection did not complete: {{message}}' },
+        },
+        trainUpload: {
+          complete: { title: 'Training Started', message: 'The training dataset was uploaded and the cloud training job has started.' },
+          failed:   { title: 'Upload/Training Failed', message: 'Could not upload the training dataset or start training: {{message}}' },
         },
         trial: {
           activated:    { title: 'Trial Activated', message: 'Your free trial has started — enjoy full access.' },

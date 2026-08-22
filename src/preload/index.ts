@@ -43,6 +43,12 @@ contextBridge.exposeInMainWorld('engine', {
   fetchLibraryAudio: (song: unknown): Promise<{ path: string; cached: boolean }> =>
     ipcRenderer.invoke('library:fetch-audio', song),
 
+  // Upload & Start Training (Ticket 20)
+  uploadTrainDataset: (zipPath: string, taskId: string, config: unknown): Promise<unknown> =>
+    ipcRenderer.invoke('train:upload', zipPath, taskId, config),
+  getTrainStatus: (taskId: string): Promise<unknown> =>
+    ipcRenderer.invoke('train:status', taskId),
+
   // Report renderer crashes caught by the React error boundary
   logRendererError: (payload: unknown): Promise<void> =>
     ipcRenderer.invoke('log:renderer-error', payload),
@@ -56,6 +62,9 @@ contextBridge.exposeInMainWorld('engine', {
     ipcRenderer.invoke('model:encrypt', modelPath),
   decryptVerify:    (encPath: string): Promise<{ decrypted: boolean; error?: string }> =>
     ipcRenderer.invoke('model:decrypt-verify', encPath),
+  // Encrypt + save-dialog a trained model to a user-chosen location (Ticket 21)
+  downloadModel:    (modelPath: string, defaultName: string): Promise<string | null> =>
+    ipcRenderer.invoke('model:download', modelPath, defaultName),
 
   // Trained-model library persistence (survives app restart)
   loadModels: (): Promise<unknown[]> => ipcRenderer.invoke('models:load'),
