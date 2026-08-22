@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { useSubscriptionStore } from '../store/useSubscriptionStore'
 import { notify } from '../store/useNotificationStore'
 import { BrandLogo } from '../components/brand/BrandLogo'
+import { badgeFor, checkoutBlocker, resolvePaymentMethods } from './subscription-ui'
 import type {
   ActivationResult,
   LicenseConfig,
@@ -55,30 +56,6 @@ function displayOriginalPrice(plan: PlanInfo, language: string): { amount: numbe
   return language.startsWith('en')
     ? { amount: plan.originalPriceUSD, currency: 'USD' }
     : { amount: plan.originalPrice, currency: plan.currency }
-}
-
-// Display fallback only — the live picker gets its name/icon/color straight
-// from the server (see PaymentMethodInfo / getPaymentMethods), which is now
-// the source of truth. This stays around for two cases that never go
-// through that live list: rendering a *historical* order/payment-history
-// row whose method may no longer be in the currently-available set, and a
-// defensive fallback if an older/newer server build ever omits a field.
-const METHOD_BADGE: Record<PaymentMethod, { glyph: string; color: string }> = {
-  wechat_pay: { glyph: '微', color: '#07c160' },
-  alipay:     { glyph: '支', color: '#1677ff' },
-  douyin_pay: { glyph: '抖', color: '#000000' },
-  card:       { glyph: '💳', color: 'var(--accent)' },
-}
-
-// Prefers the server-supplied icon/color; falls back to METHOD_BADGE above
-// when a field is missing. `color: null` (server's card entry) intentionally
-// resolves to the current theme accent rather than a fixed brand hex.
-function badgeFor(method: PaymentMethodInfo): { glyph: string; color: string } {
-  const fallback = METHOD_BADGE[method.id]
-  return {
-    glyph: method.icon || fallback?.glyph || '💳',
-    color: method.color || fallback?.color || 'var(--accent)',
-  }
 }
 
 type OrderPhase = 'idle' | 'creating' | 'pending' | 'success' | 'error'
@@ -206,24 +183,30 @@ export function SubscriptionView(): JSX.Element {
 
   useEffect(() => { loadPlans() }, [loadPlans])
 
-  // A fetch failure and a genuinely-empty response are both treated as "no
-  // methods available right now" — same friendly notice + retry either way
-  // (see render below), since the user has no way to tell those apart and
-  // neither should look like a broken app.
+  // WIN-SYNC-02/04: a fetch failure or an empty response falls back to the
+  // build's own method list rather than replacing the picker with an
+  // "unavailable" notice — the payment entry point is never allowed to
+  // disappear. See resolvePaymentMethods() for why that's safe.
   const loadMethods = useCallback(() => {
     setMethodsLoading(true)
+    const apply = (list: PaymentMethodInfo[]): void => {
+      const resolved = resolvePaymentMethods(
+        list,
+        config?.paymentMethods ?? [],
+        (id) => t(`subscription.method.${id}`),
+      )
+      setMethods(resolved)
+      // Keep the current selection if it's still offered; otherwise
+      // auto-select when there's exactly one option (skips the picker
+      // entirely, see render below) and clear it when there are none/many.
+      setSelectedMethod((prev) =>
+        (prev && resolved.some((m) => m.id === prev) ? prev : (resolved.length === 1 ? resolved[0].id : null)))
+    }
     window.engine.getPaymentMethods(i18n.language)
-      .then((list) => {
-        setMethods(list)
-        // Keep the current selection if it's still offered; otherwise
-        // auto-select when there's exactly one option (skips the picker
-        // entirely, see render below) and clear it when there are none/many.
-        setSelectedMethod((prev) =>
-          (prev && list.some((m) => m.id === prev) ? prev : (list.length === 1 ? list[0].id : null)))
-      })
-      .catch(() => setMethods([]))
+      .then(apply)
+      .catch(() => apply([]))
       .finally(() => setMethodsLoading(false))
-  }, [i18n.language])
+  }, [i18n.language, config, t])
 
   // Re-fetch when the user switches the app language (Settings) so the
   // picker's server-supplied names stay in sync — every other string on
@@ -358,8 +341,17 @@ export function SubscriptionView(): JSX.Element {
     })
   }, [order, orderPhase, stopPolling, loadHistory, t])
 
+  // WIN-SYNC-02 §2: reachable at any time — the Pay button is never
+  // disabled, so a missing choice is reported here instead of being
+  // expressed as a greyed-out control. License state is not checked: an
+  // unlicensed/invalid token is exactly the state a buyer is in, and the
+  // order endpoint does the only authorization that counts.
   async function handleSubscribe(): Promise<void> {
-    if (!selectedPlan || !selectedMethod) return
+    if (!selectedPlan || !selectedMethod) {
+      const blocker = checkoutBlocker(selectedPlan, selectedMethod)
+      setOrderError(t(blocker === 'plan' ? 'subscription.selectPlanFirst' : 'subscription.selectMethodFirst'))
+      return
+    }
     setOrderError(null)
     setOrderPhase('creating')
     try {
@@ -403,8 +395,18 @@ export function SubscriptionView(): JSX.Element {
     setActivating(true); setError(null); setSuccess(null)
     try {
       const res = await window.engine.activateLicense(key.trim()) as ActivationResult
-      if (res.success) setSuccess('✓ License activated! All features unlocked.')
-      else             setError(res.error ?? 'Activation failed')
+      if (res.success) {
+        setSuccess(t('subscription.activateSuccess'))
+        setKey('')
+        // The main process pushes the new state over onLicenseStateChange,
+        // but ask for a refresh too so the status card above flips out of
+        // "✕ Invalid token" immediately rather than on the next poll.
+        window.engine.refreshLicense().catch(() => {})
+      } else {
+        // WIN-SYNC-03 §2: one plain, actionable message. The server's own
+        // error string is opaque/untranslated, so it never reaches the user.
+        setError(t('subscription.activateInvalid'))
+      }
     } catch (err) {
       setError(String(err))
     } finally {
@@ -520,232 +522,256 @@ export function SubscriptionView(): JSX.Element {
       </div>
 
       {/* ── Plan + payment method → Subscribe / Renew ────── */}
-      {(status === 'unlicensed' || status === 'expired' || status === 'grace_period' || status === 'active') && (
-        <div className="card">
-          <div className="card-title">
-            {status === 'unlicensed' ? t('subscription.activateTitle') : t('subscription.renewTitle')}
-          </div>
+      {/* WIN-SYNC-04: rendered for every license status, including 'invalid'
+          and 'loading'. Hiding the plans/payment/activation controls behind a
+          valid token locked out precisely the users who need them — an
+          invalid or missing token is a reason to show the purchase path, not
+          to remove it. The status card above is the only place license state
+          is surfaced; authorization is checked when an order is created or a
+          key is activated, never at render time. `config` is likewise not
+          required to render: every value read from it has a fallback. */}
+      <div className="card">
+        <div className="card-title">
+          {subscribed ? t('subscription.renewTitle') : t('subscription.activateTitle')}
+        </div>
 
-          {orderPhase === 'idle' && config && (
-            <>
-              <div className="sub-plan-picker">
-                <span className="sub-field-label">{t('subscription.choosePlan')}</span>
+        {orderPhase === 'idle' && (
+          <>
+            <div className="sub-plan-picker">
+              <span className="sub-field-label">{t('subscription.choosePlan')}</span>
 
-                {plansLoading && (
-                  <div className="sub-methods-loading">
-                    <div className="sub-spinner" />
-                    <span>{t('subscription.plansLoading')}</span>
-                  </div>
-                )}
+              {plansLoading && (
+                <div className="sub-methods-loading">
+                  <div className="sub-spinner" />
+                  <span>{t('subscription.plansLoading')}</span>
+                </div>
+              )}
 
-                {!plansLoading && plans.length === 0 && (
-                  <div className="notice-banner">
-                    <span>{t('subscription.plansUnavailable')}</span>
-                    <button type="button" className="btn btn-ghost notice-banner-btn" onClick={loadPlans}>
-                      {t('common.retry')}
-                    </button>
-                  </div>
-                )}
+              {!plansLoading && plans.length === 0 && (
+                <div className="notice-banner">
+                  <span>{t('subscription.plansUnavailable')}</span>
+                  <button type="button" className="btn btn-ghost notice-banner-btn" onClick={loadPlans}>
+                    {t('common.retry')}
+                  </button>
+                </div>
+              )}
 
-                {!plansLoading && plans.length > 0 && (
-                  <div className="sub-plan-grid">
-                    {plans.map((plan) => {
-                      // Ticket 36 §4: shown in RMB (zh) or its USD equivalent
-                      // (en) — see displayPrice()/displayOriginalPrice().
-                      // Actual billing always happens in plan.currency
-                      // regardless of which one is shown.
-                      const planDisplay = displayPrice(plan, i18n.language)
-                      const originalDisplay = plan.discountPercent > 0 ? displayOriginalPrice(plan, i18n.language) : null
-                      // "Best value" tracks whichever plan(s) carry the steepest
-                      // discount, not a hardcoded 'annual' id — a future 5th
-                      // tier with a bigger cut is highlighted automatically,
-                      // and the client makes no pricing assumption of its own.
-                      const isBestValue = maxPlanDiscount > 0 && plan.discountPercent === maxPlanDiscount
-                      return (
-                        <button
-                          key={plan.id}
-                          type="button"
-                          className={`sub-plan-card${selectedPlan === plan.id ? ' sub-plan-card-selected' : ''}${isBestValue ? ' sub-plan-card-best' : ''}`}
-                          onClick={() => setSelectedPlan(plan.id)}
-                        >
-                          {isBestValue && <span className="sub-plan-ribbon">{t('subscription.bestValue')}</span>}
-                          <strong className="sub-plan-name">{t(`subscription.plans.${plan.id}`)}</strong>
-                          <span className="sub-plan-desc">{t(`subscription.planDesc.${plan.id}`)}</span>
-                          <div className="sub-plan-price-row">
-                            {originalDisplay != null && (
-                              <span className="sub-plan-price-original">
-                                {formatPrice(originalDisplay.amount, originalDisplay.currency, i18n.language)}
-                              </span>
-                            )}
-                            <span className="sub-plan-price-final">
-                              {formatPrice(planDisplay.amount, planDisplay.currency, i18n.language)}
-                            </span>
-                          </div>
-                          {plan.discountPercent > 0 && (
-                            <span className="sub-plan-discount-badge">
-                              {t('subscription.discountBadge', { percent: plan.discountPercent })}
+              {!plansLoading && plans.length > 0 && (
+                <div className="sub-plan-grid">
+                  {plans.map((plan) => {
+                    // Ticket 36 §4: shown in RMB (zh) or its USD equivalent
+                    // (en) — see displayPrice()/displayOriginalPrice().
+                    // Actual billing always happens in plan.currency
+                    // regardless of which one is shown.
+                    const planDisplay = displayPrice(plan, i18n.language)
+                    const originalDisplay = plan.discountPercent > 0 ? displayOriginalPrice(plan, i18n.language) : null
+                    // "Best value" tracks whichever plan(s) carry the steepest
+                    // discount, not a hardcoded 'annual' id — a future 5th
+                    // tier with a bigger cut is highlighted automatically,
+                    // and the client makes no pricing assumption of its own.
+                    const isBestValue = maxPlanDiscount > 0 && plan.discountPercent === maxPlanDiscount
+                    return (
+                      <button
+                        key={plan.id}
+                        type="button"
+                        className={`sub-plan-card${selectedPlan === plan.id ? ' sub-plan-card-selected' : ''}${isBestValue ? ' sub-plan-card-best' : ''}`}
+                        onClick={() => { setSelectedPlan(plan.id); setOrderError(null) }}
+                      >
+                        {isBestValue && <span className="sub-plan-ribbon">{t('subscription.bestValue')}</span>}
+                        <strong className="sub-plan-name">{t(`subscription.plans.${plan.id}`)}</strong>
+                        <span className="sub-plan-desc">{t(`subscription.planDesc.${plan.id}`)}</span>
+                        <div className="sub-plan-price-row">
+                          {originalDisplay != null && (
+                            <span className="sub-plan-price-original">
+                              {formatPrice(originalDisplay.amount, originalDisplay.currency, i18n.language)}
                             </span>
                           )}
-                        </button>
-                      )
-                    })}
-                  </div>
-                )}
-              </div>
-
-              <div className="sub-method-picker">
-                <span className="sub-field-label">{t('subscription.choosePayment')}</span>
-
-                {methodsLoading && (
-                  <div className="sub-methods-loading">
-                    <div className="sub-spinner" />
-                    <span>{t('subscription.methodsLoading')}</span>
-                  </div>
-                )}
-
-                {!methodsLoading && methods.length === 0 && (
-                  <div className="notice-banner">
-                    <span>{t('subscription.methodsUnavailable')}</span>
-                    <button type="button" className="btn btn-ghost notice-banner-btn" onClick={loadMethods}>
-                      {t('common.retry')}
-                    </button>
-                  </div>
-                )}
-
-                {/* Exactly one method available: skip the selection step
-                    entirely — a single large, direct CTA (Ticket 31 §2/§4). */}
-                {!methodsLoading && methods.length === 1 && (
-                  <button
-                    type="button"
-                    className="btn btn-primary sub-method-single"
-                    onClick={handleSubscribe}
-                    disabled={!selectedPlan}
-                  >
-                    <span className="sub-method-badge" style={{ background: badgeFor(methods[0]).color }}>
-                      {badgeFor(methods[0]).glyph}
-                    </span>
-                    {t('subscription.payWith', { method: methods[0].name })}
-                  </button>
-                )}
-
-                {!methodsLoading && methods.length > 1 && (
-                  <div className="sub-method-grid">
-                    {methods.map((method) => (
-                      <button
-                        key={method.id}
-                        type="button"
-                        className={`sub-method-card${selectedMethod === method.id ? ' sub-method-card-selected' : ''}`}
-                        onClick={() => setSelectedMethod(method.id)}
-                      >
-                        <span className="sub-method-badge" style={{ background: badgeFor(method).color }}>
-                          {badgeFor(method).glyph}
-                        </span>
-                        <span>{method.name}</span>
+                          <span className="sub-plan-price-final">
+                            {formatPrice(planDisplay.amount, planDisplay.currency, i18n.language)}
+                          </span>
+                        </div>
+                        {plan.discountPercent > 0 && (
+                          <span className="sub-plan-discount-badge">
+                            {t('subscription.discountBadge', { percent: plan.discountPercent })}
+                          </span>
+                        )}
                       </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              {/* Ticket 34 §3 / Ticket 36 §4: total due, shown once a plan is
-                  picked — regardless of the method picker's single-CTA vs.
-                  grid shape. Shown in RMB or its USD equivalent per language;
-                  the actual charge is always in selectedPlanInfo.currency. */}
-              {selectedPlanInfo && selectedPlanDisplay && (
-                <p className="sub-charge-summary">
-                  {t('subscription.chargeSummary', {
-                    amount: formatPrice(selectedPlanDisplay.amount, selectedPlanDisplay.currency, i18n.language),
-                    period: t('subscription.periodMonths', { count: monthsFor(selectedPlanInfo) }),
+                    )
                   })}
-                </p>
+                </div>
+              )}
+            </div>
+
+            <div className="sub-method-picker">
+              <span className="sub-field-label">{t('subscription.choosePayment')}</span>
+
+              {methodsLoading && (
+                <div className="sub-methods-loading">
+                  <div className="sub-spinner" />
+                  <span>{t('subscription.methodsLoading')}</span>
+                </div>
               )}
 
-              {/* The single-method case already has its own CTA above. */}
-              {methods.length > 1 && (
+              {!methodsLoading && methods.length === 0 && (
+                <div className="notice-banner">
+                  <span>{t('subscription.methodsUnavailable')}</span>
+                  <button type="button" className="btn btn-ghost notice-banner-btn" onClick={loadMethods}>
+                    {t('common.retry')}
+                  </button>
+                </div>
+              )}
+
+              {/* Exactly one method available: skip the selection step
+                  entirely — a single large, direct CTA (Ticket 31 §2/§4). */}
+              {!methodsLoading && methods.length === 1 && (
                 <button
-                  className="btn btn-primary sub-checkout-btn"
+                  type="button"
+                  className="btn btn-primary sub-method-single"
                   onClick={handleSubscribe}
-                  disabled={!selectedMethod || !selectedPlan}
-                  style={{ marginTop: 14 }}
                 >
-                  💳 {t('subscription.payNow')}
+                  <span className="sub-method-badge" style={{ background: badgeFor(methods[0]).color }}>
+                    {badgeFor(methods[0]).glyph}
+                  </span>
+                  {t('subscription.payWith', { method: methods[0].name })}
                 </button>
               )}
-            </>
-          )}
 
-          {orderPhase === 'creating' && (
-            <div className="sub-order-status">
-              <div className="sub-spinner" />
-              <p>{t('subscription.creatingOrder')}</p>
+              {!methodsLoading && methods.length > 1 && (
+                <div className="sub-method-grid">
+                  {methods.map((method) => (
+                    <button
+                      key={method.id}
+                      type="button"
+                      className={`sub-method-card${selectedMethod === method.id ? ' sub-method-card-selected' : ''}`}
+                      onClick={() => { setSelectedMethod(method.id); setOrderError(null) }}
+                    >
+                      <span className="sub-method-badge" style={{ background: badgeFor(method).color }}>
+                        {badgeFor(method).glyph}
+                      </span>
+                      <span>{method.name}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
-          )}
 
-          {orderPhase === 'pending' && order && (
-            <div className="sub-order-status">
-              <div className="sub-spinner" />
-              <p>{t('subscription.waitingPayment')}</p>
-              <p className="sub-cta-desc">{t(waitingHintKey[order.method])}</p>
-              <p className="sub-cta-desc">
-                {formatAmount(order.amount, order.currency, i18n.language)} · {t(`subscription.method.${order.method}`)}
+            {/* Ticket 34 §3 / Ticket 36 §4: total due, shown once a plan is
+                picked — regardless of the method picker's single-CTA vs.
+                grid shape. Shown in RMB or its USD equivalent per language;
+                the actual charge is always in selectedPlanInfo.currency. */}
+            {selectedPlanInfo && selectedPlanDisplay && (
+              <p className="sub-charge-summary">
+                {t('subscription.chargeSummary', {
+                  amount: formatPrice(selectedPlanDisplay.amount, selectedPlanDisplay.currency, i18n.language),
+                  period: t('subscription.periodMonths', { count: monthsFor(selectedPlanInfo) }),
+                })}
               </p>
-              <button className="btn btn-ghost" onClick={handleCancelOrder}>
-                {t('subscription.cancelPayment')}
+            )}
+
+            {/* The single-method case already has its own CTA above; every
+                other case (including "no methods listed") gets this one.
+                WIN-SYNC-02 §2: never disabled — clicking without a choice
+                made explains what's missing (see handleSubscribe), which
+                beats a greyed-out button that explains nothing. The label
+                carries the amount due once a plan is picked. */}
+            {methods.length !== 1 && (
+              <button
+                className="btn btn-primary sub-checkout-btn"
+                onClick={handleSubscribe}
+                style={{ marginTop: 14 }}
+              >
+                💳 {selectedPlanDisplay
+                  ? t('subscription.payNowAmount', {
+                      amount: formatPrice(selectedPlanDisplay.amount, selectedPlanDisplay.currency, i18n.language),
+                    })
+                  : t('subscription.payNow')}
+              </button>
+            )}
+
+            {/* handleSubscribe's "choose a plan/method first" hint — the
+                order stays in the 'idle' phase, so it isn't covered by the
+                'error'-phase block further down. */}
+            {orderError && (
+              <div className="error-banner" style={{ marginTop: 10 }}>{orderError}</div>
+            )}
+          </>
+        )}
+
+        {orderPhase === 'creating' && (
+          <div className="sub-order-status">
+            <div className="sub-spinner" />
+            <p>{t('subscription.creatingOrder')}</p>
+          </div>
+        )}
+
+        {orderPhase === 'pending' && order && (
+          <div className="sub-order-status">
+            <div className="sub-spinner" />
+            <p>{t('subscription.waitingPayment')}</p>
+            <p className="sub-cta-desc">{t(waitingHintKey[order.method])}</p>
+            <p className="sub-cta-desc">
+              {formatAmount(order.amount, order.currency, i18n.language)} · {t(`subscription.method.${order.method}`)}
+            </p>
+            <button className="btn btn-ghost" onClick={handleCancelOrder}>
+              {t('subscription.cancelPayment')}
+            </button>
+          </div>
+        )}
+
+        {orderPhase === 'success' && (
+          <div className="sub-order-status">
+            <div className="sub-success">{t('subscription.paymentSuccess')}</div>
+            <button className="btn btn-ghost" onClick={handleRetry} style={{ marginTop: 10 }}>
+              {t('common.done')}
+            </button>
+          </div>
+        )}
+
+        {orderPhase === 'error' && (
+          <div className="sub-order-status">
+            <div className="error-banner">{orderError}</div>
+            <button className="btn btn-primary" onClick={handleRetry} style={{ marginTop: 10 }}>
+              {t('subscription.tryAgain')}
+            </button>
+          </div>
+        )}
+
+        {/* ── Manual key activation (legacy / email-delivered keys) ──
+            WIN-SYNC-03: sits under the payment area behind a divider, and
+            — like the plan/payment controls above — is offered for every
+            license status. A user holding a key bought elsewhere reaches
+            this page precisely *because* the current token is invalid.
+            Hidden only while an order is in flight, so the two paths can't
+            race each other. */}
+        {orderPhase === 'idle' && (
+          <div className="sub-activation">
+            <div className="sub-activation-divider" />
+            <span className="sub-field-label">{t('subscription.activateKey')}</span>
+            <div className="sub-activation-row">
+              <input
+                className="input sub-activation-input"
+                placeholder={t('subscription.keyPlaceholder')}
+                value={key}
+                onChange={(e) => setKey(e.target.value.toUpperCase())}
+                onKeyDown={(e) => e.key === 'Enter' && handleActivate()}
+                disabled={activating}
+                aria-label={t('subscription.activateKey')}
+              />
+              {/* Secondary (outlined) next to the filled Pay button above,
+                  so the two never compete for the same emphasis. */}
+              <button
+                className="btn btn-ghost sub-activate-btn"
+                onClick={handleActivate}
+                disabled={activating || !key.trim()}
+              >
+                {activating ? `⏳ ${t('subscription.activating')}` : t('common.activate')}
               </button>
             </div>
-          )}
-
-          {orderPhase === 'success' && (
-            <div className="sub-order-status">
-              <div className="sub-success">{t('subscription.paymentSuccess')}</div>
-              <button className="btn btn-ghost" onClick={handleRetry} style={{ marginTop: 10 }}>
-                {t('common.done')}
-              </button>
-            </div>
-          )}
-
-          {orderPhase === 'error' && (
-            <div className="sub-order-status">
-              <div className="error-banner">{orderError}</div>
-              <button className="btn btn-primary" onClick={handleRetry} style={{ marginTop: 10 }}>
-                {t('subscription.tryAgain')}
-              </button>
-            </div>
-          )}
-
-          {/* ── Manual key activation (legacy / email-delivered keys) ── */}
-          {(status === 'unlicensed' || status === 'expired' || status === 'grace_period') && orderPhase === 'idle' && (
-            <div style={{ marginTop: 20 }}>
-              <label className="field" style={{ marginBottom: 8 }}>
-                <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>
-                  {t('subscription.activateKey')}
-                </span>
-              </label>
-              <div className="row" style={{ alignItems: 'flex-start' }}>
-                <input
-                  className="input"
-                  placeholder={t('subscription.keyPlaceholder')}
-                  value={key}
-                  onChange={(e) => setKey(e.target.value.toUpperCase())}
-                  onKeyDown={(e) => e.key === 'Enter' && handleActivate()}
-                  disabled={activating}
-                  style={{ flex: 1, fontFamily: 'monospace' }}
-                />
-                <button
-                  className="btn btn-primary"
-                  onClick={handleActivate}
-                  disabled={activating || !key.trim()}
-                  style={{ flexShrink: 0 }}
-                >
-                  {activating ? `⏳ ${t('subscription.activating')}` : t('common.activate')}
-                </button>
-              </div>
-              {error   && <div className="error-banner"  style={{ marginTop: 10 }}>{error}</div>}
-              {success && <div className="sub-success"   style={{ marginTop: 10 }}>{success}</div>}
-            </div>
-          )}
-        </div>
-      )}
+            {error   && <div className="error-banner"  style={{ marginTop: 10 }}>{error}</div>}
+            {success && <div className="sub-success"   style={{ marginTop: 10 }}>{success}</div>}
+          </div>
+        )}
+      </div>
 
       {/* ── Payment history ───────────────────────────────── */}
       <div className="card">
