@@ -3329,200 +3329,242 @@ html, body, #root {
 .at-arrow:disabled { opacity: 0.3; cursor: default; }
 
 
-/* ── Pitch analysis floating card (Ticket UI-07) ─────────────
-   Fixed to the viewport rather than placed in flow: it's dismissible,
-   draggable, and must never push the editor around when it appears. The
-   z-index sits above the player bar (10) but below modals/toasts (1100+),
-   so it floats over the workspace without covering a dialog. */
-.pitch-card {
-  position: fixed;
-  z-index: 900;
-  width: 300px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  padding: 14px 16px 16px;
-  border-radius: var(--radius-lg);
-  border: 1px solid var(--border);
-  background: color-mix(in srgb, var(--bg-panel) 92%, transparent);
-  backdrop-filter: blur(16px) saturate(130%);
-  -webkit-backdrop-filter: blur(16px) saturate(130%);
-  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.42);
-  animation: pitch-card-in 0.2s ease-out;
-  transition: box-shadow 0.6s ease, border-color 0.6s ease;
-}
-@keyframes pitch-card-in {
-  from { opacity: 0; transform: translateY(-8px) scale(0.98); }
-  to   { opacity: 1; transform: translateY(0) scale(1); }
-}
-/* The attention glow, dropped after 3s (see GLOW_MS) — the transition above
-   is what makes it settle rather than snap. */
-.pitch-card.glowing {
-  border-color: color-mix(in srgb, var(--accent) 60%, transparent);
-  box-shadow:
-    0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent),
-    0 0 28px color-mix(in srgb, var(--accent) 38%, transparent),
-    0 18px 48px rgba(0, 0, 0, 0.42);
-}
+/* ── Cloud library page (Ticket UI-08) ───────────────────────
+   Cover-first grid: the artwork is the primary way a user recognises a
+   track, so it gets the visual weight and the text stays to one line each. */
+.lib-view { display: flex; flex-direction: column; }
 
-.pitch-card-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  margin: -2px -4px 0;
-  padding: 2px 4px 8px;
-  border-bottom: 1px solid var(--border);
-  cursor: grab;
-  user-select: none;
-  touch-action: none;
-}
-.pitch-card-header:active { cursor: grabbing; }
-.pitch-card-title { font-size: 12.5px; font-weight: 700; color: var(--text); }
-.pitch-card-close {
-  border: 0;
-  background: transparent;
-  color: var(--text-muted);
-  font-size: 13px;
-  line-height: 1;
-  padding: 2px 4px;
-  cursor: pointer;
-  border-radius: 4px;
-}
-.pitch-card-close:hover { color: var(--text); background: var(--bg-hover); }
-
-.pitch-card-stats { display: flex; flex-direction: column; gap: 9px; margin: 0; }
-.pitch-card-stat {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 12px;
-}
-.pitch-card-stat dt {
-  font-size: 11.5px;
-  color: var(--text-muted);
-  flex-shrink: 0;
-}
-.pitch-card-value {
-  margin: 0;
-  font-size: 14px;
-  font-weight: 700;
-  color: var(--text);
-  font-variant-numeric: tabular-nums;
-  text-align: right;
-}
-.pitch-card-max       { color: var(--accent); }
-.pitch-card-threshold { color: var(--warning); }
-
-.pitch-card-empty { margin: 0; font-size: 12px; color: var(--text-muted); line-height: 1.6; }
-
-/* The card's one action, as the pill-shaped primary the ticket asks for. */
-.pitch-card-apply {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 7px;
-  width: 100%;
-  height: 38px;
-  padding: 0 18px;
-  border: 1px solid transparent;
-  border-radius: var(--radius-pill);
-  background: var(--accent-gradient);
-  color: var(--on-accent);
-  font-size: 13px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: filter 0.15s, transform 0.12s, background 0.2s, color 0.2s;
-}
-.pitch-card-apply:hover:not(:disabled)  { filter: brightness(1.08); transform: translateY(-1px); }
-.pitch-card-apply:active:not(:disabled) { filter: brightness(0.94); transform: none; }
-.pitch-card-apply:disabled {
-  cursor: not-allowed;
-  background: var(--bg);
-  border-color: var(--border);
-  color: var(--text-muted);
-  filter: none;
-  transform: none;
-}
-.pitch-card-apply.applied:disabled {
-  background: color-mix(in srgb, var(--success) 20%, transparent);
-  border-color: var(--success);
-  color: var(--success);
-}
-
-
-/* ── Training console (Ticket UI-10) ─────────────────────────
-   Progress on top, a terminal-style log beneath. The log is deliberately
-   *not* themed to the app surface: a monospaced light-on-black pane is the
-   convention for machine output and reads as such at a glance. */
-.tc-console { display: flex; flex-direction: column; }
-
-/* The bar goes green once the run finishes (§5), overriding the accent fill. */
-.progress-track.tc-done .progress-fill { background: var(--success); }
-
-.tc-eta { color: var(--accent); font-variant-numeric: tabular-nums; }
-
-.tc-log {
-  height: 220px;
-  overflow-y: auto;
-  padding: 12px 14px;
-  border-radius: var(--radius);
-  border: 1px solid var(--border);
-  background: #0b0d12;
-  font-family: 'JetBrains Mono', 'Fira Code', Consolas, monospace;
-  font-size: 11px;
-  line-height: 1.65;
-  /* The tail is what matters, so new lines settle at the bottom rather than
-     the block starting from the top while it's still short. */
-  display: flex;
-  flex-direction: column;
-  justify-content: flex-end;
-  /* Own scroll region — the wheel over it shouldn't also move the page. */
-  overscroll-behavior: contain;
-}
-.tc-log-line {
-  color: rgba(226, 232, 240, 0.82);
-  word-break: break-all;
-  white-space: pre-wrap;
-  flex-shrink: 0;
-}
-.tc-log-muted    { color: rgba(226, 232, 240, 0.45); }
-.tc-log-ok       { color: #4ade80; }
-.tc-log-complete { font-weight: 700; margin-top: 4px; }
-
-.tc-actions {
+.lib-search {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 10px;
-  flex-wrap: wrap;
-  margin-top: 14px;
+  max-width: 520px;
+  margin-bottom: 22px;
+  padding: 0 14px;
+  height: 42px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border);
+  background: var(--bg);
+  transition: border-color 0.15s, box-shadow 0.15s;
 }
-.tc-confirm-text { font-size: 12.5px; color: var(--text); margin-right: 2px; }
+.lib-search:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+.lib-search-icon { font-size: 13px; opacity: 0.7; flex-shrink: 0; }
+.lib-search-input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: 13.5px;
+  outline: none;
+}
+.lib-search-clear {
+  flex-shrink: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1;
+  padding: 4px;
+  border-radius: 50%;
+  cursor: pointer;
+}
+.lib-search-clear:hover { color: var(--text); background: var(--bg-hover); }
 
-/* Destructive, so it never wears the accent: outlined until it's the armed
-   confirmation, then filled red. */
-.tc-cancel-btn {
+.lib-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
+  gap: 20px 18px;
+}
+
+.lib-card { display: flex; flex-direction: column; gap: 7px; min-width: 0; }
+
+.lib-cover {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  border-radius: var(--radius);
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  /* The scale happens on the cover, not the whole card, so the titles below
+     stay put and the grid never reflows on hover. */
+  transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.15s;
+}
+.lib-card:hover .lib-cover {
+  transform: scale(1.05);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.4);
+}
+.lib-cover img { width: 100%; height: 100%; object-fit: cover; }
+.lib-cover-initial {
+  font-size: 38px;
+  font-weight: 700;
+  color: rgba(255, 255, 255, 0.9);
+  text-shadow: 0 2px 10px rgba(0, 0, 0, 0.35);
+  user-select: none;
+}
+
+.lib-cover-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(8, 10, 16, 0.55);
+  opacity: 0;
+  transition: opacity 0.16s ease;
+}
+.lib-card:hover .lib-cover-overlay,
+.lib-card:focus-within .lib-cover-overlay { opacity: 1; }
+
+.lib-select-btn {
   display: inline-flex;
   align-items: center;
   gap: 7px;
   height: 34px;
   padding: 0 16px;
+  border: 0;
   border-radius: var(--radius-pill);
-  border: 1px solid var(--danger);
-  background: transparent;
-  color: var(--danger);
+  background: var(--accent-gradient);
+  color: var(--on-accent);
   font-size: 12.5px;
-  font-weight: 500;
+  font-weight: 600;
   cursor: pointer;
-  transition: background 0.15s, color 0.15s, filter 0.15s;
+  transition: filter 0.15s, transform 0.12s;
 }
-.tc-cancel-btn:hover:not(:disabled) { background: color-mix(in srgb, var(--danger) 14%, transparent); }
-.tc-cancel-btn.danger {
-  background: var(--danger);
-  color: #fff;
+.lib-select-btn:hover:not(:disabled) { filter: brightness(1.08); transform: translateY(-1px); }
+.lib-select-btn:disabled { opacity: 0.6; cursor: progress; }
+
+.lib-selected-badge {
+  position: absolute;
+  top: 8px; right: 8px;
+  width: 22px; height: 22px;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--on-accent);
+  font-size: 12px;
+  font-weight: 700;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
 }
-.tc-cancel-btn.danger:hover:not(:disabled) { filter: brightness(1.08); }
-.tc-cancel-btn:disabled { opacity: 0.6; cursor: progress; }
+/* The selected card keeps its accent ring whether or not it's hovered. */
+.lib-card.selected .lib-cover {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent);
+}
+
+.lib-card-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.lib-card-artist {
+  font-size: 11.5px;
+  color: var(--text-muted);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* Skeletons keep the grid's exact geometry so results don't jump into
+   place when they land. */
+.lib-skel {
+  background: linear-gradient(
+    90deg,
+    var(--bg-hover) 25%,
+    color-mix(in srgb, var(--text) 12%, var(--bg-hover)) 37%,
+    var(--bg-hover) 63%
+  );
+  background-size: 400% 100%;
+  animation: lib-shimmer 1.4s ease infinite;
+  border-radius: var(--radius);
+}
+@keyframes lib-shimmer {
+  from { background-position: 100% 50%; }
+  to   { background-position: 0 50%; }
+}
+.lib-skel-line { height: 11px; border-radius: 4px; }
+.lib-skel-line.short { width: 60%; }
+.lib-card-skeleton .lib-cover { border: 0; }
+
+.lib-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 56px 20px;
+  text-align: center;
+}
+.lib-empty-icon { font-size: 40px; opacity: 0.5; }
+
+.lib-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  margin-top: 26px;
+}
+.lib-page-info { font-size: 12px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+
+/* ── Target song pin (Ticket UI-09) ──────────────────────────
+   Sits in the top bar so "which song am I covering" is answered from every
+   page. The breathing glow marks it as live state rather than a static
+   label; it stops for reduced-motion users. */
+.target-pin {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex-shrink: 0;
+  max-width: 260px;
+  padding: 5px 6px 5px 5px;
+  border-radius: var(--radius-pill);
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  animation: target-pin-pulse 2.6s ease-in-out infinite;
+}
+@keyframes target-pin-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 26%, transparent); }
+  50%      { box-shadow: 0 0 14px 2px color-mix(in srgb, var(--accent) 26%, transparent); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .target-pin { animation: none; }
+}
+
+.target-pin-cover {
+  width: 32px; height: 32px;
+  flex-shrink: 0;
+  border-radius: 8px;
+  overflow: hidden;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 15px; font-weight: 700;
+  color: rgba(255, 255, 255, 0.92);
+}
+.target-pin-cover img { width: 100%; height: 100%; object-fit: cover; }
+
+.target-pin-text { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.target-pin-title {
+  font-size: 12px; font-weight: 600; color: var(--text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.target-pin-meta { font-size: 10.5px; color: var(--accent); font-variant-numeric: tabular-nums; }
+
+.target-pin-clear {
+  flex-shrink: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1;
+  padding: 4px;
+  border-radius: 50%;
+  cursor: pointer;
+}
+.target-pin-clear:hover { color: var(--danger); background: var(--bg-hover); }
 
 .tc-keep-btn { height: 34px; padding: 0 16px; font-size: 12.5px; }
 
@@ -3655,3 +3697,88 @@ html, body, #root {
   margin: 0; font-size: 11px; color: var(--text-muted);
   text-align: center; line-height: 1.5;
 }
+/* ── Immersive mode + 魔法色 backdrop (Ticket UI-12) ──────────
+   Two radial gradients built from the cover art's palette, drifting on a
+   10s loop. It stays mounted at all times and only changes opacity, so the
+   colours can transition between songs instead of the layer popping in and
+   out of the tree. z-index sits below the shell but above the window
+   background. */
+.magic-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  opacity: 0;
+  /* The long colour transition is what makes a song change read as a fade
+     rather than a cut (Ticket UI-12 acceptance: "颜色过渡自然"). */
+  transition: opacity 0.9s ease, background-color 1.2s ease;
+  background-color: var(--magic-a);
+  background-image:
+    radial-gradient(60% 55% at 22% 28%, color-mix(in srgb, var(--magic-a) 85%, transparent), transparent 70%),
+    radial-gradient(55% 60% at 78% 72%, color-mix(in srgb, var(--magic-b) 80%, transparent), transparent 72%);
+  background-repeat: no-repeat;
+  animation: magic-drift 10s ease-in-out infinite alternate;
+  filter: saturate(1.1);
+}
+.magic-backdrop.active   { opacity: 0.42; }
+/* Immersive leans on it much harder — it's most of what's on screen. */
+.magic-backdrop.immersive.active { opacity: 0.78; }
+
+@keyframes magic-drift {
+  from { background-position: 0% 0%, 100% 100%; }
+  to   { background-position: 18% 12%, 82% 88%; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .magic-backdrop { animation: none; }
+}
+
+/* ── Immersive shell ─────────────────────────────────────────
+   The sidebar and top bar fade and lift out of the way rather than
+   unmounting: collapsing the grid tracks would reflow the content area and
+   force the waveform to re-render mid-transition. Keeping the tracks and
+   animating opacity/transform means only compositing changes. */
+.app-layout.immersive .app-sidebar,
+.app-layout.immersive .top-toolbar {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.3s ease, transform 0.3s ease;
+}
+.app-layout.immersive .app-sidebar { transform: translateX(-12px); }
+.app-layout.immersive .top-toolbar { transform: translateY(-8px); }
+
+/* No hover-to-reveal here on purpose: the faded chrome carries
+   pointer-events:none so it can't swallow clicks over the content beneath
+   it, and an element with pointer-events:none can never match :hover — a
+   reveal-on-hover rule would be dead CSS promising behaviour it cannot
+   deliver. Immersive mode is left with F, Escape, or the exit button. */
+
+.app-sidebar, .top-toolbar { transition: opacity 0.3s ease, transform 0.3s ease; }
+
+/* The content area gets the space the chrome vacated. */
+.app-layout.immersive .content-area {
+  padding-top: 12px;
+  transition: padding 0.3s ease;
+}
+
+.immersive-exit {
+  position: fixed;
+  top: 14px;
+  right: 18px;
+  z-index: 1000;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 14px;
+  border-radius: var(--radius-pill);
+  border: 1px solid color-mix(in srgb, var(--text) 18%, transparent);
+  background: color-mix(in srgb, var(--bg-panel) 72%, transparent);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  color: var(--text-muted);
+  font-size: 12px;
+  cursor: pointer;
+  opacity: 0.5;
+  transition: opacity 0.2s, color 0.2s, border-color 0.2s;
+}
+.immersive-exit:hover { opacity: 1; color: var(--text); border-color: var(--accent); }

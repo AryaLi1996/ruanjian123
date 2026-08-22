@@ -74,13 +74,28 @@ describe('normalizeSong()', () => {
   it('passes through a well-formed remote row', () => {
     const song = normalizeSong({ id: 42, title: '浮夸', artist: '陈奕迅', original_key: 'F#m', audio_url: 'https://cdn.example.com/a.mp3' })
     expect(song).toEqual({
-      id: '42', title: '浮夸', artist: '陈奕迅', original_key: 'F#m', audio_url: 'https://cdn.example.com/a.mp3',
+      id: '42', title: '浮夸', artist: '陈奕迅', original_key: 'F#m',
+      audio_url: 'https://cdn.example.com/a.mp3', cover_url: null,
     })
   })
 
   it('defaults missing optional fields instead of throwing', () => {
     const song = normalizeSong({ id: 'x', title: 'Song' })
-    expect(song).toEqual({ id: 'x', title: 'Song', artist: '', original_key: null, audio_url: '' })
+    expect(song).toEqual({ id: 'x', title: 'Song', artist: '', original_key: null, audio_url: '', cover_url: null })
+  })
+
+  // Ticket UI-08: covers arrive under several different names depending on
+  // the catalogue, so normalizeSong accepts the common aliases.
+  it('picks up cover art under any of the accepted field names', () => {
+    for (const key of ['cover_url', 'coverUrl', 'pic_url', 'picUrl', 'album_art', 'cover']) {
+      const song = normalizeSong({ id: '1', title: 'S', [key]: 'https://cdn/x.jpg' })
+      expect(song?.cover_url).toBe('https://cdn/x.jpg')
+    }
+  })
+
+  it('ignores a non-string or empty cover field', () => {
+    expect(normalizeSong({ id: '1', title: 'S', cover_url: 42 })?.cover_url).toBeNull()
+    expect(normalizeSong({ id: '1', title: 'S', cover_url: '' })?.cover_url).toBeNull()
   })
 
   it('rejects a row missing id or title', () => {

@@ -4,6 +4,8 @@ import { useAppStore } from '../store/useAppStore'
 import { useSettingsStore } from '../store/useSettingsStore'
 import { useSubscriptionStore } from '../store/useSubscriptionStore'
 import { usePlayerStore } from '../store/usePlayerStore'
+import { useImmersiveStore } from '../store/useImmersiveStore'
+import { extractPalette } from '../utils/palette'
 import { formatDuration, pcmToWavBlob } from '../utils/audio'
 import { computePeaks, drawWaveform, crossCorrelateOffset } from '../utils/waveform'
 import { parseLRC, findLyricIndex, extractEmbeddedLyrics, type LyricLine } from '../utils/lrc'
@@ -615,6 +617,19 @@ export function PlaybackMonitorView(): JSX.Element {
     // on the object identity would redraw on every unrelated render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [thumbTrackId])
+
+  // Ticket UI-12: derive the immersive backdrop from the current song's
+  // artwork. Keyed on the URL so it re-extracts when the song changes and
+  // not on every unrelated render, and guarded against a late resolve from
+  // a previous song landing after a newer one has already been set.
+  const coverArtUrl = activeSong?.coverArtUrl ?? null
+  useEffect(() => {
+    const setPalette = useImmersiveStore.getState().setPalette
+    if (!coverArtUrl) { setPalette(null); return }
+    let active = true
+    void extractPalette(coverArtUrl).then((palette) => { if (active) setPalette(palette) })
+    return () => { active = false }
+  }, [coverArtUrl])
 
   useEffect(() => {
     usePlayerStore.getState().setNowPlaying({
