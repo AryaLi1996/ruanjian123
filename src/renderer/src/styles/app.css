@@ -3522,3 +3522,178 @@ html, body, #root {
 .tc-cancel-btn:disabled { opacity: 0.6; cursor: progress; }
 
 .tc-keep-btn { height: 34px; padding: 0 16px; font-size: 12.5px; }
+
+
+/* ── Model library cards (Ticket UI-11) ──────────────────────
+   Slightly wider tracks than the old grid so the stat rows and the footer
+   actions fit without wrapping at 3-4 per row. */
+.model-grid { grid-template-columns: repeat(auto-fill, minmax(212px, 1fr)); }
+
+.model-card {
+  display: flex;
+  flex-direction: column;
+  transition: border-color 0.15s, transform 0.15s, box-shadow 0.15s;
+}
+.model-card:hover { transform: translateY(-2px); box-shadow: 0 12px 28px rgba(0, 0, 0, 0.32); }
+.model-card.applied { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+
+.model-card-cover { position: relative; }
+
+/* Revealed on hover/focus, the way a playlist tile does it. */
+.mc-hover {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(8, 10, 16, 0.5);
+  opacity: 0;
+  transition: opacity 0.16s ease;
+}
+.model-card:hover .mc-hover,
+.model-card:focus-within .mc-hover { opacity: 1; }
+
+.mc-play {
+  width: 52px; height: 52px;
+  display: flex; align-items: center; justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: var(--accent-gradient);
+  color: var(--on-accent);
+  font-size: 19px;
+  cursor: pointer;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
+  transition: transform 0.14s ease, filter 0.15s;
+}
+.mc-play:hover:not(:disabled) { transform: scale(1.08); filter: brightness(1.08); }
+.mc-play:disabled {
+  background: var(--bg-hover);
+  color: var(--text-muted);
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+.mc-applied-badge {
+  position: absolute;
+  top: 8px; left: 8px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--on-accent);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.mc-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+}
+.mc-badge.ok   { background: color-mix(in srgb, var(--success) 18%, transparent); color: var(--success); }
+.mc-badge.warn { background: color-mix(in srgb, var(--warning) 20%, transparent); color: var(--warning); }
+
+.mc-stats { display: flex; flex-direction: column; gap: 3px; margin: 8px 0 0; }
+.mc-stats > div { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.mc-stats dt { font-size: 11px; color: var(--text-muted); }
+.mc-stats dd { margin: 0; font-size: 11.5px; color: var(--text); font-variant-numeric: tabular-nums; }
+
+.model-card-actions { align-items: center; gap: 6px; }
+
+.mc-apply {
+  flex: 1;
+  min-width: 0;
+  height: 30px;
+  padding: 0 12px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-pill);
+  background: var(--accent-gradient);
+  color: var(--on-accent);
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  transition: filter 0.15s, background 0.2s, color 0.2s, border-color 0.2s;
+}
+.mc-apply:hover { filter: brightness(1.08); }
+/* Already applied: reads as a state, not as the next thing to click. */
+.mc-apply.applied {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.mc-icon {
+  width: 28px; height: 28px;
+  flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text-muted);
+  font-size: 12px;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s;
+}
+.mc-icon:hover        { border-color: var(--accent); color: var(--text); }
+.mc-icon.danger:hover { border-color: var(--danger); color: var(--danger); }
+
+.mc-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 44px 20px;
+  text-align: center;
+}
+.mc-empty-art  { font-size: 44px; opacity: 0.45; }
+.mc-empty-text { font-size: 13px; color: var(--text-muted); margin: 0; }
+
+/* ── Confirmation dialog (Ticket UI-11) ──────────────────────
+   Above the floating pitch card (900) and the player bar (10), below the
+   toast layer (1400) so a completion toast still reaches the user. */
+.confirm-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1150;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(8, 10, 16, 0.7);
+  animation: confirm-fade 0.14s ease-out;
+}
+@keyframes confirm-fade { from { opacity: 0; } to { opacity: 1; } }
+
+.confirm-card {
+  width: min(400px, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 22px 24px 18px;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border);
+  background: var(--bg-panel);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.5);
+}
+.confirm-title   { font-size: 15px; font-weight: 700; color: var(--text); }
+.confirm-message { margin: 0; font-size: 13px; color: var(--text-muted); line-height: 1.6; }
+.confirm-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 8px; }
+.confirm-cancel  { height: 34px; padding: 0 18px; font-size: 12.5px; }
+.confirm-ok {
+  height: 34px;
+  padding: 0 18px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--accent-gradient);
+  color: var(--on-accent);
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: filter 0.15s;
+}
+.confirm-ok:hover { filter: brightness(1.08); }
+.confirm-ok.danger { background: var(--danger); color: #fff; }

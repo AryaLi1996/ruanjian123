@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
-import { useAppStore } from '../store/useAppStore'
+import { useAppStore, type TrainedModel } from '../store/useAppStore'
 import { notify, useNotificationStore } from '../store/useNotificationStore'
 import { playCompletionChime } from '../utils/sound'
 import { AudioDropzone } from '../components/training/AudioDropzone'
@@ -8,6 +8,7 @@ import { ModeSelector, type TrainingMode } from '../components/training/ModeSele
 import { TrainingProgress, type ProgressData } from '../components/training/TrainingProgress'
 import { AudioPlayer } from '../components/training/AudioPlayer'
 import { ModelCard } from '../components/training/ModelCard'
+import { ConfirmDialog } from '../components/common/ConfirmDialog'
 
 type Phase = 'idle' | 'training' | 'finalizing' | 'done'
 
@@ -65,6 +66,8 @@ export function TrainingView(): JSX.Element {
   // ── training state ───────────────────────────────────────
   const [phase,       setPhase]       = useState<Phase>('idle')
   const [cancelling,  setCancelling]  = useState(false)
+  // The model queued for deletion, held until the user confirms (Ticket UI-11).
+  const [pendingDelete, setPendingDelete] = useState<TrainedModel | null>(null)
   const [progress,    setProgress]    = useState<ProgressData | null>(null)
   const [logs,        setLogs]        = useState<string[]>([])
   const [result,      setResult]      = useState<TrainingResult | null>(null)
@@ -75,6 +78,10 @@ export function TrainingView(): JSX.Element {
   const [playingModelId, setPlayingModelId] = useState<string | null>(null)
 
   const trainedModels  = useAppStore((s) => s.trainedModels)
+  // Ticket UI-11's 应用模型: the app already tracks which model inference
+  // should use, so "apply" is exactly setting it — no new state needed.
+  const selectedModel  = useAppStore((s) => s.selectedModel)
+  const setSelectedModel = useAppStore((s) => s.setSelectedModel)
   const addModel       = useAppStore((s) => s.addModel)
   const removeModel    = useAppStore((s) => s.removeModel)
   const updateModelDemo = useAppStore((s) => s.updateModelDemo)
@@ -290,7 +297,7 @@ export function TrainingView(): JSX.Element {
   }
 
   // ── delete a model card ───────────────────────────────────
-  function handleDelete(m: typeof trainedModels[0]): void {
+  function handleDelete(m: TrainedModel): void {
     if (playingModelId === m.id) setPlayingModelId(null)
     if (m.demoAudioUrl) URL.revokeObjectURL(m.demoAudioUrl)
     removeModel(m.id)
@@ -482,15 +489,28 @@ export function TrainingView(): JSX.Element {
       )}
 
       {/* ── Model list ────────────────────────────────────── */}
-      {trainedModels.length > 0 && (
+      {phase === 'idle' && (
         <div className="card" style={{ marginTop: 32 }}>
           <div className="card-title">{t('training.models', { count: trainedModels.length })}</div>
+
+          {/* Ticket UI-11 §5: the section stays put when empty and says what
+              to do next, rather than vanishing and leaving the page looking
+              like the library doesn't exist. */}
+          {trainedModels.length === 0 ? (
+            <div className="mc-empty">
+              <div className="mc-empty-art" aria-hidden="true">🎤</div>
+              <p className="mc-empty-text">{t('training.emptyLibrary')}</p>
+            </div>
+          ) : (
           <div className="model-grid">
             {trainedModels.map((m) => (
               <div key={m.id}>
                 <ModelCard
                   model={m}
-                  onDelete={() => handleDelete(m)}
+                  applied={selectedModel === m.onnxPath}
+                  playing={playingModelId === m.id}
+                  onApply={() => setSelectedModel(m.onnxPath)}
+                  onDelete={() => setPendingDelete(m)}
                   onRetrain={() => handleRetrain(m)}
                   onPlay={() => void handlePlay(m)}
                   onDownload={() => void handleDownload(m.onnxPath, m.name)}
@@ -503,7 +523,19 @@ export function TrainingView(): JSX.Element {
               </div>
             ))}
           </div>
+          )}
         </div>
+      )}
+
+      {pendingDelete && (
+        <ConfirmDialog
+          danger
+          title={t('training.deleteTitle')}
+          message={t('training.deleteConfirm', { name: pendingDelete.name })}
+          confirmLabel={t('training.delete')}
+          onConfirm={() => { handleDelete(pendingDelete); setPendingDelete(null) }}
+          onCancel={() => setPendingDelete(null)}
+        />
       )}
     </>
   )
