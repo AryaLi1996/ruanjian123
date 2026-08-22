@@ -1,23 +1,26 @@
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import i18n from '../i18n'
-import { useAppStore, type ActiveView } from '../store/useAppStore'
+import { useAppStore } from '../store/useAppStore'
 import { useSubscriptionStore } from '../store/useSubscriptionStore'
-import { useSettingsStore } from '../store/useSettingsStore'
 import { notify } from '../store/useNotificationStore'
-import { BrandLogo } from './brand/BrandLogo'
 import { NotificationCenter } from './notifications/NotificationCenter'
 
-interface NavItem { view: ActiveView; icon: string; key: string }
 interface UpdateInfo { version?: string }
 
-const NAV_ITEMS: NavItem[] = [
-  { view: 'training',    icon: '🏋️', key: 'training' },
-  { view: 'cover',       icon: '🎤', key: 'cover' },
-  { view: 'audio-tools', icon: '🔊', key: 'audioTools' },
-  { view: 'waveform',    icon: '〰️', key: 'waveform' },
-  { view: 'playback',    icon: '🎚️', key: 'playback' },
-]
+// Ticket UI-02 §2: the top bar shows *context* — which workspace is open and
+// what it's currently working on — rather than carrying the navigation
+// itself, which moved to the sidebar. The per-view key here is the same one
+// the sidebar labels with, so the two never disagree about a page's name.
+const VIEW_TITLE_KEY: Record<string, string> = {
+  training:     'nav.training',
+  cover:        'nav.cover',
+  'audio-tools': 'nav.audioTools',
+  waveform:     'nav.waveform',
+  playback:     'nav.playback',
+  subscription: 'nav.user',
+  settings:     'nav.settings',
+}
 
 // Ticket 37 §4 improvement: persisted (not just an in-memory ref) so a
 // version the user already saw and dismissed stays silent across app
@@ -42,8 +45,8 @@ export function TopToolbar(): JSX.Element {
   const engineStatus  = useAppStore((s) => s.engineStatus)
   const statusSticky  = useAppStore((s) => s.statusSticky)
   const setActiveView = useAppStore((s) => s.setActiveView)
+  const targetSong    = useAppStore((s) => s.targetSong)
   const subStatus     = useSubscriptionStore((s) => s.status)
-  const avatarDataUrl = useSettingsStore((s) => s.avatarDataUrl)
 
   const [updateInfo,     setUpdateInfo] = useState<UpdateInfo | null>(null)
   const [downloading,    setDownloading] = useState(false)
@@ -98,26 +101,24 @@ export function TopToolbar(): JSX.Element {
     return unsub
   }, [])
 
+  // The context line under the page title: whatever the current workspace is
+  // actually operating on. The engine's own status wins while it's busy
+  // (training/separating/synthesizing is the most relevant thing to show),
+  // otherwise the selected target song, if any.
+  const contextText = engineBusy
+    ? engineStatus
+    : targetSong
+      ? `${targetSong.title}${targetSong.artist ? ` — ${targetSong.artist}` : ''}`
+      : null
+
   return (
     <header className="top-toolbar">
-      <div className="tb-brand">
-        <BrandLogo variant="simple" size={24} className="tb-logo" />
-        <span className="tb-title">{t('app.name')}</span>
+      <div className="tb-context">
+        <span className="tb-view-title">{t(VIEW_TITLE_KEY[activeView] ?? 'nav.training')}</span>
+        {contextText && (
+          <span className="tb-context-text" title={contextText}>{contextText}</span>
+        )}
       </div>
-
-      <nav className="tb-nav" role="navigation" aria-label="Main navigation">
-        {NAV_ITEMS.map(({ view, icon, key }) => (
-          <button
-            key={view}
-            className={`tb-nav-item${activeView === view ? ' active' : ''}`}
-            onClick={() => setActiveView(view)}
-            aria-current={activeView === view ? 'page' : undefined}
-          >
-            <span className="nav-icon" aria-hidden="true">{icon}</span>
-            <span className="tb-nav-label">{t(`nav.${key}`)}</span>
-          </button>
-        ))}
-      </nav>
 
       <div className="tb-right">
         {/* PATCH-02 §4: a sticky status outlives the busy flag, so an
@@ -169,18 +170,6 @@ export function TopToolbar(): JSX.Element {
             <option value="en-US">{t('language.en')}</option>
           </select>
         </label>
-
-        <button
-          className={`tb-settings-btn${activeView === 'settings' ? ' active' : ''}`}
-          onClick={() => setActiveView('settings')}
-          title={t('settings.title')}
-          aria-current={activeView === 'settings' ? 'page' : undefined}
-        >
-          {avatarDataUrl
-            ? <img src={avatarDataUrl} alt="" className="tb-settings-avatar" />
-            : <span aria-hidden="true">⚙️</span>}
-          <span className="sr-only">{t('settings.title')}</span>
-        </button>
       </div>
     </header>
   )

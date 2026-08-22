@@ -33,7 +33,12 @@ export function CoverView(): JSX.Element {
   // Ticket 18: the 云曲库-selected song, if any — see useAppStore's TargetSong.
   const targetSong    = useAppStore((s) => s.targetSong)
   const setTargetSong = useAppStore((s) => s.setTargetSong)
-  const [libraryOpen, setLibraryOpen] = useState(false)
+  // Ticket UI-02: lifted to the store so the sidebar's 云曲库 entry opens
+  // this same modal instead of a second copy of it. The modal element and
+  // the selection handler still live here — picking a song has to clear this
+  // page's local upload alongside setting the target song.
+  const libraryOpen    = useAppStore((s) => s.libraryOpen)
+  const setLibraryOpen = useAppStore((s) => s.setLibraryOpen)
 
   // ── Pitch Shift / Tune slider (Ticket 19) ────────────────
   // The user's vocal range comes from Ticket 16's pitch analysis panel
