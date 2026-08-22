@@ -210,7 +210,7 @@ function createWindow(onFirstShow?: () => void): BrowserWindow {
     minHeight:       600,
     center:          true,    // always on-screen; prevents "only title bar" from off-screen placement
     show:            false,
-    backgroundColor: '#0f1117',
+    backgroundColor: '#121212',
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       // The preload script only touches contextBridge/ipcRenderer (no direct

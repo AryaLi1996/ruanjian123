@@ -57,7 +57,7 @@ export async function makeWaveformDataUrl(file: File, w = 400, h = 60): Promise<
     const cy   = h / 2
     const amp  = h / 2 - 3
 
-    ctx.fillStyle = '#0f1117'
+    ctx.fillStyle = '#121212'
     ctx.fillRect(0, 0, w, h)
     ctx.strokeStyle = '#6366f1'
     ctx.lineWidth = 1

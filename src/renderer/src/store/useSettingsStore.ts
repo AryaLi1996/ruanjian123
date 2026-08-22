@@ -146,6 +146,9 @@ function applyAccent(value: string, resolvedAppearance: 'light' | 'dark'): void 
   root.setProperty('--accent-hover',  derived.accentHover)
   root.setProperty('--accent-active', derived.accentActive)
   root.setProperty('--on-accent',     derived.onAccent)
+  // Ticket UI-01 §3: tech-gradient primary accent, hue-rotated from the
+  // resolved --accent so it always matches the active preset/custom colour.
+  root.setProperty('--accent-gradient', `linear-gradient(135deg, ${derived.accent} 0%, ${derived.accentGradientEnd} 100%)`)
 }
 
 function applyFont(family: FontFamily): void {
