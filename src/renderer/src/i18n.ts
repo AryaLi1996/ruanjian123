@@ -17,7 +17,7 @@ const resources = {
         sloganZh: '让每个声音，都舒服入耳', sloganEn: 'Every voice, soothing to the ear.',
       },
       language: { label: '语言', zh: '简体中文', en: 'English' },
-      nav: { training: '模型训练', cover: '翻唱创作', audioTools: '音频工具', waveform: '波形编辑', playback: '播放/监听', subscription: '订阅', library: '云曲库', user: '用户', settings: '设置', primary: '主导航' },
+      nav: { training: '模型训练', cover: '翻唱创作', audioTools: '音频工具', waveform: '数据准备', playback: '播放/监听', subscription: '订阅', library: '云曲库', user: '用户', settings: '设置', primary: '主导航' },
       sidebar: { collapse: '收起侧边栏', expand: '展开侧边栏' },
       player: {
         noSong: '未在播放', idleHint: '前往播放/监听页面开始播放',
@@ -123,13 +123,40 @@ const resources = {
       },
       // Ticket 15: waveform display + drag-selected region editor.
       waveformEditor: {
-        title: '波形编辑', description: '拖入音频文件查看波形，拖动鼠标选取片段用于后续处理。',
         drop: '拖入 WAV / MP3 文件，或点击浏览', formats: 'WAV · MP3',
         unsupportedFormat: '不支持的文件格式，请使用 WAV 或 MP3。',
         browse: '浏览…', pathPlaceholder: '点击"浏览"选择音频文件（WAV / MP3 / FLAC / AAC）',
         play: '播放', pause: '暂停', stop: '停止',
         loopSelection: '循环播放选区', clearSelection: '清除选区',
         selectionInfo: '选区：{{start}} – {{end}}（时长 {{dur}}）',
+      },
+      // PATCH-03: the Model Data Preparation workspace — the page formerly
+      // titled 波形编辑. Copy here is fixed by the ticket (逐字对照 against the
+      // reference screenshot), so prefer adding a new key over rewording one.
+      dataPrep: {
+        title: '模型数据准备',
+        description: '处理干音 → 设定保护 → 选目标歌 → 合并训练。',
+        groupRecord: '录音与播放', groupAnalyze: '分析与保护', groupDenoise: '降噪与导出',
+        newRecord: '新录音', play: '播放', pause: '暂停', muteSelection: '静音选中片段',
+        analyzePitch: '分析音高', applyProtection: '应用高音保护', undo: '撤销',
+        getNoiseSample: '获取噪样', denoise: '执行降噪', loudnessNormalize: '响度均衡', saveChanges: '保存更改',
+        // Shown on every control whose backing engine/server call does not
+        // exist yet — see the PATCH-03 PR description.
+        notAvailableYet: '该功能尚未开放',
+        needsFilePath: '请先通过"浏览…"选择音频文件',
+        needsAnalysis: '请先分析音高',
+        analyzing: '分析中…', applying: '正在应用…', applied: '已应用',
+        analyzedMax: '检测到最高音：{{note}}',
+        device: '设备：{{device}}',
+        deviceUnknown: 'MicrosoftSoundMapper-Input',
+        cloudTraining: '云端模型训练',
+        refreshList: '刷新列表', deleteFile: '删除文件',
+        uploadAndTrain: '上传并开始训练', checkModel: '检查模型',
+        uploadModel: '上传模型', uploadSvcModel: '上传SVC模型',
+        waitingToTrain: '等待开始训练...',
+        mergeAllAudio: '合并所有音频',
+        needsTargetSong: '请先在"翻唱创作"中选择目标歌曲并完成合成',
+        needsMerge: '请先合并所有音频。',
       },
       // Automatic lyrics recognition status copy (Ticket 43 §6) — shown in the
       // Playback/Monitor lyrics panel while/after an automatic online match runs.
@@ -303,7 +330,7 @@ const resources = {
         sloganZh: '让每个声音，都舒服入耳', sloganEn: 'Every voice, soothing to the ear.',
       },
       language: { label: 'Language', zh: '简体中文', en: 'English' },
-      nav: { training: 'Model Training', cover: 'Cover Creation', audioTools: 'Audio Tools', waveform: 'Waveform Editor', playback: 'Playback / Monitor', subscription: 'Subscription', library: 'Cloud Library', user: 'Account', settings: 'Settings', primary: 'Main navigation' },
+      nav: { training: 'Model Training', cover: 'Cover Creation', audioTools: 'Audio Tools', waveform: 'Data Preparation', playback: 'Playback / Monitor', subscription: 'Subscription', library: 'Cloud Library', user: 'Account', settings: 'Settings', primary: 'Main navigation' },
       sidebar: { collapse: 'Collapse sidebar', expand: 'Expand sidebar' },
       player: {
         noSong: 'Nothing playing', idleHint: 'Open Playback / Monitor to start',
@@ -399,13 +426,36 @@ const resources = {
       },
       // Ticket 15: waveform display + drag-selected region editor.
       waveformEditor: {
-        title: 'Waveform Editor', description: 'Drop an audio file to view its waveform, then drag on it to select a region for downstream processing.',
         drop: 'Drop a WAV / MP3 file here, or click to browse', formats: 'WAV · MP3',
         unsupportedFormat: 'Unsupported file format — please use WAV or MP3.',
         browse: 'Browse…', pathPlaceholder: 'Click "Browse" to choose an audio file (WAV / MP3 / FLAC / AAC)',
         play: 'Play', pause: 'Pause', stop: 'Stop',
         loopSelection: 'Loop selection', clearSelection: 'Clear selection',
         selectionInfo: 'Selection: {{start}} – {{end}} ({{dur}})',
+      },
+      // PATCH-03: Model Data Preparation workspace (formerly Waveform Editor).
+      dataPrep: {
+        title: 'Model Data Preparation',
+        description: 'Process the dry vocal → set protection → pick a target song → merge for training.',
+        groupRecord: 'Record & Playback', groupAnalyze: 'Analyze & Protect', groupDenoise: 'Denoise & Export',
+        newRecord: 'New Record', play: 'Play', pause: 'Pause', muteSelection: 'Mute Selection',
+        analyzePitch: 'Analyze Pitch', applyProtection: 'Apply High-Pitch Protection', undo: 'Undo',
+        getNoiseSample: 'Get Noise Sample', denoise: 'Denoise', loudnessNormalize: 'Loudness Normalize', saveChanges: 'Save Changes',
+        notAvailableYet: 'Not available yet',
+        needsFilePath: 'Choose an audio file with "Browse…" first',
+        needsAnalysis: 'Analyze the pitch first',
+        analyzing: 'Analyzing…', applying: 'Applying…', applied: 'Applied',
+        analyzedMax: 'Detected highest note: {{note}}',
+        device: 'Device: {{device}}',
+        deviceUnknown: 'MicrosoftSoundMapper-Input',
+        cloudTraining: 'Cloud Model Training',
+        refreshList: 'Refresh List', deleteFile: 'Delete File',
+        uploadAndTrain: 'Upload & Start Training', checkModel: 'Check Model',
+        uploadModel: 'Upload Model', uploadSvcModel: 'Upload SVC Model',
+        waitingToTrain: 'Waiting to start training...',
+        mergeAllAudio: 'Merge All Audio',
+        needsTargetSong: 'Pick a target song and finish synthesis in Cover Creation first',
+        needsMerge: 'Merge all audio first.',
       },
       lyrics: {
         auto: {

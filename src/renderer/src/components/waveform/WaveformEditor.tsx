@@ -30,7 +30,15 @@ function baseName(filePath: string): string {
 // read unambiguously as "selection blue" regardless of theme.
 const SELECTION_COLOR = 'rgba(37, 99, 235, 0.28)'
 
-export function WaveformEditor(): JSX.Element {
+interface Props {
+  /** PATCH-03: false when the host renders its own play/pause controls (the
+   *  Model Data Preparation toolbar), so the two don't both show transport
+   *  buttons. The time readout, loop toggle and selection info stay either
+   *  way — nothing else surfaces them. */
+  showTransportButtons?: boolean
+}
+
+export function WaveformEditor({ showTransportButtons = true }: Props = {}): JSX.Element {
   const { t } = useTranslation()
   const containerRef = useRef<HTMLDivElement>(null)
   const wsRef         = useRef<WaveSurfer | null>(null)
@@ -41,17 +49,19 @@ export function WaveformEditor(): JSX.Element {
   const [ready, setReady]     = useState(false)
   const [dragging, setDragging] = useState(false)
   const [loadError, setLoadError] = useState<string | null>(null)
-  const [filePath, setFilePath] = useState<string | null>(null)
   const [browsing, setBrowsing] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
 
   const fileName      = useWaveformStore((s) => s.fileName)
+  const filePath       = useWaveformStore((s) => s.filePath)
   const duration       = useWaveformStore((s) => s.duration)
   const currentTime    = useWaveformStore((s) => s.currentTime)
   const isPlaying      = useWaveformStore((s) => s.isPlaying)
   const selection       = useWaveformStore((s) => s.selection)
   const loopSelection  = useWaveformStore((s) => s.loopSelection)
   const setFileName     = useWaveformStore((s) => s.setFileName)
+  const setFilePath     = useWaveformStore((s) => s.setFilePath)
+  const setControls     = useWaveformStore((s) => s.setControls)
   const setDuration    = useWaveformStore((s) => s.setDuration)
   const setCurrentTime = useWaveformStore((s) => s.setCurrentTime)
   const setIsPlaying   = useWaveformStore((s) => s.setIsPlaying)
@@ -172,7 +182,7 @@ export function WaveformEditor(): JSX.Element {
     } catch (err) {
       setLoadError(String(err))
     }
-  }, [clearSelection, setFileName, t])
+  }, [clearSelection, setFileName, setFilePath, t])
 
   // ── Load a file chosen via the native "Browse…" dialog (PATCH-01) ─────
   // Unlike loadFile above, this starts from an absolute path rather than a
@@ -201,7 +211,7 @@ export function WaveformEditor(): JSX.Element {
     } catch (err) {
       setLoadError(String(err))
     }
-  }, [clearSelection, setFileName])
+  }, [clearSelection, setFileName, setFilePath])
 
   // Opens the native file-open dialog (main process) and loads whatever the
   // user picks. Guarded against re-entry so a double-click / repeat click
@@ -249,6 +259,18 @@ export function WaveformEditor(): JSX.Element {
     selectionIdRef.current = null
     clearSelection()
   }
+
+  // PATCH-03: publish play/pause for the Model Data Preparation toolbar,
+  // which renders outside this component and so can't reach wsRef itself.
+  // Registered after togglePlayPause exists so both paths share one code
+  // path (region-aware playback, loop handling) rather than diverging.
+  useEffect(() => {
+    setControls({
+      play:  () => { const ws = wsRef.current; if (ws && !ws.isPlaying()) togglePlayPause() },
+      pause: () => { const ws = wsRef.current; if (ws && ws.isPlaying()) ws.pause() },
+    })
+    return () => setControls(null)
+  }, [togglePlayPause, setControls])
 
   // Spacebar toggles play/pause (Ticket 15 acceptance criteria) — ignored
   // while the user is typing into any focusable text control elsewhere in
@@ -330,24 +352,28 @@ export function WaveformEditor(): JSX.Element {
       {loadError && <div className="wf-error">{loadError}</div>}
 
       <div className="wf-transport">
-        <button
-          className="btn btn-ghost wf-transport-btn"
-          onClick={togglePlayPause}
-          disabled={!hasFile || !ready}
-          aria-label={isPlaying ? t('waveformEditor.pause') : t('waveformEditor.play')}
-          title={`${isPlaying ? t('waveformEditor.pause') : t('waveformEditor.play')} (Space)`}
-        >
-          {isPlaying ? '⏸' : '▶'}
-        </button>
-        <button
-          className="btn btn-ghost wf-transport-btn"
-          onClick={handleStop}
-          disabled={!hasFile || !ready}
-          aria-label={t('waveformEditor.stop')}
-          title={t('waveformEditor.stop')}
-        >
-          ⏹
-        </button>
+        {showTransportButtons && (
+          <>
+            <button
+              className="btn btn-ghost wf-transport-btn"
+              onClick={togglePlayPause}
+              disabled={!hasFile || !ready}
+              aria-label={isPlaying ? t('waveformEditor.pause') : t('waveformEditor.play')}
+              title={`${isPlaying ? t('waveformEditor.pause') : t('waveformEditor.play')} (Space)`}
+            >
+              {isPlaying ? '⏸' : '▶'}
+            </button>
+            <button
+              className="btn btn-ghost wf-transport-btn"
+              onClick={handleStop}
+              disabled={!hasFile || !ready}
+              aria-label={t('waveformEditor.stop')}
+              title={t('waveformEditor.stop')}
+            >
+              ⏹
+            </button>
+          </>
+        )}
 
         <span className="wf-time">
           {formatTimeDs(currentTime)} / {formatTimeDs(duration)}

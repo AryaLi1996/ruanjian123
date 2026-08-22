@@ -2998,3 +2998,104 @@ html, body, #root {
 .updates-status { font-size: 12.5px; color: var(--text-muted); margin-top: 12px; }
 .updates-status.is-error   { color: var(--danger); }
 .updates-status.is-success { color: var(--success); }
+
+/* ── PATCH-03: Model Data Preparation workspace ──────────────── */
+/* Status strip above the workspace: high-pitch protection state (§4), with
+   the device line beneath it in small grey type (§3). */
+.dp-statusbar {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 16px;
+}
+.dp-status-protection {
+  font-size: 12px;
+  color: var(--success);
+}
+.dp-status-device {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+/* §1: three cognitive groups — 录音播放 → 分析保护 → 降噪导出 — separated by
+   a rule so the grouping survives wrapping on a narrow window (where pure
+   spacing would read as one long run of buttons). */
+.dp-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+.dp-tool-group {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.dp-tool-divider {
+  width: 1px;
+  align-self: stretch;
+  min-height: 22px;
+  background: var(--border);
+  flex-shrink: 0;
+}
+.dp-tool {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 14px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+/* Controls with no backing call yet rest in this state, so make it a calm
+   "not yet" rather than an error-looking one. */
+.dp-tool:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.dp-analysis-info {
+  margin-top: 12px;
+  font-size: 12px;
+  color: var(--accent);
+}
+
+/* §2: cloud model training block. */
+.dp-training { margin-top: 20px; }
+.dp-train-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+/* "进度条拉满宽度" — takes whatever the row's buttons leave. */
+.dp-train-progress {
+  flex: 1 1 220px;
+  margin-bottom: 0;
+}
+.dp-train-status {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: 4px;
+}
+/* 合并所有音频 sits alone on its own line, right-aligned and larger than the
+   row buttons above it — the ticket's "视觉上明显独立且突出" for the final
+   action of the flow. */
+.dp-train-footer {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+.dp-merge-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 28px;
+  font-size: 14px;
+  font-weight: 600;
+}
