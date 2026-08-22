@@ -1,28 +1,54 @@
 :root {
-  --bg-solid:       #0f1117;
-  --bg-panel-solid: #1a1d27;
+  /* ── UI-01: dark-first Design Token base ────────────────────────────────
+     "极致深空黑" per Spotify/QQ音乐Air reference — a neutral near-black
+     rather than the previous navy-tinted dark, so long viewing sessions stay
+     low-glare instead of reading as a tinted "blue-black" surface. */
+  --bg-solid:       #121212;
+  --bg-panel-solid: #1e1e1e;
   --bg:             var(--bg-solid);
   --bg-panel:       var(--bg-panel-solid);
-  --bg-hover:       #22263a;
+  --bg-hover:       #2a2a2a;
+  /* Alternative frosted-glass panel surface (ticket-specified
+     rgba(255,255,255,0.05)) — available for any surface that wants to show
+     the background image / accent glow through it instead of the flat
+     --bg-panel; not applied everywhere by default since most panels here
+     sit over other opaque panels, not the blurred backdrop. */
+  --surface-glass:  rgba(255, 255, 255, 0.05);
   --accent:         #6366f1;
   --accent-hover:   #a0a1f4;
   --accent-active:  #4346ff;
   --on-accent:      #ffffff;
+  /* Tech-gradient primary accent (Ticket UI-01 §3) — hue-rotated from
+     --accent by useSettingsStore's applyAccent() so it always matches
+     whichever accent (preset or custom) is currently selected, defaulting
+     to a violet→magenta sweep close to the ticket's #6C3CE1→#E83E8C spec.
+     Falls back to a flat accent fill if JS hasn't run yet (e.g. first paint
+     before useSettingsStore's effect fires). */
+  --accent-gradient: linear-gradient(135deg, var(--accent) 0%, var(--accent) 100%);
   --success:        #22c55e;
   --warning:        #f59e0b;
   --danger:         #ef4444;
   --text:           #e2e8f0;
   --text-muted:     #8892a4;
-  --border:         #2d3148;
+  --border:         #2c2c2c;
   --radius:         8px;
+  /* Large cards/panels vs. small/pill-shaped buttons (Ticket UI-01 §5) —
+     kept distinct from the base --radius above so composite components
+     (mode cards, list rows, inputs, …) keep their existing 8px scale while
+     the two named primitives (.card and .btn) pick up the new sizes. */
+  --radius-lg:      16px;
+  --radius-pill:    20px;
   --sidebar-w:      220px;
 
   /* Font settings (Ticket 27) — --font-family/--ui-scale are set inline on
      <html> by useSettingsStore before first paint. --ui-scale drives the
      `zoom` rule below rather than font-size directly, since most of this
      file is written in px: zooming scales text, spacing and icons together
-     instead of only text growing out of its layout. */
-  --font-family: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
+     instead of only text growing out of its layout. PingFang SC is listed
+     ahead of the generic system-ui/-apple-system fallbacks (Ticket UI-01
+     §4) so macOS renders CJK text in 苹方 rather than falling through to a
+     serif-ish system default. */
+  --font-family: 'Inter', 'PingFang SC', 'Segoe UI', system-ui, -apple-system, sans-serif;
   --ui-scale:    1;
 
   /* Custom background image (Ticket 27) — url(...) or 'none', set inline by
@@ -41,7 +67,7 @@
      treatment Spotify/Apple Music use regardless of the app's own theme —
      switching this to --bg-solid would leave that white text unreadable
      against the light-appearance panel colour. */
-  --lyrics-backdrop-base: #0f1117;
+  --lyrics-backdrop-base: #121212;
 
   /* Semantic aliases so the app's design tokens read the way Ticket 27
      names them, without renaming every existing --accent/--bg/--text usage
@@ -315,7 +341,7 @@ html, body, #root {
 .card {
   background: var(--bg-panel);
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border-radius: var(--radius-lg);
   padding: 24px;
   margin-bottom: 20px;
 }
@@ -341,23 +367,30 @@ html, body, #root {
 .input:focus, .select:focus { border-color: var(--accent); }
 
 /* ── Buttons ─────────────────────────────────────────────── */
+/* --radius-pill (20px, Ticket UI-01 §5) applies here once, at the base
+   class every button variant below extends, rather than being repeated on
+   each modifier. */
 .btn {
   padding: 9px 20px;
-  border-radius: 6px;
+  border-radius: var(--radius-pill);
   border: none;
   cursor: pointer;
   font-size: 13px;
   font-weight: 500;
-  transition: background 0.15s, opacity 0.15s;
+  transition: background 0.15s, opacity 0.15s, filter 0.15s;
 }
 
+/* Primary CTA gets the tech-gradient accent (Ticket UI-01 §3); hover/active
+   dim/brighten the same gradient via `filter` rather than swapping to a flat
+   --accent-hover/--accent-active fill, so the gradient stays visible through
+   every interaction state instead of just at rest. */
 .btn-primary {
-  background: var(--accent);
+  background: var(--accent-gradient);
   color: var(--on-accent);
 }
 
-.btn-primary:hover:not(:disabled)  { background: var(--accent-hover); }
-.btn-primary:active:not(:disabled) { background: var(--accent-active); }
+.btn-primary:hover:not(:disabled)  { filter: brightness(1.08); }
+.btn-primary:active:not(:disabled) { filter: brightness(0.92); }
 .btn-primary:disabled              { opacity: 0.45; cursor: not-allowed; }
 
 .btn-ghost {
@@ -1315,7 +1348,7 @@ html, body, #root {
 .lock-card {
   background:    var(--bg-panel);
   border:        1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   padding:       48px 52px;
   width:         440px;
   max-width:     90vw;
@@ -1344,7 +1377,7 @@ html, body, #root {
 .onboarding-card {
   background:    var(--bg-panel);
   border:        1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   padding:       40px 48px;
   width:         480px;
   max-width:     90vw;
@@ -1424,7 +1457,7 @@ html, body, #root {
   text-align: center;
   background: var(--bg-panel);
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   box-shadow: 0 24px 80px rgba(0, 0, 0, 0.45);
 }
 
@@ -1902,7 +1935,7 @@ html, body, #root {
   padding: 18px;
   background: var(--bg-panel);
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   box-shadow: 0 24px 80px rgba(0, 0, 0, 0.45);
 }
 .pbm-lyrics-search-header {
@@ -1951,7 +1984,7 @@ html, body, #root {
   padding: 18px;
   background: var(--bg-panel);
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   box-shadow: 0 24px 80px rgba(0, 0, 0, 0.45);
 }
 .library-modal-header {
@@ -2459,7 +2492,7 @@ html, body, #root {
   flex-direction: column;
   background: var(--bg-panel);
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   box-shadow: 0 18px 50px rgba(0, 0, 0, 0.4);
   overflow: hidden;
 }

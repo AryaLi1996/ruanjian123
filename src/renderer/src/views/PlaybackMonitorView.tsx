@@ -492,7 +492,7 @@ export function PlaybackMonitorView(): JSX.Element {
       const ctx2d = canvas.getContext('2d')
       if (!ctx2d) return
       const w = canvas.width, h = canvas.height
-      ctx2d.fillStyle = '#0f1117'
+      ctx2d.fillStyle = '#121212'
       ctx2d.fillRect(0, 0, w, h)
       // Neutral slate, not accent — the waveform trace itself should stay
       // out of the way so accent-coloured elements (record button, playhead
@@ -572,7 +572,7 @@ export function PlaybackMonitorView(): JSX.Element {
     canvas.height = canvasHeight
     const ctx2d = canvas.getContext('2d')
     if (!ctx2d) return
-    ctx2d.fillStyle = '#0f1117'
+    ctx2d.fillStyle = '#121212'
     ctx2d.fillRect(0, 0, canvasWidth, canvasHeight)
 
     tracks.forEach((tr, i) => {

@@ -87,6 +87,19 @@ function shiftHsl(hex: string, lightnessDelta: number, saturationDelta: number):
   return rgbToHex(hslToRgb(h, clamp01(s + saturationDelta), clamp01(l + lightnessDelta)))
 }
 
+// Rotates hue by `degrees` (wrapping 0–360), leaving saturation/lightness
+// untouched. Used to derive the "tech gradient" accent (Ticket UI-01 §3,
+// e.g. #6C3CE1 → #E83E8C) from whatever single accent colour is currently
+// selected, rather than hard-coding a gradient that ignores the user's
+// preset/custom accent choice.
+export function rotateHue(hex: string, degrees: number): string {
+  const rgb = hexToRgb(hex)
+  if (!rgb) return hex
+  const { h, s, l } = rgbToHsl(rgb)
+  const rotated = (((h * 360 + degrees) % 360) + 360) % 360
+  return rgbToHex(hslToRgb(rotated / 360, s, l))
+}
+
 // WCAG relative luminance — the basis for both contrast-ratio checks and for
 // picking readable text over an accent-coloured surface.
 function relativeLuminance({ r, g, b }: Rgb): number {
@@ -118,6 +131,20 @@ export function contrastText(hex: string): string {
   const contrastWithWhite = 1.05 / (l + 0.05)
   const contrastWithBlack = (l + 0.05) / 0.05
   return contrastWithWhite >= contrastWithBlack ? '#ffffff' : '#0b0d12'
+}
+
+// Same idea as contrastText, but for a colour that sweeps between two
+// backgrounds (--accent-gradient's two stops) — picks whichever of
+// near-black/near-white keeps its *worst-case* contrast the highest, so
+// on-accent text stays legible across the whole gradient rather than only
+// at the start stop.
+export function contrastTextForRange(hexA: string, hexB: string): string {
+  const rgbA = hexToRgb(hexA), rgbB = hexToRgb(hexB)
+  if (!rgbA || !rgbB) return contrastText(hexA)
+  const lA = relativeLuminance(rgbA), lB = relativeLuminance(rgbB)
+  const worstWhite = Math.min(1.05 / (lA + 0.05), 1.05 / (lB + 0.05))
+  const worstBlack = Math.min((lA + 0.05) / 0.05, (lB + 0.05) / 0.05)
+  return worstWhite >= worstBlack ? '#ffffff' : '#0b0d12'
 }
 
 export function isValidHexColor(value: string): boolean {
@@ -163,9 +190,17 @@ export interface DerivedAccent {
   accentHover:  string
   accentActive: string
   onAccent:     string
+  /** Hue-rotated partner colour for --accent-gradient (Ticket UI-01 §3) — the gradient's second stop. */
+  accentGradientEnd: string
   /** Contrast ratio of `accent` against the surface colour it was corrected for — surfaced for the Settings contrast readout. */
   contrastOnSurface: number
 }
+
+// Degrees to rotate `accent`'s hue by for the gradient's end stop. Chosen so
+// the default indigo accent (#6366f1, hue ~243°) lands near magenta/pink
+// (~308°) — the same violet→pink sweep as the ticket's #6C3CE1→#E83E8C
+// reference — while still tracking whatever hue the user actually picks.
+const ACCENT_GRADIENT_HUE_SHIFT = 65
 
 // Builds the full hover/active/on-accent set from a single base colour,
 // contrast-corrected against `surfaceHex` (the panel/card background the
@@ -181,11 +216,16 @@ export function deriveAccentShades(baseHex: string, surfaceHex: string, target =
   const rgb = hexToRgb(baseHex)
   const normalized = rgb ? rgbToHex(rgb) : baseHex
   const accent = ensureContrast(normalized, surfaceHex, target)
+  const accentGradientEnd = ensureContrast(rotateHue(accent, ACCENT_GRADIENT_HUE_SHIFT), surfaceHex, target)
   return {
     accent,
     accentHover:  shiftHsl(accent, +0.08, -0.10),
     accentActive: shiftHsl(accent, -0.08, +0.12),
-    onAccent:     contrastText(accent),
+    // Validated against both gradient stops (not just `accent`) since
+    // --btn-primary paints on-accent text over the full --accent-gradient,
+    // not only its start colour.
+    onAccent:     contrastTextForRange(accent, accentGradientEnd),
+    accentGradientEnd,
     contrastOnSurface: contrastRatio(accent, surfaceHex),
   }
 }
@@ -196,5 +236,5 @@ export function deriveAccentShades(baseHex: string, surfaceHex: string, target =
 // "30% surface" tier of the 60-30-10 split, since accent-as-text or
 // accent-as-border most commonly sits on a card/panel rather than directly
 // on the page background.
-export const PANEL_BG_DARK = '#1a1d27'
+export const PANEL_BG_DARK = '#1e1e1e'
 export const PANEL_BG_LIGHT = '#ffffff'
