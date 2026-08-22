@@ -149,6 +149,15 @@ const resources = {
       // titled 波形编辑. Copy here is fixed by the ticket (逐字对照 against the
       // reference screenshot), so prefer adding a new key over rewording one.
       toolbar: { more: '更多操作', scrollLeft: '向左翻页', scrollRight: '向右翻页' },
+      playbackPanels: {
+        dragSplit: '拖动调整左右面板比例', infoPanel: '信息面板',
+        tabLyrics: '歌词', tabRecord: '录音', tabConfig: '训练配置', tabStructure: '模型结构',
+        noModel: '尚无已训练的模型 — 请先训练一个。',
+        showingLatest: '当前显示最近训练的模型（尚未应用任何模型）。',
+        configName: '模型名称', configMode: '训练模式', configQuality: '相似度',
+        stageInput: '输入音频', stageEncoder: '音色编码器', stageDecoder: '声码器', stageOutput: '输出音频',
+        structureNote: '推理流程示意，非完整计算图。',
+      },
       immersive: { exit: '退出沉浸模式', enter: '沉浸模式', hint: '按 F 进入/退出沉浸模式' },
       dataPrep: {
         title: '模型数据准备',
@@ -467,7 +476,15 @@ const resources = {
       },
       // PATCH-03: Model Data Preparation workspace (formerly Waveform Editor).
       toolbar: { more: 'More actions', scrollLeft: 'Scroll left', scrollRight: 'Scroll right' },
-      immersive: { exit: 'Exit immersive', enter: 'Immersive mode', hint: 'Press F to toggle immersive mode' },
+      playbackPanels: {
+        dragSplit: 'Drag to resize the panels', infoPanel: 'Info panel',
+        tabLyrics: 'Lyrics', tabRecord: 'Record', tabConfig: 'Training config', tabStructure: 'Model',
+        noModel: 'No trained models yet — train one first.',
+        showingLatest: 'Showing the most recently trained model (none applied yet).',
+        configName: 'Model name', configMode: 'Training mode', configQuality: 'Similarity',
+        stageInput: 'Input audio', stageEncoder: 'Timbre encoder', stageDecoder: 'Vocoder', stageOutput: 'Output audio',
+        structureNote: 'Schematic of the inference path, not the full graph.',
+      },
       dataPrep: {
         title: 'Model Data Preparation',
         description: 'Process the dry vocal → set protection → pick a target song → merge for training.',

@@ -2081,18 +2081,22 @@ html, body, #root {
 
 /* Three columns: song list | now-playing/lyrics+waveform+tracks | recording.
    Everything stays on screen at 1366×768 — no drawers, no swiping. */
+/* Ticket UI-13: the fixed third column (the recording aside) folded into
+   the split pane's right side, so the page is now the song-list rail plus
+   one resizable control/info split. */
 .pbm-grid {
   display: grid;
-  grid-template-columns: 236px minmax(0, 1fr) 280px;
+  grid-template-columns: 236px minmax(0, 1fr);
   gap: 12px;
   align-items: start;
 }
-.pbm-grid.no-songs { grid-template-columns: minmax(0, 1fr) 280px; }
+.pbm-grid.no-songs { grid-template-columns: minmax(0, 1fr); }
 
 @media (max-width: 1280px) {
-  .pbm-grid          { grid-template-columns: 208px minmax(0, 1fr) 250px; }
-  .pbm-grid.no-songs { grid-template-columns: minmax(0, 1fr) 250px; }
+  .pbm-grid { grid-template-columns: 208px minmax(0, 1fr); }
 }
+/* The song-list rail stacks above the split at narrow widths; the split
+   itself stacks on its own container width (see SplitPane). */
 @media (max-width: 1024px) {
   .pbm-grid, .pbm-grid.no-songs { grid-template-columns: minmax(0, 1fr); }
 }
@@ -2100,7 +2104,6 @@ html, body, #root {
 .pbm-songlist, .pbm-wave-card, .pbm-tracks-card, .pbm-recording { padding: 14px; }
 
 .pbm-center { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
-.pbm-right  { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
 
 .pbm-panel-title { font-size: 13px; font-weight: 700; margin-bottom: 10px; }
 .pbm-panel-header {
@@ -3566,6 +3569,134 @@ html, body, #root {
 .tc-keep-btn { height: 34px; padding: 0 16px; font-size: 12.5px; }
 
 
+/* ── Resizable split pane (Ticket UI-13) ─────────────────────
+   Track sizes come from an inline style so the ratio can be a live fr pair;
+   everything structural lives here. minmax(0, …) on both content tracks is
+   what stops an oversized child from widening the grid instead of
+   scrolling inside its own pane. */
+.split-pane {
+  display: grid;
+  align-items: start;
+  min-width: 0;
+}
+.split-pane.stacked {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+}
+.split-pane-left, .split-pane-right { min-width: 0; }
+/* Stacked, the splitter has nothing to do — a horizontal drag can't
+   meaningfully divide a vertical stack. */
+.split-pane.stacked .split-pane-splitter { display: none; }
+
+.split-pane-splitter {
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: col-resize;
+  /* Its own hit area is only 10px wide; widen what the pointer can grab
+     without widening the visible gap. */
+  position: relative;
+  touch-action: none;
+}
+.split-pane-splitter::before {
+  content: '';
+  position: absolute;
+  inset: 0 -4px;
+}
+.split-pane-grip {
+  width: 3px;
+  height: 46px;
+  border-radius: 2px;
+  background: var(--border);
+  transition: background 0.15s, height 0.15s;
+}
+.split-pane-splitter:hover .split-pane-grip,
+.split-pane-splitter:focus-visible .split-pane-grip {
+  background: var(--accent);
+  height: 76px;
+}
+.split-pane-splitter:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+/* ── Playback info panel (Ticket UI-13) ──────────────────── */
+.pbm-nowplaying-solo { display: flex; margin-bottom: 8px; }
+.pbm-nowplaying-solo > * { flex: 1; min-width: 0; }
+
+.pbm-info {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-panel);
+  overflow: hidden;
+}
+
+.pbm-info-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 6px 6px 0;
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.pbm-info-tabs::-webkit-scrollbar { display: none; }
+
+.pbm-info-tab {
+  flex-shrink: 0;
+  padding: 8px 13px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12.5px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color 0.15s, border-color 0.15s;
+}
+.pbm-info-tab:hover  { color: var(--text); }
+.pbm-info-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+.pbm-info-body {
+  flex: 1;
+  min-height: 0;
+  padding: 12px;
+  overflow-y: auto;
+}
+/* The lyrics panel brings its own card chrome; inside the tab body that
+   would be a border within a border. */
+.pbm-info-body > .pbm-lyrics { border: 0; border-radius: 0; }
+.pbm-info-body > .card { margin-bottom: 0; }
+
+.pbm-config-list { display: flex; flex-direction: column; gap: 9px; margin: 0; }
+.pbm-config-list > div {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 12px;
+}
+.pbm-config-list dt { font-size: 11.5px; color: var(--text-muted); flex-shrink: 0; }
+.pbm-config-list dd {
+  margin: 0; font-size: 12.5px; color: var(--text);
+  font-variant-numeric: tabular-nums;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.pbm-config-note {
+  margin: 6px 0 0;
+  font-size: 11px;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+.pbm-config-warning {
+  margin: 6px 0 0;
+  font-size: 11.5px;
+  color: var(--warning);
+  line-height: 1.5;
+}
+
+.pbm-structure { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+.pbm-structure-svg { width: 100%; max-width: 210px; height: auto; }
+.pbm-structure-note {
+  margin: 0; font-size: 11px; color: var(--text-muted);
+  text-align: center; line-height: 1.5;
+}
 /* ── Immersive mode + 魔法色 backdrop (Ticket UI-12) ──────────
    Two radial gradients built from the cover art's palette, drifting on a
    10s loop. It stays mounted at all times and only changes opacity, so the

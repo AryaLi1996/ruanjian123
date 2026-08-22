@@ -13,6 +13,8 @@ import { extractEmbeddedMetadata, parseArtistTitleFromFilename } from '../utils/
 import { LyricsPanel } from '../components/playback/LyricsPanel'
 import { SongList } from '../components/playback/SongList'
 import { NowPlayingCard } from '../components/playback/NowPlayingCard'
+import { SplitPane } from '../components/common/SplitPane'
+import { ModelConfigPanel, ModelStructurePanel } from '../components/playback/ModelInfoPanel'
 import { stemLabelKey } from '../utils/stems'
 
 type TrackKind = 'original' | 'stem' | 'cover' | 'recording'
@@ -96,8 +98,8 @@ export function PlaybackMonitorView(): JSX.Element {
   const [activeSongId, setActiveSongId] = useState<string | null>(null)
   const [songListOpen, setSongListOpen] = useState(true)
   const [tracksOpen, setTracksOpen] = useState(true)
-  const [nowPlayingHeight, setNowPlayingHeight] = useState(360)
-  const resizingRef = useRef(false)
+  // Ticket UI-13: which info tab the right pane is showing.
+  const [infoTab, setInfoTab] = useState<'lyrics' | 'record' | 'config' | 'structure'>('lyrics')
   const [loadingSong, setLoadingSong] = useState(false)
 
   const [playing, setPlaying] = useState(false)
@@ -699,24 +701,6 @@ export function PlaybackMonitorView(): JSX.Element {
     })
   }, [tracks, canvasWidth, canvasHeight, pxPerSec])
 
-  function startResize(e: React.MouseEvent): void {
-    e.preventDefault()
-    resizingRef.current = true
-    const startY = e.clientY
-    const startHeight = nowPlayingHeight
-    const onMove = (ev: MouseEvent): void => {
-      if (!resizingRef.current) return
-      setNowPlayingHeight(Math.max(220, Math.min(620, startHeight + (ev.clientY - startY))))
-    }
-    const onUp = (): void => {
-      resizingRef.current = false
-      window.removeEventListener('mousemove', onMove)
-      window.removeEventListener('mouseup', onUp)
-    }
-    window.addEventListener('mousemove', onMove)
-    window.addEventListener('mouseup', onUp)
-  }
-
   function handleWaveClick(e: React.MouseEvent<HTMLCanvasElement>): void {
     const rect = (e.target as HTMLCanvasElement).getBoundingClientRect()
     seek((e.clientX - rect.left) / pxPerSec)
@@ -759,188 +743,223 @@ export function PlaybackMonitorView(): JSX.Element {
         )}
 
         {/* ── Center: now playing/lyrics + waveform + transport + tracks ── */}
-        <section className="pbm-center">
-          <div className="pbm-now-lyrics-split" style={{ height: nowPlayingHeight }}>
-            <NowPlayingCard
-              title={activeSong?.name ?? null}
-              artist={activeSong?.artist ?? null}
-              coverArtUrl={activeSong?.coverArtUrl ?? null}
-              liked={activeSong?.liked ?? false}
-              onToggleLike={() => { if (activeSong) toggleLike(activeSong.id) }}
-            />
-            <LyricsPanel
-              lines={lyrics}
-              currentIndex={currentLyricIndex}
-              collapsed={lyricsCollapsed}
-              onToggleCollapse={() => setLyricsCollapsed((c) => !c)}
-              onSeek={seek}
-              onImportFile={(file) => void importLyricsFile(file)}
-              onImportLyrics={(parsed) => applySearchedLyrics(parsed)}
-              songId={activeSong?.id ?? null}
-              songTitle={activeSong?.name ?? ''}
-              songArtist={activeSong?.artist ?? null}
-              songDuration={activeSong?.duration ?? 0}
-              onlineSearchAllowed={onlineSearchAllowed}
-              autoLyricsEnabled={autoLyricsEnabled}
-              coverArtUrl={activeSong?.coverArtUrl ?? null}
-            />
-          </div>
-
-          <div className="pbm-resizer" onMouseDown={startResize}
-            role="separator" aria-orientation="horizontal" aria-label={t('playback.dragResize')} />
-
-          <div className="pbm-panel-title pbm-monitoring-title">{t('playback.monitoring')}</div>
-
-          <div className="card pbm-wave-card">
-            <div className="pbm-toolbar-row">
-              <span className="pbm-current-song" title={activeSong?.name}>
-                {activeSong ? activeSong.name : t('playback.noSongSelected')}
-              </span>
-              <div className="pbm-toolbar-actions">
-                <select className="select pbm-mode-select" value={sepMode}
-                  onChange={(e) => setSepMode(e.target.value as SepMode)}
-                  disabled={separating || !activeSong}>
-                  <option value="standard">{t('playback.standard')}</option>
-                  <option value="enhanced">{t('playback.enhanced')}</option>
-                </select>
-                <button className="btn btn-ghost" onClick={() => void runSeparation()}
-                  disabled={separating || !activeSong?.originalPath}>
-                  {separating ? t('playback.separating') : t('playback.separate')}
-                </button>
-                <button className="btn btn-ghost" onClick={() => coverInputRef.current?.click()}
-                  disabled={!activeSong}>
-                  {t('playback.loadCover')}
-                </button>
-                <input ref={coverInputRef} type="file" accept="audio/*" style={{ display: 'none' }}
-                  onChange={(e) => { const f = e.target.files?.[0]; if (f) void loadCover(f) }} />
+        <SplitPane
+          storageKey="ruanjian.playbackSplitRatio"
+          ariaLabel={t('playbackPanels.dragSplit')}
+          left={(
+            <section className="pbm-center">
+              {/* Ticket UI-13: the lyrics moved to the right pane's tab, so the
+                  now-playing card sits on its own here and no longer needs the
+                  vertical resizer that only existed to size the pair. */}
+              <div className="pbm-nowplaying-solo">
+                <NowPlayingCard
+                  title={activeSong?.name ?? null}
+                  artist={activeSong?.artist ?? null}
+                  coverArtUrl={activeSong?.coverArtUrl ?? null}
+                  liked={activeSong?.liked ?? false}
+                  onToggleLike={() => { if (activeSong) toggleLike(activeSong.id) }}
+                />
               </div>
-            </div>
 
-            <div className="pbm-scroll">
-              <div style={{ position: 'relative', width: canvasWidth }}>
-                <canvas ref={waveCanvasRef} onClick={handleWaveClick} className="pbm-canvas" />
-                <div className="pbm-playhead" style={{ left: playhead * pxPerSec }} />
-              </div>
-            </div>
+              <div className="pbm-panel-title pbm-monitoring-title">{t('playback.monitoring')}</div>
 
-            <div className="pbm-transport">
-              <button className="player-play-btn" onClick={togglePlay} disabled={!tracks.length}
-                title={playing ? t('playback.pause') : t('playback.play')}>
-                {playing ? '⏸' : '▶'}
-              </button>
-              <button className="btn btn-ghost" onClick={stop} disabled={!tracks.length}>
-                {t('playback.stop')}
-              </button>
-              <span className="pbm-time">
-                {formatDuration(playhead)} / {formatDuration(maxDuration)}
-              </span>
-              <div className="pbm-transport-spacer" />
-              <button className="btn btn-ghost" onClick={() => setZoom((z) => Math.max(0.25, z / 1.5))}>
-                − {t('playback.zoomOut')}
-              </button>
-              <button className="btn btn-ghost" onClick={() => setZoom((z) => Math.min(8, z * 1.5))}>
-                + {t('playback.zoomIn')}
-              </button>
-            </div>
-
-            <div className="pbm-ab-row">
-              <span className="pbm-ab-label">{t('playback.abTitle')}</span>
-              <select className="select" value={trackAId ?? ''}
-                onChange={(e) => setTrackAId(e.target.value || null)}>
-                <option value="">{t('playback.trackA')}</option>
-                {tracks.map((tr) => <option key={tr.id} value={tr.id}>{trackLabel(tr, t)}</option>)}
-              </select>
-              <select className="select" value={trackBId ?? ''}
-                onChange={(e) => setTrackBId(e.target.value || null)}>
-                <option value="">{t('playback.trackB')}</option>
-                {tracks.map((tr) => <option key={tr.id} value={tr.id}>{trackLabel(tr, t)}</option>)}
-              </select>
-              <button className="btn btn-ghost" disabled={!trackAId || !trackBId} onClick={switchAB}>
-                {t('playback.switchAB')} ({activeAB})
-              </button>
-              <button className="btn btn-ghost" disabled={!trackAId || !trackBId || aligning}
-                onClick={() => void autoAlign()}>
-                {aligning ? t('playback.aligning') : t('playback.autoAlign')}
-              </button>
-              {alignResult != null && trackAId && trackBId && (
-                <span className="pbm-align-note">
-                  {t('playback.aligned', { offset: alignResult.toFixed(2) })}
-                </span>
-              )}
-            </div>
-          </div>
-
-          <div className="card pbm-tracks-card">
-            <div className="pbm-panel-header">
-              <span className="pbm-panel-title">
-                {t('playback.trackList')} ({tracks.length})
-              </span>
-              <button className="btn btn-ghost pbm-mini-btn" onClick={() => setTracksOpen((v) => !v)}>
-                {tracksOpen ? t('playback.collapse') : t('playback.expand')}
-              </button>
-            </div>
-            {tracksOpen && (
-              tracks.length === 0
-                ? <div className="pbm-empty-hint">{t('playback.noTracks')}</div>
-                : (
-                  <div className="pbm-track-items">
-                    {tracks.map((tr) => (
-                      <div key={tr.id} className="pbm-track-item">
-                        <div className="pbm-thumb" style={{ background: tr.color }} />
-                        <div className="pbm-track-main">
-                          <div className="pbm-track-name">{trackLabel(tr, t)}</div>
-                          <div className="pbm-track-controls">
-                            <button className={`btn btn-ghost pbm-mini-btn${tr.muted ? ' active' : ''}`}
-                              onClick={() => patchTrack(tr.id, { muted: !tr.muted })}>
-                              {t('playback.mute')}
-                            </button>
-                            <button className={`btn btn-ghost pbm-mini-btn${tr.solo ? ' active' : ''}`}
-                              onClick={() => patchTrack(tr.id, { solo: !tr.solo })}>
-                              {t('playback.solo')}
-                            </button>
-                            <input type="range" min={0} max={1} step={0.01} value={tr.volume}
-                              onChange={(e) => patchTrack(tr.id, { volume: Number(e.target.value) })}
-                              style={{ flex: 1, accentColor: tr.color }}
-                              aria-label={t('playback.volume')} />
-                            <button className="qi-remove" onClick={() => removeTrack(tr.id)}
-                              title={t('playback.remove')}>×</button>
-                          </div>
-                        </div>
-                      </div>
-                    ))}
+              <div className="card pbm-wave-card">
+                <div className="pbm-toolbar-row">
+                  <span className="pbm-current-song" title={activeSong?.name}>
+                    {activeSong ? activeSong.name : t('playback.noSongSelected')}
+                  </span>
+                  <div className="pbm-toolbar-actions">
+                    <select className="select pbm-mode-select" value={sepMode}
+                      onChange={(e) => setSepMode(e.target.value as SepMode)}
+                      disabled={separating || !activeSong}>
+                      <option value="standard">{t('playback.standard')}</option>
+                      <option value="enhanced">{t('playback.enhanced')}</option>
+                    </select>
+                    <button className="btn btn-ghost" onClick={() => void runSeparation()}
+                      disabled={separating || !activeSong?.originalPath}>
+                      {separating ? t('playback.separating') : t('playback.separate')}
+                    </button>
+                    <button className="btn btn-ghost" onClick={() => coverInputRef.current?.click()}
+                      disabled={!activeSong}>
+                      {t('playback.loadCover')}
+                    </button>
+                    <input ref={coverInputRef} type="file" accept="audio/*" style={{ display: 'none' }}
+                      onChange={(e) => { const f = e.target.files?.[0]; if (f) void loadCover(f) }} />
                   </div>
-                )
-            )}
-          </div>
-        </section>
+                </div>
+
+                <div className="pbm-scroll">
+                  <div style={{ position: 'relative', width: canvasWidth }}>
+                    <canvas ref={waveCanvasRef} onClick={handleWaveClick} className="pbm-canvas" />
+                    <div className="pbm-playhead" style={{ left: playhead * pxPerSec }} />
+                  </div>
+                </div>
+
+                <div className="pbm-transport">
+                  <button className="player-play-btn" onClick={togglePlay} disabled={!tracks.length}
+                    title={playing ? t('playback.pause') : t('playback.play')}>
+                    {playing ? '⏸' : '▶'}
+                  </button>
+                  <button className="btn btn-ghost" onClick={stop} disabled={!tracks.length}>
+                    {t('playback.stop')}
+                  </button>
+                  <span className="pbm-time">
+                    {formatDuration(playhead)} / {formatDuration(maxDuration)}
+                  </span>
+                  <div className="pbm-transport-spacer" />
+                  <button className="btn btn-ghost" onClick={() => setZoom((z) => Math.max(0.25, z / 1.5))}>
+                    − {t('playback.zoomOut')}
+                  </button>
+                  <button className="btn btn-ghost" onClick={() => setZoom((z) => Math.min(8, z * 1.5))}>
+                    + {t('playback.zoomIn')}
+                  </button>
+                </div>
+
+                <div className="pbm-ab-row">
+                  <span className="pbm-ab-label">{t('playback.abTitle')}</span>
+                  <select className="select" value={trackAId ?? ''}
+                    onChange={(e) => setTrackAId(e.target.value || null)}>
+                    <option value="">{t('playback.trackA')}</option>
+                    {tracks.map((tr) => <option key={tr.id} value={tr.id}>{trackLabel(tr, t)}</option>)}
+                  </select>
+                  <select className="select" value={trackBId ?? ''}
+                    onChange={(e) => setTrackBId(e.target.value || null)}>
+                    <option value="">{t('playback.trackB')}</option>
+                    {tracks.map((tr) => <option key={tr.id} value={tr.id}>{trackLabel(tr, t)}</option>)}
+                  </select>
+                  <button className="btn btn-ghost" disabled={!trackAId || !trackBId} onClick={switchAB}>
+                    {t('playback.switchAB')} ({activeAB})
+                  </button>
+                  <button className="btn btn-ghost" disabled={!trackAId || !trackBId || aligning}
+                    onClick={() => void autoAlign()}>
+                    {aligning ? t('playback.aligning') : t('playback.autoAlign')}
+                  </button>
+                  {alignResult != null && trackAId && trackBId && (
+                    <span className="pbm-align-note">
+                      {t('playback.aligned', { offset: alignResult.toFixed(2) })}
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              <div className="card pbm-tracks-card">
+                <div className="pbm-panel-header">
+                  <span className="pbm-panel-title">
+                    {t('playback.trackList')} ({tracks.length})
+                  </span>
+                  <button className="btn btn-ghost pbm-mini-btn" onClick={() => setTracksOpen((v) => !v)}>
+                    {tracksOpen ? t('playback.collapse') : t('playback.expand')}
+                  </button>
+                </div>
+                {tracksOpen && (
+                  tracks.length === 0
+                    ? <div className="pbm-empty-hint">{t('playback.noTracks')}</div>
+                    : (
+                      <div className="pbm-track-items">
+                        {tracks.map((tr) => (
+                          <div key={tr.id} className="pbm-track-item">
+                            <div className="pbm-thumb" style={{ background: tr.color }} />
+                            <div className="pbm-track-main">
+                              <div className="pbm-track-name">{trackLabel(tr, t)}</div>
+                              <div className="pbm-track-controls">
+                                <button className={`btn btn-ghost pbm-mini-btn${tr.muted ? ' active' : ''}`}
+                                  onClick={() => patchTrack(tr.id, { muted: !tr.muted })}>
+                                  {t('playback.mute')}
+                                </button>
+                                <button className={`btn btn-ghost pbm-mini-btn${tr.solo ? ' active' : ''}`}
+                                  onClick={() => patchTrack(tr.id, { solo: !tr.solo })}>
+                                  {t('playback.solo')}
+                                </button>
+                                <input type="range" min={0} max={1} step={0.01} value={tr.volume}
+                                  onChange={(e) => patchTrack(tr.id, { volume: Number(e.target.value) })}
+                                  style={{ flex: 1, accentColor: tr.color }}
+                                  aria-label={t('playback.volume')} />
+                                <button className="qi-remove" onClick={() => removeTrack(tr.id)}
+                                  title={t('playback.remove')}>×</button>
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )
+                )}
+              </div>
+            </section>
+          )}
+          right={(
+            <aside className="pbm-info">
+              <div className="pbm-info-tabs" role="tablist" aria-label={t('playbackPanels.infoPanel')}>
+                {([
+                  ['lyrics',    t('playbackPanels.tabLyrics')],
+                  ['record',    t('playbackPanels.tabRecord')],
+                  ['config',    t('playbackPanels.tabConfig')],
+                  ['structure', t('playbackPanels.tabStructure')],
+                ] as const).map(([key, label]) => (
+                  <button
+                    key={key}
+                    role="tab"
+                    aria-selected={infoTab === key}
+                    className={`pbm-info-tab${infoTab === key ? ' active' : ''}`}
+                    onClick={() => setInfoTab(key)}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+
+              <div className="pbm-info-body" role="tabpanel">
+                {infoTab === 'lyrics' && (
+                  <LyricsPanel
+                    lines={lyrics}
+                    currentIndex={currentLyricIndex}
+                    collapsed={lyricsCollapsed}
+                    onToggleCollapse={() => setLyricsCollapsed((c) => !c)}
+                    onSeek={seek}
+                    onImportFile={(file) => void importLyricsFile(file)}
+                    onImportLyrics={(parsed) => applySearchedLyrics(parsed)}
+                    songId={activeSong?.id ?? null}
+                    songTitle={activeSong?.name ?? ''}
+                    songArtist={activeSong?.artist ?? null}
+                    songDuration={activeSong?.duration ?? 0}
+                    onlineSearchAllowed={onlineSearchAllowed}
+                    autoLyricsEnabled={autoLyricsEnabled}
+                    coverArtUrl={activeSong?.coverArtUrl ?? null}
+                  />
+                )}
+                {infoTab === 'record' && (
+                <div className="card pbm-recording">
+                  <div className="pbm-panel-title">{t('playback.recordingPanel')}</div>
+                  <canvas ref={recCanvasRef} width={280} height={90} className="pbm-mic-canvas" />
+                  <div className="pbm-rec-controls">
+                    <span className="pbm-time">{formatDuration(recSeconds)}</span>
+                    {!recording ? (
+                      // Idle: neutral — accent is reserved for the armed/recording
+                      // state so it reads as "live" rather than just "clickable"
+                      // (Ticket 29 §6).
+                      <button className="btn btn-ghost" onClick={() => void startRecording()}>
+                        {t('playback.record')}
+                      </button>
+                    ) : (
+                      <button className="btn btn-record-active" onClick={() => void stopRecording()}>
+                        {t('playback.stopRecording')}
+                      </button>
+                    )}
+                  </div>
+                  {micError && (
+                    <div className="pbm-empty-hint" style={{ color: 'var(--danger)' }}>
+                      {t('playback.micUnavailable')}
+                    </div>
+                  )}
+                </div>
+                )}
+                {infoTab === 'config'    && <ModelConfigPanel />}
+                {infoTab === 'structure' && <ModelStructurePanel />}
+              </div>
+            </aside>
+          )}
+        />
 
         {/* ── Right: recording panel (always visible) ───────── */}
-        <aside className="pbm-right">
-          <div className="card pbm-recording">
-            <div className="pbm-panel-title">{t('playback.recordingPanel')}</div>
-            <canvas ref={recCanvasRef} width={280} height={90} className="pbm-mic-canvas" />
-            <div className="pbm-rec-controls">
-              <span className="pbm-time">{formatDuration(recSeconds)}</span>
-              {!recording ? (
-                // Idle: neutral — accent is reserved for the armed/recording
-                // state so it reads as "live" rather than just "clickable"
-                // (Ticket 29 §6).
-                <button className="btn btn-ghost" onClick={() => void startRecording()}>
-                  {t('playback.record')}
-                </button>
-              ) : (
-                <button className="btn btn-record-active" onClick={() => void stopRecording()}>
-                  {t('playback.stopRecording')}
-                </button>
-              )}
-            </div>
-            {micError && (
-              <div className="pbm-empty-hint" style={{ color: 'var(--danger)' }}>
-                {t('playback.micUnavailable')}
-              </div>
-            )}
-          </div>
-        </aside>
       </div>
     </>
   )
