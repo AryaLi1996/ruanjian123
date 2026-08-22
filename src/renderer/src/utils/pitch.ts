@@ -21,6 +21,77 @@ export function suggestedProtectionThreshold(maxMidi: number): number {
 }
 
 /**
+ * The fixed 强制修音 threshold (Ticket 17 / PATCH-02): D#4. Mirrors the
+ * `threshold_note: 63` the engine's apply_high_pitch_protection is called
+ * with — kept here so the UI's reference line and the correction itself can
+ * never drift apart.
+ */
+export const PROTECTION_THRESHOLD_MIDI = 63
+
+/**
+ * PATCH-02 §3: the MIDI range the pitch overlay's vertical axis spans, so a
+ * contour and the D#4 threshold line can be drawn against the same scale on
+ * top of the waveform.
+ */
+export interface PitchAxis {
+  lo: number
+  hi: number
+}
+
+// Breathing room above/below the outermost note so the contour never rides
+// flush against the plot edge, and a floor on the total span so a nearly
+// monotone passage doesn't blow a 1-semitone wobble up to full height.
+const AXIS_PADDING_SEMITONES = 3
+const MIN_AXIS_SPAN_SEMITONES = 12
+
+/**
+ * Derives the overlay's vertical MIDI range from an analyzed contour
+ * (per-frame MIDI, 0 = unvoiced). The threshold is always included in the
+ * range so its reference line stays on screen even when every note sits
+ * well under (or over) it. Returns null when nothing was voiced — there is
+ * no meaningful pitch axis to draw against in that case.
+ */
+export function computePitchAxis(
+  contour: readonly number[],
+  thresholdMidi: number = PROTECTION_THRESHOLD_MIDI,
+): PitchAxis | null {
+  let min = Infinity
+  let max = -Infinity
+  // A plain loop rather than Math.min(...voiced): contours run to thousands
+  // of frames, well past the argument limit a spread would hit.
+  for (const midi of contour) {
+    if (midi <= 0) continue          // unvoiced frame
+    if (midi < min) min = midi
+    if (midi > max) max = midi
+  }
+  if (min === Infinity) return null
+
+  let lo = Math.min(min, thresholdMidi) - AXIS_PADDING_SEMITONES
+  let hi = Math.max(max, thresholdMidi) + AXIS_PADDING_SEMITONES
+
+  const shortfall = MIN_AXIS_SPAN_SEMITONES - (hi - lo)
+  if (shortfall > 0) {
+    lo -= shortfall / 2
+    hi += shortfall / 2
+  }
+  return { lo, hi }
+}
+
+/**
+ * Maps a MIDI note onto the overlay's vertical axis as a fraction where 0 is
+ * the top edge and 1 the bottom — i.e. higher notes sit higher on screen,
+ * matching how the threshold line and contour are positioned in CSS/canvas
+ * coordinates. Clamped, so a note outside the axis pins to the nearest edge
+ * instead of drawing off-plot.
+ */
+export function midiToYFraction(midi: number, axis: PitchAxis): number {
+  const span = axis.hi - axis.lo
+  if (span <= 0) return 0.5
+  const fromBottom = (midi - axis.lo) / span
+  return 1 - Math.min(1, Math.max(0, fromBottom))
+}
+
+/**
  * Pitch-shift / key-change helpers — Ticket 19.
  *
  * The recommended-shift formula needs two numeric MIDI values that don't

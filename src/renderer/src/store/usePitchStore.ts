@@ -6,7 +6,12 @@ import { create } from 'zustand'
 export interface PitchAnalysisResult {
   maxMidi: number         // highest MIDI note found in the analyzed region (0 = nothing voiced)
   avgMidi: number         // mean MIDI note across voiced frames
-  contour: number[]       // per-frame MIDI note (0 = unvoiced) — kept for future waveform overlay
+  contour: number[]       // per-frame MIDI note (0 = unvoiced) — drawn as the waveform pitch overlay
+  // PATCH-02 §3: the span of the track `contour` covers, in seconds —
+  // [0, duration] for a whole-track analysis, or the dragged region's
+  // bounds. The overlay needs it to draw the contour under the right slice
+  // of the waveform rather than stretched across the full width.
+  range:   [number, number]
 }
 
 interface PitchState {

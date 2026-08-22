@@ -40,6 +40,7 @@ export function TopToolbar(): JSX.Element {
   const activeView    = useAppStore((s) => s.activeView)
   const engineBusy    = useAppStore((s) => s.engineBusy)
   const engineStatus  = useAppStore((s) => s.engineStatus)
+  const statusSticky  = useAppStore((s) => s.statusSticky)
   const setActiveView = useAppStore((s) => s.setActiveView)
   const subStatus     = useSubscriptionStore((s) => s.status)
   const avatarDataUrl = useSettingsStore((s) => s.avatarDataUrl)
@@ -119,9 +120,14 @@ export function TopToolbar(): JSX.Element {
       </nav>
 
       <div className="tb-right">
-        <div className="engine-status" title={engineBusy ? engineStatus : t('app.ready')}>
+        {/* PATCH-02 §4: a sticky status outlives the busy flag, so an
+            applied-protection line stays on the bar once the engine goes
+            idle instead of snapping straight back to "engine ready". */}
+        <div className="engine-status" title={engineBusy || statusSticky ? engineStatus : t('app.ready')}>
           <span className={`status-dot${engineBusy ? ' busy' : ''}`} />
-          <span className="tb-status-text">{engineBusy ? engineStatus : t('app.ready')}</span>
+          <span className="tb-status-text">
+            {engineBusy || statusSticky ? engineStatus : t('app.ready')}
+          </span>
         </div>
 
         {readyToInstall ? (

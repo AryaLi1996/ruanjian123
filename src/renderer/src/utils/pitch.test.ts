@@ -3,6 +3,7 @@ import {
   midiToNoteName, suggestedProtectionThreshold,
   keyToMidi, computeRecommendedShift, PITCH_SHIFT_MIN, PITCH_SHIFT_MAX,
   computeRecommendedShiftRange, SHIFT_RANGE_CUSHION_SEMITONES,
+  PROTECTION_THRESHOLD_MIDI, computePitchAxis, midiToYFraction,
 } from './pitch'
 
 describe('midiToNoteName', () => {
@@ -118,5 +119,85 @@ describe('computeRecommendedShiftRange', () => {
   it('returns null when the underlying recommendation is null', () => {
     expect(computeRecommendedShiftRange(null, 60)).toBeNull()
     expect(computeRecommendedShiftRange('C', null)).toBeNull()
+  })
+})
+
+describe('PROTECTION_THRESHOLD_MIDI', () => {
+  it('is D#4, the fixed 强制修音 threshold the engine is called with', () => {
+    expect(PROTECTION_THRESHOLD_MIDI).toBe(63)
+    expect(midiToNoteName(PROTECTION_THRESHOLD_MIDI)).toBe('D#4')
+  })
+})
+
+describe('computePitchAxis', () => {
+  it('returns null when no frame is voiced', () => {
+    expect(computePitchAxis([])).toBeNull()
+    expect(computePitchAxis([0, 0, 0])).toBeNull()
+  })
+
+  it('spans the voiced range with padding on both ends', () => {
+    // 55..79 is a 24-semitone span, already past the 12-semitone floor, so
+    // only the ±3 padding applies.
+    expect(computePitchAxis([55, 67, 79], 63)).toEqual({ lo: 52, hi: 82 })
+  })
+
+  it('ignores unvoiced (0) frames rather than treating them as a low note', () => {
+    expect(computePitchAxis([0, 55, 0, 79, 0], 63)).toEqual({ lo: 52, hi: 82 })
+  })
+
+  it('always keeps the threshold on the axis, even when every note is far below it', () => {
+    const axis = computePitchAxis([40, 42], 63)!
+    expect(axis.lo).toBeLessThanOrEqual(40)
+    expect(axis.hi).toBeGreaterThanOrEqual(63)
+  })
+
+  it('keeps the threshold on the axis when every note is far above it', () => {
+    const axis = computePitchAxis([90, 92], 63)!
+    expect(axis.lo).toBeLessThanOrEqual(63)
+    expect(axis.hi).toBeGreaterThanOrEqual(92)
+  })
+
+  it('widens a near-monotone contour to the minimum span, centred on it', () => {
+    // A single note at the threshold: padding alone gives a 6-semitone span,
+    // so it grows symmetrically to the 12-semitone floor.
+    const axis = computePitchAxis([63], 63)!
+    expect(axis.hi - axis.lo).toBe(12)
+    expect((axis.lo + axis.hi) / 2).toBe(63)
+  })
+
+  it('does not shrink a contour that already exceeds the minimum span', () => {
+    const axis = computePitchAxis([50, 80], 63)!
+    expect(axis.hi - axis.lo).toBeGreaterThan(12)
+  })
+
+  it('handles a contour far longer than the argument limit a spread would hit', () => {
+    // 50..70 — already wider than the minimum span, so this asserts the
+    // min/max scan alone rather than the widening on top of it.
+    const contour = Array.from({ length: 200_000 }, (_, i) => 50 + (i % 21))
+    const axis = computePitchAxis(contour, 63)!
+    expect(axis.lo).toBe(47)   // min voiced 50, minus 3 padding
+    expect(axis.hi).toBe(73)   // max voiced 70, plus 3 padding
+  })
+})
+
+describe('midiToYFraction', () => {
+  const axis = { lo: 50, hi: 80 }
+
+  it('puts the top of the axis at 0 and the bottom at 1 (higher notes sit higher)', () => {
+    expect(midiToYFraction(80, axis)).toBe(0)
+    expect(midiToYFraction(50, axis)).toBe(1)
+  })
+
+  it('places the midpoint halfway down', () => {
+    expect(midiToYFraction(65, axis)).toBeCloseTo(0.5)
+  })
+
+  it('clamps notes outside the axis to the nearest edge instead of drawing off-plot', () => {
+    expect(midiToYFraction(120, axis)).toBe(0)
+    expect(midiToYFraction(10, axis)).toBe(1)
+  })
+
+  it('falls back to centre for a degenerate (zero-width) axis', () => {
+    expect(midiToYFraction(63, { lo: 63, hi: 63 })).toBe(0.5)
   })
 })

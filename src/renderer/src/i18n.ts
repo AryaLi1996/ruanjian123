@@ -106,6 +106,14 @@ const resources = {
         maxDetected: '检测到最高音', suggestedThreshold: '建议高音保护阈值', avgDetected: '平均音高',
         summary: '检测到最高音: {{maxNote}}, 建议高音保护阈值: {{thresholdNote}}',
         noPitchDetected: '未检测到有效音高，请确认所选区域包含人声。',
+        // PATCH-02: 强制修音 触发按钮与波形阈值线可视化。
+        applyProtection: '应用高音保护', applyingProtection: '正在应用…', protectionApplied: '已应用',
+        applyProtectionHint: '请先分析音高',
+        thresholdLineLabel: '{{note}}（高音保护线）',
+        correctedLegend: '红色区域为超过 {{note}} 的强制修音范围',
+        correctedInfo: '已修正 {{count}} 处高音（约 {{percent}}% 时长）',
+        correctedNone: '未检测到超出 {{note}} 的高音，无需修正。',
+        correctedRegionTitle: '已修正：{{start}}s – {{end}}s',
       },
       // Ticket 15: waveform display + drag-selected region editor.
       waveformEditor: {
@@ -364,6 +372,14 @@ const resources = {
         maxDetected: 'Detected highest note', suggestedThreshold: 'Suggested high-note protection threshold', avgDetected: 'Average pitch',
         summary: 'Detected highest note: {{maxNote}}, suggested high-note protection threshold: {{thresholdNote}}',
         noPitchDetected: 'No pitch detected — make sure the selected region contains vocals.',
+        // PATCH-02: forced auto-tune trigger + waveform threshold-line overlay.
+        applyProtection: 'Apply High-Pitch Protection', applyingProtection: 'Applying…', protectionApplied: 'Applied',
+        applyProtectionHint: 'Analyze the pitch first',
+        thresholdLineLabel: '{{note}} (protection threshold)',
+        correctedLegend: 'Red spans were clamped back down from above {{note}}',
+        correctedInfo: 'Corrected {{count}} high-pitch region(s) (~{{percent}}% of duration)',
+        correctedNone: 'No pitch above {{note}} detected — nothing to correct.',
+        correctedRegionTitle: 'Corrected: {{start}}s – {{end}}s',
       },
       // Ticket 15: waveform display + drag-selected region editor.
       waveformEditor: {
