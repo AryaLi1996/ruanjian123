@@ -38,7 +38,7 @@ const resources = {
         title: '模型训练', description: '使用干声录音微调 AI 歌手的音色。', info: '模型信息', name: '模型名称 *', namePlaceholder: '例如：我的歌手', epochs: '训练轮数', material: '训练素材', noFiles: '未上传文件，将使用演示数据。', mode: '训练模式', start: '开始本地训练', training: '训练中…', complete: '✓ 训练完成', finalizing: '正在收尾…', finalizingDesc: '训练已完成，正在生成试听音频并保存模型。', audition: '试听', trainAnother: '训练另一个模型', models: '我的模型（{{count}}）', demo: '试听', retrain: '重新训练', delete: '删除', standard: '标准', professional: '专业', gpu: 'GPU', cpu: 'CPU', vram: '显存', epoch: '第 {{current}}/{{total}} 轮', loss: '损失 {{value}}', eta: '预计剩余 {{value}}', waiting: '等待引擎…', logLabel: '训练日志', completeLog: '训练完成！',
         cancel: '取消训练', cancelConfirm: '确定要取消训练吗？此操作无法撤销。',
         cancelConfirmYes: '确定取消', cancelConfirmNo: '继续训练',
-        cancelling: '正在取消…', cancelled: '训练已被用户取消。', materialHint: '拖入干净的人声录音。', standardTagline: 'LoRA rank-4 · 仅训练音色编码器', professionalTagline: 'LoRA+ rank-8 · 全层训练 · 梯度检查点', dropAudio: '拖入音频文件，或点击浏览', audioFormats: 'WAV · FLAC · MP3 · OGG · M4A', fileCount: '{{count}} 个文件', totalDuration: '共 {{duration}}', clearAll: '全部清除', removeFile: '移除文件', loadingWaveform: '正在加载波形…', waveform: '波形', play: '播放', pause: '暂停', volume: '音量', noDemo: '暂无演示音频', lossLabel: '损失：{{value}}', pro: '专业', trainingGpu: 'GPU', trainingCpu: 'CPU', trainingVram: '显存', download: '下载模型', ready: '就绪', qualityLow: '音质较低',
+        cancelling: '正在取消…', cancelled: '训练已被用户取消。', materialHint: '拖入干净的人声录音。', standardTagline: 'LoRA rank-4 · 仅训练音色编码器', professionalTagline: 'LoRA+ rank-8 · 全层训练 · 梯度检查点', dropAudio: '拖入音频文件，或点击浏览', audioFormats: 'WAV · FLAC · MP3 · OGG · M4A', fileCount: '{{count}} 个文件', totalDuration: '共 {{duration}}', clearAll: '全部清除', removeFile: '移除文件', loadingWaveform: '正在加载波形…', waveform: '波形', play: '播放', pause: '暂停', volume: '音量', noDemo: '暂无演示音频', lossLabel: '损失：{{value}}', pro: '专业', trainingGpu: 'GPU', trainingCpu: 'CPU', trainingVram: '显存', download: '下载模型', ready: '就绪', qualityLow: '音质较低', stepsLabel: '步数', dateLabel: '训练日期', lossShort: '损失',
       },
       cover: {
         title: '翻唱创作', description: '上传 → 分离 → 合成 → 混音 → 导出', upload: '上传并分离', song: '歌曲文件（WAV / FLAC / MP3）', chooseSong: '点击选择歌曲', separationMode: '分离模式', standard: '标准', enhanced: '增强', standardStems: '2 轨：人声 + 伴奏', enhancedStems: '3 轨：主唱 · 和声 · 伴奏', startSeparation: '开始分离', separating: '分离中…', stems: '音轨 — 点击独奏试听', nextModel: '下一步：选择模型 →', selectModel: '选择 AI 歌手模型', noModels: '还没有训练好的模型。请先前往模型训练。', algorithm: '翻唱算法', v1: 'V1 — 快速', v2: 'V2 — 高精度', v1Tagline: 'DTW + WSOLA · 实时率 ≤10%', v2Tagline: 'LSTM 表现力编码器 · 实时率 ≤50%', synthesize: '合成翻唱', synthesizing: '合成中…', nextSynthesize: '下一步：合成 →', mix: '合成与混音', mixer: '混音台', export: '下一步：导出 →', exportTitle: '导出音频',
@@ -141,6 +141,15 @@ const resources = {
       // titled 波形编辑. Copy here is fixed by the ticket (逐字对照 against the
       // reference screenshot), so prefer adding a new key over rewording one.
       toolbar: { more: '更多操作', scrollLeft: '向左翻页', scrollRight: '向右翻页' },
+      playbackPanels: {
+        dragSplit: '拖动调整左右面板比例', infoPanel: '信息面板',
+        tabLyrics: '歌词', tabRecord: '录音', tabConfig: '训练配置', tabStructure: '模型结构',
+        noModel: '尚无已训练的模型 — 请先训练一个。',
+        showingLatest: '当前显示最近训练的模型（尚未应用任何模型）。',
+        configName: '模型名称', configMode: '训练模式', configQuality: '相似度',
+        stageInput: '输入音频', stageEncoder: '音色编码器', stageDecoder: '声码器', stageOutput: '输出音频',
+        structureNote: '推理流程示意，非完整计算图。',
+      },
       dataPrep: {
         title: '模型数据准备',
         description: '处理干音 → 设定保护 → 选目标歌 → 合并训练。',
@@ -351,7 +360,7 @@ const resources = {
       training: { title: 'Model Training', description: 'Fine-tune the AI singer\'s timbre using dry vocal recordings.', info: 'Model Info', name: 'Model name *', namePlaceholder: 'e.g. My Singer', epochs: 'Epochs', material: 'Training Material', noFiles: 'No files uploaded; synthetic demo data will be used.', mode: 'Training Mode', start: 'Start Local Training', training: 'Training…', complete: '✓ Training Complete', finalizing: 'Finalizing…', finalizingDesc: 'Training finished. Generating the demo clip and saving the model.', audition: 'Audition', trainAnother: 'Train Another Model', models: 'Your Models ({{count}})', demo: 'Demo', retrain: 'Retrain', delete: 'Delete', standard: 'Standard', professional: 'Professional', gpu: 'GPU', cpu: 'CPU', vram: 'VRAM', epoch: 'Epoch {{current}}/{{total}}', loss: 'Loss {{value}}', eta: 'ETA {{value}}', waiting: 'Waiting for engine…', logLabel: 'Training log', completeLog: 'Training complete!',
         cancel: 'Cancel training', cancelConfirm: 'Cancel this training run? This cannot be undone.',
         cancelConfirmYes: 'Yes, cancel', cancelConfirmNo: 'Keep training',
-        cancelling: 'Cancelling…', cancelled: 'Training cancelled by the user.', materialHint: 'Drop clean vocal recordings here.', standardTagline: 'LoRA rank-4 · timbre encoder only', professionalTagline: 'LoRA+ rank-8 · all layers · gradient checkpointing', dropAudio: 'Drop audio files here, or click to browse', audioFormats: 'WAV · FLAC · MP3 · OGG · M4A', fileCount: '{{count}} file(s)', totalDuration: '{{duration}} total', clearAll: 'Clear all', removeFile: 'Remove file', loadingWaveform: 'Loading waveform…', waveform: 'waveform', play: 'Play', pause: 'Pause', volume: 'Volume', noDemo: 'No demo available', lossLabel: 'Loss: {{value}}', pro: 'Pro', trainingGpu: 'GPU', trainingCpu: 'CPU', trainingVram: 'VRAM', download: 'Download Model', ready: 'Ready', qualityLow: 'Quality may be low' },
+        cancelling: 'Cancelling…', cancelled: 'Training cancelled by the user.', materialHint: 'Drop clean vocal recordings here.', standardTagline: 'LoRA rank-4 · timbre encoder only', professionalTagline: 'LoRA+ rank-8 · all layers · gradient checkpointing', dropAudio: 'Drop audio files here, or click to browse', audioFormats: 'WAV · FLAC · MP3 · OGG · M4A', fileCount: '{{count}} file(s)', totalDuration: '{{duration}} total', clearAll: 'Clear all', removeFile: 'Remove file', loadingWaveform: 'Loading waveform…', waveform: 'waveform', play: 'Play', pause: 'Pause', volume: 'Volume', noDemo: 'No demo available', lossLabel: 'Loss: {{value}}', pro: 'Pro', trainingGpu: 'GPU', trainingCpu: 'CPU', trainingVram: 'VRAM', download: 'Download Model', ready: 'Ready', qualityLow: 'Quality may be low', stepsLabel: 'Steps', dateLabel: 'Trained', lossShort: 'Loss' },
       cover: { title: 'Cover Creation', description: 'Upload → Separate → Synthesize → Mix → Export', upload: 'Upload & Separate', song: 'Song file (WAV / FLAC / MP3)', chooseSong: 'Click to choose a song', separationMode: 'Separation mode', standard: 'Standard', enhanced: 'Enhanced', standardStems: '2 stems — vocals + accompaniment', enhancedStems: '3 stems — lead · harmony · accompaniment', startSeparation: 'Start Separation', separating: 'Separating…', stems: 'Stems — click Solo to preview', nextModel: 'Next: Select Model →', selectModel: 'Select AI Singer Model', noModels: 'No models trained yet. Go to Model Training first.', algorithm: 'Cover algorithm', v1: 'V1 — Fast', v2: 'V2 — High-Precision', v1Tagline: 'DTW + WSOLA · ≤10% real-time', v2Tagline: 'LSTM expression encoder · ≤50% RT', synthesize: 'Synthesize Cover', synthesizing: 'Synthesizing…', nextSynthesize: 'Next: Synthesize →', mix: 'Synthesize & Mix', mixer: 'Mixing Console', export: 'Next: Export →', exportTitle: 'Export Audio',
         errUploadFirst: 'Please upload a song first.', errSelectModel: 'Select a model first.', errRunSeparation: 'Run separation first.',
         labelVocals: 'Vocals', labelAccompaniment: 'Accompaniment', labelLeadDry: 'Lead (dry)', labelHarmonyDry: 'Harmony (dry)',
@@ -450,6 +459,15 @@ const resources = {
       },
       // PATCH-03: Model Data Preparation workspace (formerly Waveform Editor).
       toolbar: { more: 'More actions', scrollLeft: 'Scroll left', scrollRight: 'Scroll right' },
+      playbackPanels: {
+        dragSplit: 'Drag to resize the panels', infoPanel: 'Info panel',
+        tabLyrics: 'Lyrics', tabRecord: 'Record', tabConfig: 'Training config', tabStructure: 'Model',
+        noModel: 'No trained models yet — train one first.',
+        showingLatest: 'Showing the most recently trained model (none applied yet).',
+        configName: 'Model name', configMode: 'Training mode', configQuality: 'Similarity',
+        stageInput: 'Input audio', stageEncoder: 'Timbre encoder', stageDecoder: 'Vocoder', stageOutput: 'Output audio',
+        structureNote: 'Schematic of the inference path, not the full graph.',
+      },
       dataPrep: {
         title: 'Model Data Preparation',
         description: 'Process the dry vocal → set protection → pick a target song → merge for training.',
