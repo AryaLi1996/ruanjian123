@@ -1050,8 +1050,64 @@ html, body, #root {
   background: color-mix(in srgb, var(--accent) 5%, transparent);
 }
 .wf-waveform { width: 100%; min-height: 96px; }
+
+/* ── Region selection (Ticket 15, extended by UI-05) ───────── */
+/* Wider than the default 1px so the edges are actually grabbable, with the
+   ew-resize affordance the ticket calls for. */
 .wf-waveform ::part(region-handle-left),
-.wf-waveform ::part(region-handle-right) { cursor: ew-resize; }
+.wf-waveform ::part(region-handle-right) {
+  cursor: ew-resize;
+  width: 7px;
+  border-width: 0;
+  background: color-mix(in srgb, #2563eb 85%, transparent);
+}
+.wf-waveform ::part(region-handle-left)  { border-radius: 3px 0 0 3px; }
+.wf-waveform ::part(region-handle-right) { border-radius: 0 3px 3px 0; }
+/* The start–end readout pinned to the top of the region (UI-05 §4). */
+.wf-waveform ::part(region-content) {
+  position: absolute;
+  top: 2px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: color-mix(in srgb, #2563eb 88%, transparent);
+  color: #fff;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+/* ── Timeline + zoom controls (Ticket UI-04) ───────────────── */
+.wf-timeline { width: 100%; }
+
+.wf-zoom-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+.wf-zoom-label { font-size: 12px; color: var(--text-muted); flex-shrink: 0; }
+.wf-zoom-btn {
+  width: 26px; height: 26px;
+  padding: 0;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 14px; line-height: 1;
+  flex-shrink: 0;
+}
+.wf-zoom-slider { width: 150px; accent-color: var(--accent); cursor: pointer; flex-shrink: 0; }
+.wf-zoom-slider:disabled { cursor: not-allowed; opacity: 0.45; }
+.wf-zoom-reset { font-size: 11px; padding: 4px 12px; flex-shrink: 0; }
+.wf-zoom-readout {
+  font-size: 11px;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  min-width: 34px;
+  flex-shrink: 0;
+}
+.wf-zoom-hint { font-size: 11px; color: var(--text-muted); margin-left: auto; }
 
 .wf-empty-overlay {
   position: absolute;

@@ -129,6 +129,9 @@ const resources = {
         play: '播放', pause: '暂停', stop: '停止',
         loopSelection: '循环播放选区', clearSelection: '清除选区',
         selectionInfo: '选区：{{start}} – {{end}}（时长 {{dur}}）',
+        zoom: '缩放', zoomIn: '放大', zoomOut: '缩小',
+        zoomFit: '适应', zoomReset: '恢复到整段可见',
+        zoomHint: 'Ctrl + 滚轮缩放',
       },
       // PATCH-03: the Model Data Preparation workspace — the page formerly
       // titled 波形编辑. Copy here is fixed by the ticket (逐字对照 against the
@@ -432,6 +435,9 @@ const resources = {
         play: 'Play', pause: 'Pause', stop: 'Stop',
         loopSelection: 'Loop selection', clearSelection: 'Clear selection',
         selectionInfo: 'Selection: {{start}} – {{end}} ({{dur}})',
+        zoom: 'Zoom', zoomIn: 'Zoom in', zoomOut: 'Zoom out',
+        zoomFit: 'Fit', zoomReset: 'Fit the whole clip',
+        zoomHint: 'Ctrl + wheel to zoom',
       },
       // PATCH-03: Model Data Preparation workspace (formerly Waveform Editor).
       dataPrep: {
