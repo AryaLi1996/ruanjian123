@@ -12,6 +12,18 @@ function isAcceptedAudioFile(f: File): boolean {
   return ACCEPT_EXT.has(ext)
 }
 
+// Mirrors the main process's dialog:openFile filter (PATCH-01) — a file
+// picked through the native dialog is read as raw bytes via
+// window.engine.readFile, so it needs an explicit MIME type to become a
+// Blob wavesurfer can load.
+const MIME_BY_EXT: Record<string, string> = {
+  wav: 'audio/wav', mp3: 'audio/mpeg', flac: 'audio/flac', aac: 'audio/aac',
+}
+
+function baseName(filePath: string): string {
+  return filePath.split(/[\\/]/).pop() ?? filePath
+}
+
 // Blue overlay for the selection region (Ticket 15's "highlighted with a
 // blue overlay" requirement) — kept as a literal rather than var(--accent)
 // since the accent colour is user-customizable and region selection should
@@ -29,6 +41,8 @@ export function WaveformEditor(): JSX.Element {
   const [ready, setReady]     = useState(false)
   const [dragging, setDragging] = useState(false)
   const [loadError, setLoadError] = useState<string | null>(null)
+  const [filePath, setFilePath] = useState<string | null>(null)
+  const [browsing, setBrowsing] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
 
   const fileName      = useWaveformStore((s) => s.fileName)
@@ -149,12 +163,63 @@ export function WaveformEditor(): JSX.Element {
     const url = URL.createObjectURL(file)
     objectUrlRef.current = url
     setFileName(file.name)
+    // A dropped/browser-picked File never carries a real filesystem path in
+    // this sandboxed/contextIsolated renderer — only the native dialog flow
+    // below (loadFromPath) resolves one, so the path field reflects that.
+    setFilePath(null)
     try {
       await ws.load(url)
     } catch (err) {
       setLoadError(String(err))
     }
   }, [clearSelection, setFileName, t])
+
+  // ── Load a file chosen via the native "Browse…" dialog (PATCH-01) ─────
+  // Unlike loadFile above, this starts from an absolute path rather than a
+  // File object, so it reads the bytes over IPC and wraps them in a Blob
+  // wavesurfer can load the same way.
+  const loadFromPath = useCallback(async (path: string) => {
+    const ws = wsRef.current
+    if (!ws) return
+    setLoadError(null)
+    setReady(false)
+    regionsRef.current?.clearRegions()
+    selectionIdRef.current = null
+    clearSelection()
+
+    try {
+      const buf = await window.engine.readFile(path)
+      const ext = path.split('.').pop()?.toLowerCase() ?? ''
+      const blob = new Blob([buf], { type: MIME_BY_EXT[ext] ?? 'application/octet-stream' })
+
+      if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current)
+      const url = URL.createObjectURL(blob)
+      objectUrlRef.current = url
+      setFileName(baseName(path))
+      setFilePath(path)
+      await ws.load(url)
+    } catch (err) {
+      setLoadError(String(err))
+    }
+  }, [clearSelection, setFileName])
+
+  // Opens the native file-open dialog (main process) and loads whatever the
+  // user picks. Guarded against re-entry so a double-click / repeat click
+  // while the dialog or the subsequent load is in flight can't stack calls
+  // (acceptance criteria: "防止用户重复点击").
+  const handleBrowse = useCallback(async () => {
+    if (browsing) return
+    setBrowsing(true)
+    try {
+      const path = await window.engine.openFileDialog()
+      if (!path) return // cancelled — dialog closes, input content stays as-is
+      await loadFromPath(path)
+    } catch (err) {
+      setLoadError(String(err))
+    } finally {
+      setBrowsing(false)
+    }
+  }, [browsing, loadFromPath])
 
   function handleDrop(e: React.DragEvent): void {
     e.preventDefault(); setDragging(false)
@@ -205,6 +270,33 @@ export function WaveformEditor(): JSX.Element {
 
   return (
     <div>
+      {/* File path field + native "Browse…" button (PATCH-01) — clicking
+          either the field or the folder icon opens the OS file dialog;
+          canceling leaves the field untouched. */}
+      <div className="wf-path-row">
+        <div className="wf-path-input-wrap" onClick={() => void handleBrowse()}>
+          <input
+            className="wf-path-input"
+            type="text"
+            readOnly
+            value={filePath ?? ''}
+            placeholder={t('waveformEditor.pathPlaceholder')}
+            aria-label={t('waveformEditor.browse')}
+          />
+          {browsing && <span className="wf-path-spinner" aria-hidden="true" />}
+        </div>
+        <button
+          type="button"
+          className="btn btn-ghost wf-browse-btn"
+          onClick={() => void handleBrowse()}
+          disabled={browsing}
+          aria-label={t('waveformEditor.browse')}
+          title={t('waveformEditor.browse')}
+        >
+          {browsing ? <span className="wf-path-spinner" aria-hidden="true" /> : '📁'}
+        </button>
+      </div>
+
       <div
         className={`wf-shell${dragging ? ' drag-over' : ''}`}
         onDragEnter={(e) => { e.preventDefault(); setDragging(true) }}
