@@ -100,6 +100,8 @@ export function PlaybackMonitorView(): JSX.Element {
 
   const [playing, setPlaying] = useState(false)
   const [playhead, setPlayhead] = useState(0)
+  const [masterVolume, setMasterVolume] = useState(0.85)
+  const [loopPlayback, setLoopPlayback] = useState(false)
   const [zoom, setZoom] = useState(1)
   const [sepMode, setSepMode] = useState<SepMode>('standard')
   const [separating, setSeparating] = useState(false)
@@ -141,6 +143,10 @@ export function PlaybackMonitorView(): JSX.Element {
   const rafRef         = useRef<number | null>(null)
   const tracksRef      = useRef<Track[]>([])
   useEffect(() => { tracksRef.current = tracks }, [tracks])
+  const masterVolumeRef = useRef(masterVolume)
+  const loopPlaybackRef = useRef(loopPlayback)
+  useEffect(() => { masterVolumeRef.current = masterVolume }, [masterVolume])
+  useEffect(() => { loopPlaybackRef.current = loopPlayback }, [loopPlayback])
   const songsRef        = useRef<Song[]>([])
   useEffect(() => { songsRef.current = songs }, [songs])
 
@@ -179,9 +185,11 @@ export function PlaybackMonitorView(): JSX.Element {
       const g = gainNodesRef.current.get(tr.id)
       if (!g) continue
       const audible = anySolo ? tr.solo : !tr.muted
-      g.gain.value = audible ? tr.volume : 0
+      g.gain.value = audible ? tr.volume * masterVolumeRef.current : 0
     }
   }
+
+  useEffect(() => { applyGains() }, [masterVolume])
 
   // ── Transport ──────────────────────────────────────────────
   function stopSources(): void {
@@ -216,7 +224,10 @@ export function PlaybackMonitorView(): JSX.Element {
       setPlayhead(pos)
       updateLyricIndex(pos)
       const maxDur = Math.max(0, ...tracksRef.current.map((tr) => tr.buffer.duration + tr.offsetSec))
-      if (pos >= maxDur && maxDur > 0) { pause(); setPlayhead(maxDur); return }
+      if (pos >= maxDur && maxDur > 0) {
+        if (loopPlaybackRef.current) { play(0); return }
+        pause(); setPlayhead(maxDur); return
+      }
       rafRef.current = requestAnimationFrame(loop)
     }
     rafRef.current = requestAnimationFrame(loop)
@@ -558,14 +569,16 @@ export function PlaybackMonitorView(): JSX.Element {
   // can run once on mount: togglePlay/stop/seek are re-created every render
   // (they close over `playing`/`playhead`), and re-registering on each of
   // those would churn the store 60×/second during playback.
-  const transportRef = useRef({ togglePlay, stop, seek })
-  transportRef.current = { togglePlay, stop, seek }
+  const transportRef = useRef({ togglePlay, stop, seek, setVolume: setMasterVolume, setLoop: setLoopPlayback })
+  transportRef.current = { togglePlay, stop, seek, setVolume: setMasterVolume, setLoop: setLoopPlayback }
 
   useEffect(() => {
     return usePlayerStore.getState().registerControls({
       togglePlay: () => transportRef.current.togglePlay(),
       stop:       () => transportRef.current.stop(),
       seek:       (sec) => transportRef.current.seek(sec),
+      setVolume:  (volume) => transportRef.current.setVolume(volume),
+      setLoop:    (loop) => transportRef.current.setLoop(loop),
     })
   }, [])
 

@@ -22,6 +22,8 @@ export interface PlayerControls {
   togglePlay: () => void
   stop:       () => void
   seek:       (sec: number) => void
+  setVolume?: (volume: number) => void
+  setLoop?:   (loop: boolean) => void
 }
 
 interface PlayerState {
@@ -33,6 +35,8 @@ interface PlayerState {
   position:    number
   /** Total length of the loaded material in seconds; 0 when nothing is loaded. */
   duration:    number
+  volume:      number
+  loop:        boolean
   /** Null whenever no view currently owns an audio graph — see the note above. */
   controls:    PlayerControls | null
 
@@ -40,6 +44,8 @@ interface PlayerState {
   setTransport:  (transport: { playing: boolean; position: number; duration: number }) => void
   /** Registers the owning view's transport commands; returns an unregister fn for the effect cleanup. */
   registerControls: (controls: PlayerControls) => () => void
+  setVolume:       (volume: number) => void
+  setLoop:         (loop: boolean) => void
 }
 
 const IDLE = {
@@ -49,6 +55,8 @@ const IDLE = {
   playing:     false,
   position:    0,
   duration:    0,
+  volume:      0.85,
+  loop:        false,
 } as const
 
 export const usePlayerStore = create<PlayerState>((set, get) => ({
@@ -57,6 +65,15 @@ export const usePlayerStore = create<PlayerState>((set, get) => ({
 
   setNowPlaying: (info) => set(info),
   setTransport:  (transport) => set(transport),
+  setVolume: (volume) => {
+    const next = Math.max(0, Math.min(1, volume))
+    get().controls?.setVolume?.(next)
+    set({ volume: next })
+  },
+  setLoop: (loop) => {
+    get().controls?.setLoop?.(loop)
+    set({ loop })
+  },
 
   registerControls: (controls) => {
     set({ controls })

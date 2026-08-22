@@ -30,17 +30,18 @@ export function PlayerBar(): JSX.Element {
   const playing     = usePlayerStore((s) => s.playing)
   const position    = usePlayerStore((s) => s.position)
   const duration    = usePlayerStore((s) => s.duration)
+  const volume      = usePlayerStore((s) => s.volume)
+  const loop        = usePlayerStore((s) => s.loop)
   const controls    = usePlayerStore((s) => s.controls)
+  const setVolume   = usePlayerStore((s) => s.setVolume)
+  const setLoop     = usePlayerStore((s) => s.setLoop)
 
   const active   = controls !== null
   const seekable = active && duration > 0
   const pct      = duration > 0 ? Math.min(100, (position / duration) * 100) : 0
 
-  function handleSeek(event: React.MouseEvent<HTMLDivElement>): void {
-    if (!seekable) return
-    const rect = event.currentTarget.getBoundingClientRect()
-    const ratio = (event.clientX - rect.left) / rect.width
-    controls?.seek(Math.max(0, Math.min(1, ratio)) * duration)
+  function seekBy(seconds: number): void {
+    controls?.seek(Math.max(0, Math.min(duration, position + seconds)))
   }
 
   return (
@@ -49,7 +50,7 @@ export function PlayerBar(): JSX.Element {
         <div className="pb-cover">
           {coverArtUrl
             ? <img src={coverArtUrl} alt="" />
-            : <span className="pb-cover-placeholder" aria-hidden="true">🎵</span>}
+            : <span className="pb-cover-placeholder" aria-hidden="true" />}
         </div>
         <div className="pb-text">
           <div className="pb-title" title={title ?? undefined}>
@@ -65,12 +66,12 @@ export function PlayerBar(): JSX.Element {
         <div className="pb-controls">
           <button
             className="pb-btn"
-            onClick={() => controls?.stop()}
+            onClick={() => seekBy(-5)}
             disabled={!active}
-            title={t('player.stop')}
-            aria-label={t('player.stop')}
+            title={t('player.previous')}
+            aria-label={t('player.previous')}
           >
-            ⏹
+            ↶5
           </button>
           <button
             className="pb-btn pb-btn-play"
@@ -81,44 +82,29 @@ export function PlayerBar(): JSX.Element {
           >
             {playing ? '⏸' : '▶'}
           </button>
+          <button className="pb-btn" onClick={() => seekBy(5)} disabled={!active} title={t('player.next')} aria-label={t('player.next')}>5↷</button>
         </div>
 
         <div className="pb-progress-row">
           <span className="pb-time">{formatTime(position)}</span>
-          {/* A plain div rather than <input type="range">: the fill/handle
-              styling here has to match the app's other timelines (see
-              .player-timeline), and the bar is read-only whenever no view
-              owns the audio graph. */}
-          <div
-            className={`pb-progress${seekable ? ' seekable' : ''}`}
-            onClick={handleSeek}
-            role="slider"
+          <input
+            className="pb-progress"
+            type="range" min={0} max={duration || 0} step={0.01}
+            value={Math.min(position, duration || 0)} disabled={!seekable}
+            onChange={(event) => controls?.seek(Number(event.target.value))}
+            style={{ '--progress': `${pct}%` } as React.CSSProperties}
             aria-label={t('player.seek')}
-            aria-valuemin={0}
-            aria-valuemax={Math.round(duration)}
-            aria-valuenow={Math.round(position)}
-            aria-disabled={!seekable}
-            tabIndex={seekable ? 0 : -1}
-            onKeyDown={(event) => {
-              if (!seekable) return
-              if (event.key === 'ArrowLeft')  controls?.seek(Math.max(0, position - 5))
-              if (event.key === 'ArrowRight') controls?.seek(Math.min(duration, position + 5))
-            }}
-          >
-            <div className="pb-progress-fill" style={{ width: `${pct}%` }} />
-          </div>
+          />
           <span className="pb-time">{formatTime(duration)}</span>
         </div>
       </div>
 
       <div className="pb-right">
-        <button
-          className="btn btn-ghost pb-goto-btn"
-          onClick={() => setActiveView('playback')}
-          title={t('player.openPlayback')}
-        >
-          🎚️ {t('player.openPlayback')}
-        </button>
+        <button className={`pb-btn pb-loop${loop ? ' active' : ''}`} onClick={() => setLoop(!loop)} disabled={!active} title={t('player.loop')} aria-label={t('player.loop')}>↻</button>
+        <span aria-hidden="true">🔊</span>
+        <input className="pb-volume" type="range" min={0} max={1} step={0.01} value={volume}
+          onChange={(event) => setVolume(Number(event.target.value))} disabled={!active} aria-label={t('player.volume')} />
+        <button className="btn btn-ghost pb-goto-btn" onClick={() => setActiveView('playback')} title={t('player.openPlayback')}>🎚️ {t('player.openPlayback')}</button>
       </div>
     </footer>
   )
