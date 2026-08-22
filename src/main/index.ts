@@ -666,6 +666,26 @@ ipcMain.handle('model:decrypt-verify', async (_event, encPath: string) => {
   }
 })
 
+// Ticket 21: "Download" a trained model — encrypts the ONNX weights with the
+// machine-bound key (same as model:encrypt) and lets the user pick where to
+// save the copy, mirroring the dialog-driven fs:save-recording/fs:choose-export-path
+// handlers above rather than writing to a fixed location unasked. Because the
+// key is machine-bound (see model-crypto.ts), the saved .enc file is a local
+// backup/transfer-between-installs artifact, not a portable model export.
+ipcMain.handle('model:download', async (_event, modelPath: string, defaultName: string) => {
+  const encPath = await encryptModelFile(modelPath)
+  const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
+  const safeName = defaultName.replace(/[/\\?%*:|"<>]/g, '_').trim() || 'model'
+  const { canceled, filePath } = await dialog.showSaveDialog(win ?? undefined as never, {
+    title: 'Download Model',
+    defaultPath: join(app.getPath('music') || app.getPath('documents'), `${safeName}.onnx.enc`),
+    filters: [{ name: 'Encrypted Model', extensions: ['enc'] }],
+  })
+  if (canceled || !filePath) return null
+  await fs.copyFile(encPath, filePath)
+  return filePath
+})
+
 // ── Trained-model library persistence ─────────────────────────────────────────
 // See model-registry.ts for why this exists: the renderer's model list was
 // in-memory only and lost on every restart.
