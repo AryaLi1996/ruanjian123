@@ -203,6 +203,38 @@ export function callPythonEngine(method: string, args: unknown[], timeoutMs = 30
  * produces any output (progress line or stderr chatter) and only fires when
  * the engine goes completely silent, which means it's hung rather than busy.
  */
+// The streaming child currently in flight, if any (Ticket UI-10's 取消训练).
+// Only one streaming run happens at a time — the UI blocks starting a second
+// while one is in progress — so a single handle is enough, and it's cleared
+// as soon as the run settles either way.
+let activeStreamingProc: ReturnType<typeof spawn> | null = null
+
+// Set by cancelPythonEngineStreaming so the close handler can tell a
+// deliberate cancellation from a crash — killing the process makes it exit
+// non-zero either way, and reporting a user-requested stop as an engine
+// failure would be wrong.
+let cancelRequested = false
+
+/** Error message a cancelled run rejects with; recognised by the renderer. */
+export const ENGINE_CANCELLED = 'ENGINE_CANCELLED'
+
+/**
+ * Kills the streaming run in flight, if there is one.
+ *
+ * Returns whether anything was actually killed, so the caller can tell
+ * "cancelled" from "there was nothing to cancel" (a run that finished
+ * between the user's click and the IPC arriving) rather than reporting a
+ * successful cancellation of nothing.
+ */
+export function cancelPythonEngineStreaming(): boolean {
+  const proc = activeStreamingProc
+  if (!proc) return false
+  cancelRequested = true
+  activeStreamingProc = null
+  proc.kill()
+  return true
+}
+
 export function callPythonEngineStreaming(
   method: string,
   args: unknown[],
@@ -226,6 +258,9 @@ export function callPythonEngineStreaming(
       windowsHide: true,
     })
 
+    activeStreamingProc = proc
+    cancelRequested = false
+
     let stderr    = ''
     let lastData: unknown = null
     let partial   = ''
@@ -245,6 +280,7 @@ export function callPythonEngineStreaming(
       stallTimer = setTimeout(() => {
         if (settled) return
         settled = true
+        if (activeStreamingProc === proc) activeStreamingProc = null
         proc.kill()
         reject(new Error(
           hasOutput
@@ -279,9 +315,15 @@ export function callPythonEngineStreaming(
     })
 
     proc.on('close', (code) => {
+      if (activeStreamingProc === proc) activeStreamingProc = null
       if (settled) return
       settled = true
       clearTimeout(stallTimer)
+      if (cancelRequested) {
+        cancelRequested = false
+        reject(new Error(ENGINE_CANCELLED))
+        return
+      }
       if (partial.trim()) {
         try { const d = JSON.parse(partial); lastData = d; onData(d) } catch { /* ignore */ }
       }
@@ -293,6 +335,7 @@ export function callPythonEngineStreaming(
     })
 
     proc.on('error', (error) => {
+      if (activeStreamingProc === proc) activeStreamingProc = null
       if (settled) return
       settled = true
       clearTimeout(stallTimer)

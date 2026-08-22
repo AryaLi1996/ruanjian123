@@ -64,6 +64,7 @@ export function TrainingView(): JSX.Element {
 
   // ── training state ───────────────────────────────────────
   const [phase,       setPhase]       = useState<Phase>('idle')
+  const [cancelling,  setCancelling]  = useState(false)
   const [progress,    setProgress]    = useState<ProgressData | null>(null)
   const [logs,        setLogs]        = useState<string[]>([])
   const [result,      setResult]      = useState<TrainingResult | null>(null)
@@ -208,6 +209,14 @@ export function TrainingView(): JSX.Element {
         playCompletionChime()
       }
     } catch (err) {
+      // A user-requested stop isn't a failure: the bridge rejects a killed
+      // run with this sentinel so it can be told apart from a crash, and it
+      // shouldn't raise an error banner or a failure notification.
+      if (String(err).includes('ENGINE_CANCELLED')) {
+        setPhase('idle')
+        setLogs((prev) => [...prev, t('training.cancelled')])
+        return
+      }
       setError(String(err))
       setPhase('idle')
       notify({
@@ -242,16 +251,33 @@ export function TrainingView(): JSX.Element {
     setPlayingModelId(m.id)
   }
 
-  // ── download (encrypt + save-as) a model card ─────────────
-  async function handleDownload(m: typeof trainedModels[0]): Promise<void> {
+  async function handleCancelTraining(): Promise<void> {
+    setCancelling(true)
     try {
-      const saved = await window.engine.downloadModel(m.onnxPath, m.name)
+      await window.engine.cancelStream()
+      // The phase transition is left to handleTrain's catch: the kill makes
+      // the in-flight stream reject, and unwinding it there keeps one exit
+      // path for the run instead of two racing to reset the same state.
+    } catch (err) {
+      setError(String(err))
+    } finally {
+      setCancelling(false)
+    }
+  }
+
+  // ── download (encrypt + save-as) a model card ─────────────
+  // Takes the two fields it actually needs rather than a whole model card,
+  // so the just-finished run (Ticket UI-10 §5) can reuse it without
+  // fabricating one.
+  async function handleDownload(onnxPath: string, name: string): Promise<void> {
+    try {
+      const saved = await window.engine.downloadModel(onnxPath, name)
       if (!saved) return // user cancelled the save dialog
       notify({
         category: 'taskCompletion',
         titleKey: 'notification.training.downloaded.title',
         messageKey: 'notification.training.downloaded.message',
-        messageParams: { modelName: m.name },
+        messageParams: { modelName: name },
       })
     } catch (err) {
       notify({
@@ -390,7 +416,13 @@ export function TrainingView(): JSX.Element {
       {phase === 'training' && (
         <div className="card">
           <div className="card-title">{t('training.training')}</div>
-          <TrainingProgress progress={progress} logs={logs} mode={mode} />
+          <TrainingProgress
+            progress={progress}
+            logs={logs}
+            mode={mode}
+            onCancel={() => void handleCancelTraining()}
+            cancelling={cancelling}
+          />
         </div>
       )}
 
@@ -434,8 +466,16 @@ export function TrainingView(): JSX.Element {
               </div>
             )}
 
+            {/* Ticket UI-10 §5: the download shows up on completion rather
+                than making the user hunt for the new card in the library. */}
             <div className="row" style={{ marginTop: 16 }}>
-              <button className="btn btn-primary" onClick={handleReset}>{t('training.trainAnother')}</button>
+              <button
+                className="btn btn-primary tc-download-btn"
+                onClick={() => void handleDownload(result.output_path, modelName.trim() || 'model')}
+              >
+                ⬇ {t('training.download')}
+              </button>
+              <button className="btn btn-ghost" onClick={handleReset}>{t('training.trainAnother')}</button>
             </div>
           </div>
         </>
@@ -453,7 +493,7 @@ export function TrainingView(): JSX.Element {
                   onDelete={() => handleDelete(m)}
                   onRetrain={() => handleRetrain(m)}
                   onPlay={() => void handlePlay(m)}
-                  onDownload={() => void handleDownload(m)}
+                  onDownload={() => void handleDownload(m.onnxPath, m.name)}
                 />
                 {playingModelId === m.id && m.demoAudioUrl && (
                   <div style={{ marginTop: 8 }}>

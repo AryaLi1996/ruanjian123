@@ -2,7 +2,7 @@ import { app, BrowserWindow, shell, ipcMain, dialog, crashReporter, Menu } from 
 import { join, resolve, sep, dirname } from 'path'
 import { existsSync, renameSync } from 'fs'
 import { promises as fs } from 'fs'
-import { callPythonEngine, callPythonEngineStreaming } from './python-bridge'
+import { callPythonEngine, callPythonEngineStreaming, cancelPythonEngineStreaming } from './python-bridge'
 import { encryptModelFile, decryptModelFile } from './model-crypto'
 import { setupAutoUpdater, checkForUpdates, getLastUpdateResult, downloadUpdate, quitAndInstall } from './auto-updater'
 import { SubscriptionMonitor } from './subscription-monitor'
@@ -507,6 +507,11 @@ ipcMain.handle('engine:stream', (event, method: string, args: unknown[]) =>
     event.sender.send('engine:progress', data)
   )
 )
+
+// Ticket UI-10: 取消训练. Returns whether a run was actually killed, so the
+// renderer can tell a real cancellation from a run that finished between the
+// click and this call arriving.
+ipcMain.handle('engine:cancel', () => cancelPythonEngineStreaming())
 
 // Save uploaded audio files to a per-session training directory
 ipcMain.handle(
