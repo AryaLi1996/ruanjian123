@@ -7,7 +7,7 @@ import { TopToolbar } from './TopToolbar'
 import { TrainingView }   from '../views/TrainingView'
 import { CoverView }      from '../views/CoverView'
 import { AudioToolsView } from '../views/AudioToolsView'
-import { WaveformEditorView } from '../views/WaveformEditorView'
+import { DataPrepView } from '../views/DataPrepView'
 import { PlaybackMonitorView } from '../views/PlaybackMonitorView'
 import { SubscriptionView } from '../views/SubscriptionView'
 import { SettingsView } from '../views/SettingsView'
@@ -39,7 +39,7 @@ export function Layout(): JSX.Element {
     isSettingsView             ? <SettingsView />      :
     activeView === 'training'  ? <TrainingView />      :
     activeView === 'cover'     ? <CoverView />         :
-    activeView === 'waveform'  ? <WaveformEditorView /> :
+    activeView === 'waveform'  ? <DataPrepView /> :
     activeView === 'playback'  ? <PlaybackMonitorView /> :
                                  <AudioToolsView />
 
