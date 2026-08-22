@@ -3324,3 +3324,248 @@ html, body, #root {
 }
 .at-arrow:hover:not(:disabled) { border-color: var(--accent); color: var(--text); }
 .at-arrow:disabled { opacity: 0.3; cursor: default; }
+
+
+/* ── Cloud library page (Ticket UI-08) ───────────────────────
+   Cover-first grid: the artwork is the primary way a user recognises a
+   track, so it gets the visual weight and the text stays to one line each. */
+.lib-view { display: flex; flex-direction: column; }
+
+.lib-search {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: 520px;
+  margin-bottom: 22px;
+  padding: 0 14px;
+  height: 42px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border);
+  background: var(--bg);
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.lib-search:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+.lib-search-icon { font-size: 13px; opacity: 0.7; flex-shrink: 0; }
+.lib-search-input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: 13.5px;
+  outline: none;
+}
+.lib-search-clear {
+  flex-shrink: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1;
+  padding: 4px;
+  border-radius: 50%;
+  cursor: pointer;
+}
+.lib-search-clear:hover { color: var(--text); background: var(--bg-hover); }
+
+.lib-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
+  gap: 20px 18px;
+}
+
+.lib-card { display: flex; flex-direction: column; gap: 7px; min-width: 0; }
+
+.lib-cover {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  border-radius: var(--radius);
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  /* The scale happens on the cover, not the whole card, so the titles below
+     stay put and the grid never reflows on hover. */
+  transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.15s;
+}
+.lib-card:hover .lib-cover {
+  transform: scale(1.05);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.4);
+}
+.lib-cover img { width: 100%; height: 100%; object-fit: cover; }
+.lib-cover-initial {
+  font-size: 38px;
+  font-weight: 700;
+  color: rgba(255, 255, 255, 0.9);
+  text-shadow: 0 2px 10px rgba(0, 0, 0, 0.35);
+  user-select: none;
+}
+
+.lib-cover-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(8, 10, 16, 0.55);
+  opacity: 0;
+  transition: opacity 0.16s ease;
+}
+.lib-card:hover .lib-cover-overlay,
+.lib-card:focus-within .lib-cover-overlay { opacity: 1; }
+
+.lib-select-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 34px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--accent-gradient);
+  color: var(--on-accent);
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: filter 0.15s, transform 0.12s;
+}
+.lib-select-btn:hover:not(:disabled) { filter: brightness(1.08); transform: translateY(-1px); }
+.lib-select-btn:disabled { opacity: 0.6; cursor: progress; }
+
+.lib-selected-badge {
+  position: absolute;
+  top: 8px; right: 8px;
+  width: 22px; height: 22px;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--on-accent);
+  font-size: 12px;
+  font-weight: 700;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+}
+/* The selected card keeps its accent ring whether or not it's hovered. */
+.lib-card.selected .lib-cover {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent);
+}
+
+.lib-card-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.lib-card-artist {
+  font-size: 11.5px;
+  color: var(--text-muted);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* Skeletons keep the grid's exact geometry so results don't jump into
+   place when they land. */
+.lib-skel {
+  background: linear-gradient(
+    90deg,
+    var(--bg-hover) 25%,
+    color-mix(in srgb, var(--text) 12%, var(--bg-hover)) 37%,
+    var(--bg-hover) 63%
+  );
+  background-size: 400% 100%;
+  animation: lib-shimmer 1.4s ease infinite;
+  border-radius: var(--radius);
+}
+@keyframes lib-shimmer {
+  from { background-position: 100% 50%; }
+  to   { background-position: 0 50%; }
+}
+.lib-skel-line { height: 11px; border-radius: 4px; }
+.lib-skel-line.short { width: 60%; }
+.lib-card-skeleton .lib-cover { border: 0; }
+
+.lib-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 56px 20px;
+  text-align: center;
+}
+.lib-empty-icon { font-size: 40px; opacity: 0.5; }
+
+.lib-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  margin-top: 26px;
+}
+.lib-page-info { font-size: 12px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+
+/* ── Target song pin (Ticket UI-09) ──────────────────────────
+   Sits in the top bar so "which song am I covering" is answered from every
+   page. The breathing glow marks it as live state rather than a static
+   label; it stops for reduced-motion users. */
+.target-pin {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex-shrink: 0;
+  max-width: 260px;
+  padding: 5px 6px 5px 5px;
+  border-radius: var(--radius-pill);
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  animation: target-pin-pulse 2.6s ease-in-out infinite;
+}
+@keyframes target-pin-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 26%, transparent); }
+  50%      { box-shadow: 0 0 14px 2px color-mix(in srgb, var(--accent) 26%, transparent); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .target-pin { animation: none; }
+}
+
+.target-pin-cover {
+  width: 32px; height: 32px;
+  flex-shrink: 0;
+  border-radius: 8px;
+  overflow: hidden;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 15px; font-weight: 700;
+  color: rgba(255, 255, 255, 0.92);
+}
+.target-pin-cover img { width: 100%; height: 100%; object-fit: cover; }
+
+.target-pin-text { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.target-pin-title {
+  font-size: 12px; font-weight: 600; color: var(--text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.target-pin-meta { font-size: 10.5px; color: var(--accent); font-variant-numeric: tabular-nums; }
+
+.target-pin-clear {
+  flex-shrink: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1;
+  padding: 4px;
+  border-radius: 50%;
+  cursor: pointer;
+}
+.target-pin-clear:hover { color: var(--danger); background: var(--bg-hover); }
+
+/* The top bar is a fixed-height row with the context text already in it;
+   below this width the pin's text would squeeze both to uselessness. */
+@media (max-width: 1100px) {
+  .target-pin-text { display: none; }
+  .target-pin { max-width: none; }
+}
