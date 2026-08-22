@@ -60,6 +60,12 @@ interface AppState {
   modelsHydrated:  boolean   // true once the persisted library has been loaded — gates autosave
                               // so an early empty render can't overwrite the saved file with []
   targetSong:      TargetSong | null
+  // Whether the Cloud Library (云曲库) modal is open. Lifted out of
+  // CoverView's local state for Ticket UI-02 so the sidebar's 云曲库 entry
+  // can open the same modal the Cover page does, rather than a second copy
+  // of it — CoverView still owns the modal element and the selection
+  // handler (it has to clear its own local upload alongside it).
+  libraryOpen:     boolean
 
   setActiveView:    (view: ActiveView) => void
   setSelectedModel: (path: string | null) => void
@@ -71,6 +77,7 @@ interface AppState {
   updateModelDemo:  (id: string, demoAudioUrl: string) => void
   hydrateModels:    (models: TrainedModel[]) => void
   setTargetSong:    (song: TargetSong | null) => void
+  setLibraryOpen:   (open: boolean) => void
   // Ticket 19: records a newly-applied pitch shift (and its cached shifted
   // audio) on the current target song. No-ops if the song has since been
   // cleared/changed from under an in-flight shift request.
@@ -86,6 +93,7 @@ export const useAppStore = create<AppState>((set) => ({
   trainedModels:  [],
   modelsHydrated: false,
   targetSong:     null,
+  libraryOpen:    false,
 
   setActiveView:    (view)  => set({ activeView: view }),
   setSelectedModel: (path)  => set({ selectedModel: path }),
@@ -99,6 +107,7 @@ export const useAppStore = create<AppState>((set) => ({
     })),
   hydrateModels:    (models) => set({ trainedModels: models, modelsHydrated: true }),
   setTargetSong:    (song)   => set({ targetSong: song }),
+  setLibraryOpen:   (open)   => set({ libraryOpen: open }),
   setTargetSongShift: (shift, shiftedAudioPath) =>
     set((s) => (s.targetSong ? { targetSong: { ...s.targetSong, pitchShift: shift, shiftedAudioPath } } : s)),
 }))

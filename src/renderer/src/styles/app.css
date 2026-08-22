@@ -38,7 +38,12 @@
      the two named primitives (.card and .btn) pick up the new sizes. */
   --radius-lg:      16px;
   --radius-pill:    20px;
-  --sidebar-w:      220px;
+  /* Four-module shell dimensions (Ticket UI-02) — the grid in .app-layout
+     reads all four, so the shell's proportions are tunable from one place. */
+  --sidebar-w:           240px;
+  --sidebar-w-collapsed: 60px;
+  --topbar-h:            56px;
+  --playerbar-h:         90px;
 
   /* Font settings (Ticket 27) — --font-family/--ui-scale are set inline on
      <html> by useSettingsStore before first paint. --ui-scale drives the
@@ -47,8 +52,11 @@
      instead of only text growing out of its layout. PingFang SC is listed
      ahead of the generic system-ui/-apple-system fallbacks (Ticket UI-01
      §4) so macOS renders CJK text in 苹方 rather than falling through to a
-     serif-ish system default. */
-  --font-family: 'Inter', 'PingFang SC', 'Segoe UI', system-ui, -apple-system, sans-serif;
+     serif-ish system default. Segoe UI + Microsoft YaHei play the same two
+     roles on Windows (WIN-SYNC-05 §1) — Latin then CJK — so neither
+     platform falls through to a generic default for either script. */
+  --font-family: 'Inter', 'PingFang SC', 'Segoe UI', 'Microsoft YaHei', '微软雅黑',
+                 system-ui, -apple-system, sans-serif;
   --ui-scale:    1;
 
   /* Custom background image (Ticket 27) — url(...) or 'none', set inline by
@@ -182,48 +190,180 @@ html, body, #root {
 *::-webkit-scrollbar-thumb     { background: var(--color-scrollbar); border-radius: 6px; border: 2px solid transparent; background-clip: padding-box; }
 *::-webkit-scrollbar-thumb:hover { background: var(--text-muted); background-clip: padding-box; }
 
-/* ── Layout ─────────────────────────────────────────────── */
+/* ── Layout: the four-module shell (Ticket UI-02) ─────────────
+   sidebar | top bar
+   sidebar | content        + a full-width player bar underneath
+   ─────────────────────────────────────────────────────────────
+   Both track lists are fixed/min-content except the content cell, which
+   takes whatever is left — so resizing the Electron window only ever grows
+   or shrinks the content area, and the chrome keeps its exact heights.
+
+   minmax(0, 1fr) rather than a bare 1fr on both the content column and row:
+   a grid item's default min-size is auto (its content), so a wide child
+   (the playback page's 3-column grid, a long log line) would otherwise push
+   the track wider than the viewport and reintroduce the horizontal
+   scrollbar this ticket calls out. */
 .app-layout {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: var(--sidebar-w) minmax(0, 1fr);
+  grid-template-rows: var(--topbar-h) minmax(0, 1fr) var(--playerbar-h);
+  grid-template-areas:
+    "sidebar header"
+    "sidebar main"
+    "player  player";
   height: 100vh;
   overflow: hidden;
+  /* Chromium interpolates grid track lists, so animating the column track
+     directly is what gives the 300ms collapse its motion — transitioning
+     the --sidebar-w custom property instead would snap, since untyped
+     custom properties aren't animatable. */
+  transition: grid-template-columns 300ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+.app-layout.sidebar-collapsed { grid-template-columns: var(--sidebar-w-collapsed) minmax(0, 1fr); }
+
+@media (prefers-reduced-motion: reduce) {
+  .app-layout { transition: none; }
 }
 
-/* ── Top toolbar ─────────────────────────────────────────── */
-.top-toolbar {
+/* ── Sidebar (Ticket UI-02 §1) ────────────────────────────── */
+.app-sidebar {
+  grid-area: sidebar;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;   /* labels clip rather than wrap while the track animates */
+  background: var(--bg-panel);
+  border-right: 1px solid var(--border);
+}
+
+.sb-brand {
   display: flex;
   align-items: center;
-  gap: 20px;
-  flex-shrink: 0;
-  height: 54px;
+  gap: 10px;
+  height: var(--topbar-h);
   padding: 0 16px;
-  background: var(--bg-panel);
+  flex-shrink: 0;
   border-bottom: 1px solid var(--border);
 }
+.sb-logo { flex-shrink: 0; }
+.sb-brand-name {
+  font-size: 15px; font-weight: 700; letter-spacing: 0.4px;
+  white-space: nowrap;
+}
 
-.tb-brand { display: flex; align-items: center; gap: 8px; line-height: 1.15; flex-shrink: 0; }
-.tb-logo  { flex-shrink: 0; }
-.tb-title { font-size: 15px; font-weight: 700; letter-spacing: 0.4px; }
+.sb-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 12px 8px;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
 
-.tb-nav { display: flex; align-items: center; gap: 4px; flex: 1; min-width: 0; overflow-x: auto; }
-
-.tb-nav-item {
+.sb-nav-item, .sb-collapse-btn {
   display: flex;
   align-items: center;
-  gap: 7px;
-  padding: 7px 12px;
+  gap: 12px;
+  width: 100%;
+  padding: 10px 12px;
   border: none;
   border-radius: var(--radius);
   background: transparent;
   color: var(--text-muted);
   cursor: pointer;
   font-size: 13px;
+  text-align: left;
   white-space: nowrap;
   transition: background 0.15s, color 0.15s;
 }
-.tb-nav-item:hover  { background: var(--bg-hover); color: var(--text); }
-.tb-nav-item.active { background: color-mix(in srgb, var(--accent) 15%, transparent); color: var(--accent); }
+.sb-nav-item:hover, .sb-collapse-btn:hover { background: var(--bg-hover); color: var(--text); }
+.sb-nav-item.active {
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.sb-nav-icon {
+  position: relative;
+  flex-shrink: 0;
+  width: 20px;
+  font-size: 16px;
+  line-height: 1;
+  text-align: center;
+}
+.sb-avatar { width: 20px; height: 20px; border-radius: 50%; object-fit: cover; display: block; }
+
+/* Subscription state as a dot on the user row — the only account signal
+   that survives the collapsed (icon-only) sidebar. */
+.sb-sub-dot {
+  position: absolute;
+  right: -3px; bottom: -1px;
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  border: 1.5px solid var(--bg-panel);
+  background: var(--text-muted);
+}
+.sb-sub-dot.status-active       { background: var(--success); }
+.sb-sub-dot.status-grace_period { background: var(--warning); }
+.sb-sub-dot.status-expired,
+.sb-sub-dot.status-invalid      { background: var(--danger); }
+
+.sb-nav-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  /* Fades out slightly ahead of the 300ms track animation so labels are
+     gone before the rail gets too narrow to hold them, instead of being
+     visibly chopped mid-word. */
+  transition: opacity 160ms ease;
+}
+
+.sb-footer {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px;
+  flex-shrink: 0;
+  border-top: 1px solid var(--border);
+}
+.sb-collapse-icon { flex-shrink: 0; width: 20px; text-align: center; font-size: 14px; }
+
+/* Collapsed rail: icons only. The labels are hidden rather than removed
+   from the DOM so the buttons keep their accessible names (each row also
+   gets a title attribute in this state — see Sidebar.tsx). */
+.app-sidebar.collapsed .sb-brand      { justify-content: center; padding: 0; }
+.app-sidebar.collapsed .sb-brand-name,
+.app-sidebar.collapsed .sb-nav-label  { opacity: 0; width: 0; }
+.app-sidebar.collapsed .sb-nav-item,
+.app-sidebar.collapsed .sb-collapse-btn { justify-content: center; padding: 10px 0; gap: 0; }
+
+@media (prefers-reduced-motion: reduce) {
+  .sb-nav-label { transition: none; }
+}
+
+/* ── Top toolbar (Ticket UI-02 §2: context, not navigation) ── */
+.top-toolbar {
+  grid-area: header;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  min-width: 0;
+  height: var(--topbar-h);
+  padding: 0 20px;
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--border);
+}
+
+.tb-context { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.tb-view-title { font-size: 14px; font-weight: 700; line-height: 1.2; }
+.tb-context-text {
+  font-size: 11.5px;
+  color: var(--text-muted);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 
 .nav-icon { font-size: 15px; flex-shrink: 0; }
 
@@ -307,14 +447,147 @@ html, body, #root {
 }
 
 /* ── Content area ────────────────────────────────────────── */
+/* The one scrolling region of the shell (Ticket UI-02 §3) — the sidebar,
+   top bar and player bar are all fixed tracks, so only this cell moves.
+   min-width/min-height 0 keep an oversized child scrolling *inside* here
+   rather than stretching the grid track. */
 .content-area {
-  flex: 1;
+  grid-area: main;
+  min-width: 0;
+  min-height: 0;
   overflow-y: auto;
+  overflow-x: hidden;
   padding: 28px 32px;
 }
 
 /* The playback page needs the full width for its 3-column grid. */
 .content-area-wide { padding: 18px 20px; }
+
+/* ── Persistent player bar (Ticket UI-02 §4) ─────────────────
+   Spans both columns at the bottom of the shell and never unmounts, so
+   navigating between pages can't make the layout jump. Three zones:
+   now-playing meta | transport + progress | shortcut. */
+.player-bar {
+  grid-area: player;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 2fr) minmax(0, 1fr);
+  align-items: center;
+  gap: 16px;
+  height: var(--playerbar-h);
+  padding: 0 20px;
+  position: relative;
+  z-index: 20;
+  background: linear-gradient(120deg, color-mix(in srgb, var(--bg-panel) 82%, transparent), color-mix(in srgb, var(--bg) 70%, transparent));
+  border-top: 1px solid color-mix(in srgb, #cdd1ff 22%, var(--border));
+  box-shadow: 0 -10px 36px rgba(0, 0, 0, 0.22), inset 0 1px rgba(255, 255, 255, 0.06);
+  backdrop-filter: blur(20px) saturate(140%);
+  -webkit-backdrop-filter: blur(20px) saturate(140%);
+}
+/* Nothing owns an audio graph right now — see PlayerBar.tsx. The bar keeps
+   its footprint (the grid track is fixed regardless) but recedes. */
+.player-bar.idle .pb-meta,
+.player-bar.idle .pb-center { opacity: 0.55; }
+
+.pb-meta { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.pb-cover {
+  flex-shrink: 0;
+  width: 56px; height: 56px;
+  border-radius: var(--radius);
+  overflow: hidden;
+  display: flex; align-items: center; justify-content: center;
+  background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 35%, var(--bg)), var(--bg));
+}
+.pb-cover img { width: 100%; height: 100%; object-fit: cover; }
+.pb-cover-placeholder { font-size: 22px; opacity: 0.7; }
+.pb-cover-placeholder {
+  width: 36px; height: 20px;
+  background: repeating-linear-gradient(90deg, transparent 0 3px, var(--accent) 3px 5px, transparent 5px 7px);
+  clip-path: polygon(0 46%, 10% 10%, 20% 72%, 30% 25%, 40% 88%, 50% 12%, 60% 65%, 70% 35%, 80% 92%, 90% 20%, 100% 48%, 100% 56%, 90% 82%, 80% 100%, 70% 57%, 60% 86%, 50% 36%, 40% 100%, 30% 48%, 20% 92%, 10% 42%, 0 54%);
+}
+
+.pb-text { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.pb-title {
+  font-size: 13px; font-weight: 600;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.pb-artist {
+  font-size: 11.5px; color: var(--text-muted);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+.pb-center { display: flex; flex-direction: column; align-items: center; gap: 6px; min-width: 0; width: 100%; }
+.pb-controls { display: flex; align-items: center; gap: 10px; }
+
+.pb-btn {
+  display: flex; align-items: center; justify-content: center;
+  width: 30px; height: 30px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text-muted);
+  font-size: 12px;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: border-color 0.15s, color 0.15s, filter 0.15s;
+}
+.pb-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--text); }
+.pb-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* Play/pause is the bar's primary action, so it takes the gradient accent
+   the same way .btn-primary does (Ticket UI-01 §3). */
+.pb-btn-play {
+  width: 38px; height: 38px;
+  border: none;
+  background: var(--accent-gradient);
+  color: var(--on-accent);
+  font-size: 14px;
+}
+.pb-btn-play:hover:not(:disabled) { filter: brightness(1.08); }
+
+.pb-progress-row { display: flex; align-items: center; gap: 10px; width: 100%; }
+.pb-time {
+  flex-shrink: 0;
+  font-size: 10.5px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  min-width: 34px;
+  text-align: center;
+}
+
+.pb-progress {
+  appearance: none;
+  -webkit-appearance: none;
+  flex: 1;
+  min-width: 0;
+  height: 4px;
+  border-radius: 2px;
+  background: linear-gradient(90deg, var(--accent) var(--progress), var(--bg-hover) var(--progress));
+}
+.pb-progress:not(:disabled) { cursor: pointer; }
+.pb-progress:disabled { opacity: .55; }
+.pb-progress::-webkit-slider-thumb, .pb-volume::-webkit-slider-thumb {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 11px; height: 11px;
+  border-radius: 50%;
+  background: #e8e9ff;
+  box-shadow: 0 1px 5px rgba(0, 0, 0, .45);
+}
+.pb-progress:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+
+.pb-right { display: flex; align-items: center; justify-content: flex-end; min-width: 0; }
+.pb-goto-btn { font-size: 11.5px; padding: 6px 14px; white-space: nowrap; }
+.pb-loop.active { border-color: var(--accent); color: var(--accent); }
+.pb-volume { appearance: none; -webkit-appearance: none; width: 72px; height: 4px; border-radius: 2px; accent-color: var(--accent); cursor: pointer; }
+.pb-volume:disabled { cursor: not-allowed; opacity: .45; }
+
+/* Narrow windows: drop the right-hand shortcut and let the transport take
+   the freed space, rather than letting three zones fight over the width. */
+@media (max-width: 900px) {
+  .player-bar { grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); }
+  .pb-right   { display: none; }
+}
 
 /* ── Views ───────────────────────────────────────────────── */
 .view-header { margin-bottom: 28px; }
@@ -1280,14 +1553,14 @@ html, body, #root {
 .sub-plan-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  gap: 10px;
+  gap: 16px;
 }
 
 .sub-plan-card {
   position: relative;
   display: flex; flex-direction: column; align-items: flex-start; gap: 4px;
-  background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius);
-  padding: 14px 12px; cursor: pointer; text-align: left; color: var(--text);
+  background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-lg);
+  padding: 24px 16px; cursor: pointer; text-align: left; color: var(--text);
   transition: border-color 0.15s, background 0.15s, transform 0.15s, box-shadow 0.15s;
 }
 .sub-plan-card:hover {
@@ -1305,12 +1578,15 @@ html, body, #root {
 .sub-plan-card-best { border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); }
 .sub-plan-card-best.sub-plan-card-selected { border-color: var(--accent); }
 
+/* WIN-SYNC-05 §4: red rather than accent-coloured, so it reads as a
+   distinct "deal" marker instead of blending into the selected-card
+   border it sits on. */
 .sub-plan-ribbon {
   position: absolute; top: -9px; right: 10px;
-  background: var(--accent); color: #fff;
+  background: var(--danger); color: #fff;
   font-size: 10px; font-weight: 600; letter-spacing: 0.02em;
   padding: 3px 8px; border-radius: 999px;
-  box-shadow: 0 2px 6px color-mix(in srgb, var(--accent) 40%, transparent);
+  box-shadow: 0 2px 6px color-mix(in srgb, var(--danger) 40%, transparent);
 }
 
 .sub-plan-name { font-size: 14px; }
@@ -1350,7 +1626,7 @@ html, body, #root {
 .sub-method-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
-  gap: 10px;
+  gap: 16px;
 }
 .sub-method-card {
   display: flex; flex-direction: column; align-items: center; gap: 8px;
@@ -1392,6 +1668,24 @@ html, body, #root {
   padding: 12px 16px; color: var(--text-muted); font-size: 13px; margin-bottom: 16px;
 }
 .notice-banner-btn { flex-shrink: 0; }
+
+/* ── License key activation (WIN-SYNC-03) ──────────────────── */
+/* Separated from the payment block above by a hairline rule so the two
+   routes to a license (buy one / redeem one you already have) read as
+   alternatives rather than one continuous form. */
+.sub-activation { margin-top: 24px; }
+.sub-activation-divider {
+  height: 1px; background: var(--border); border: 0; margin-bottom: 20px;
+}
+.sub-activation-row { display: flex; align-items: center; gap: 10px; }
+/* Keys are fixed-width groups (SOOTHEVOICE-XXXX-XXXX-XXXX) — a monospace
+   face keeps them from reflowing as the user types or pastes. */
+.sub-activation-input {
+  flex: 1; min-width: 0;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  letter-spacing: 0.04em;
+}
+.sub-activate-btn { flex-shrink: 0; }
 
 /* ── Order status (creating / pending / success / error) ─────── */
 .sub-order-status {
@@ -2227,28 +2521,6 @@ html, body, #root {
   margin-top: 8px;
   font-size: 12px; color: var(--text-muted);
 }
-
-/* ── Settings toolbar button ─────────────────────────────── */
-.tb-settings-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 30px;
-  height: 30px;
-  border-radius: 50%;
-  border: 1px solid var(--border);
-  background: var(--bg);
-  color: var(--text-muted);
-  font-size: 14px;
-  cursor: pointer;
-  flex-shrink: 0;
-  overflow: hidden;
-  padding: 0;
-  transition: border-color 0.15s, color 0.15s;
-}
-.tb-settings-btn:hover  { border-color: var(--accent); color: var(--text); }
-.tb-settings-btn.active { border-color: var(--accent); color: var(--accent); }
-.tb-settings-avatar { width: 100%; height: 100%; object-fit: cover; }
 
 /* ── Settings view ────────────────────────────────────────── */
 .appearance-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }

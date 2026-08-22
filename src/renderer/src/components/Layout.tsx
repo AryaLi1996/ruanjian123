@@ -1,9 +1,12 @@
 import { useEffect } from 'react'
 import { useAppStore } from '../store/useAppStore'
+import { useLayoutStore } from '../store/useLayoutStore'
 import { useSubscriptionStore } from '../store/useSubscriptionStore'
 import { useSubscriptionNotifications } from '../hooks/useSubscriptionNotifications'
 import { useMainNotificationBridge } from '../hooks/useMainNotificationBridge'
 import { TopToolbar } from './TopToolbar'
+import { Sidebar } from './Sidebar'
+import { PlayerBar } from './PlayerBar'
 import { TrainingView }   from '../views/TrainingView'
 import { CoverView }      from '../views/CoverView'
 import { AudioToolsView } from '../views/AudioToolsView'
@@ -17,6 +20,7 @@ import { ToastContainer } from './notifications/ToastContainer'
 
 export function Layout(): JSX.Element {
   const activeView = useAppStore((s) => s.activeView)
+  const collapsed  = useLayoutStore((s) => s.sidebarCollapsed)
   const _init      = useSubscriptionStore((s) => s._init)
 
   // Sync subscription state from main process on mount
@@ -43,8 +47,13 @@ export function Layout(): JSX.Element {
     activeView === 'playback'  ? <PlaybackMonitorView /> :
                                  <AudioToolsView />
 
+  // Ticket UI-02: the four-module shell — sidebar | (header / main) with a
+  // full-width player bar pinned underneath. The grid itself lives in
+  // app.css (.app-layout); `sidebar-collapsed` is what animates the column
+  // track from 240px to 60px.
   return (
-    <div className="app-layout">
+    <div className={`app-layout${collapsed ? ' sidebar-collapsed' : ''}`}>
+      <Sidebar />
       <TopToolbar />
       <main
         className={`content-area${activeView === 'playback' ? ' content-area-wide' : ''}`}
@@ -54,6 +63,7 @@ export function Layout(): JSX.Element {
           {bypassesGate ? view : <SubscriptionGate>{view}</SubscriptionGate>}
         </ErrorBoundary>
       </main>
+      <PlayerBar />
       {/* Toasts render above the whole layout regardless of activeView, so a
           background task finishing on another page is still seen (Ticket 35 §3). */}
       <ToastContainer />

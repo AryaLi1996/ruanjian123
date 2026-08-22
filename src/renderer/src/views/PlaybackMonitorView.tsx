@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { useAppStore } from '../store/useAppStore'
 import { useSettingsStore } from '../store/useSettingsStore'
 import { useSubscriptionStore } from '../store/useSubscriptionStore'
+import { usePlayerStore } from '../store/usePlayerStore'
 import { formatDuration, pcmToWavBlob } from '../utils/audio'
 import { computePeaks, drawWaveform, crossCorrelateOffset } from '../utils/waveform'
 import { parseLRC, findLyricIndex, extractEmbeddedLyrics, type LyricLine } from '../utils/lrc'
@@ -99,6 +100,8 @@ export function PlaybackMonitorView(): JSX.Element {
 
   const [playing, setPlaying] = useState(false)
   const [playhead, setPlayhead] = useState(0)
+  const [masterVolume, setMasterVolume] = useState(0.85)
+  const [loopPlayback, setLoopPlayback] = useState(false)
   const [zoom, setZoom] = useState(1)
   const [sepMode, setSepMode] = useState<SepMode>('standard')
   const [separating, setSeparating] = useState(false)
@@ -140,6 +143,10 @@ export function PlaybackMonitorView(): JSX.Element {
   const rafRef         = useRef<number | null>(null)
   const tracksRef      = useRef<Track[]>([])
   useEffect(() => { tracksRef.current = tracks }, [tracks])
+  const masterVolumeRef = useRef(masterVolume)
+  const loopPlaybackRef = useRef(loopPlayback)
+  useEffect(() => { masterVolumeRef.current = masterVolume }, [masterVolume])
+  useEffect(() => { loopPlaybackRef.current = loopPlayback }, [loopPlayback])
   const songsRef        = useRef<Song[]>([])
   useEffect(() => { songsRef.current = songs }, [songs])
 
@@ -178,9 +185,11 @@ export function PlaybackMonitorView(): JSX.Element {
       const g = gainNodesRef.current.get(tr.id)
       if (!g) continue
       const audible = anySolo ? tr.solo : !tr.muted
-      g.gain.value = audible ? tr.volume : 0
+      g.gain.value = audible ? tr.volume * masterVolumeRef.current : 0
     }
   }
+
+  useEffect(() => { applyGains() }, [masterVolume])
 
   // ── Transport ──────────────────────────────────────────────
   function stopSources(): void {
@@ -215,7 +224,10 @@ export function PlaybackMonitorView(): JSX.Element {
       setPlayhead(pos)
       updateLyricIndex(pos)
       const maxDur = Math.max(0, ...tracksRef.current.map((tr) => tr.buffer.duration + tr.offsetSec))
-      if (pos >= maxDur && maxDur > 0) { pause(); setPlayhead(maxDur); return }
+      if (pos >= maxDur && maxDur > 0) {
+        if (loopPlaybackRef.current) { play(0); return }
+        pause(); setPlayhead(maxDur); return
+      }
       rafRef.current = requestAnimationFrame(loop)
     }
     rafRef.current = requestAnimationFrame(loop)
@@ -546,6 +558,57 @@ export function PlaybackMonitorView(): JSX.Element {
     recorderRef.current = null
     setRecording(false)
   }
+
+  // ── Global player bar bridge (Ticket UI-02 §4) ────────────
+  // This view owns the audio graph; the persistent bottom bar is a view over
+  // usePlayerStore. Publish what it renders, and register the three commands
+  // it dispatches. See usePlayerStore's header for why the engine stays here
+  // rather than moving into the store.
+  //
+  // The transport commands are read through a ref so the registration below
+  // can run once on mount: togglePlay/stop/seek are re-created every render
+  // (they close over `playing`/`playhead`), and re-registering on each of
+  // those would churn the store 60×/second during playback.
+  const transportRef = useRef({ togglePlay, stop, seek, setVolume: setMasterVolume, setLoop: setLoopPlayback })
+  transportRef.current = { togglePlay, stop, seek, setVolume: setMasterVolume, setLoop: setLoopPlayback }
+
+  useEffect(() => {
+    return usePlayerStore.getState().registerControls({
+      togglePlay: () => transportRef.current.togglePlay(),
+      stop:       () => transportRef.current.stop(),
+      seek:       (sec) => transportRef.current.seek(sec),
+      setVolume:  (volume) => transportRef.current.setVolume(volume),
+      setLoop:    (loop) => transportRef.current.setLoop(loop),
+    })
+  }, [])
+
+  useEffect(() => {
+    usePlayerStore.getState().setNowPlaying({
+      title:       activeSong?.name ?? null,
+      artist:      activeSong?.artist ?? null,
+      coverArtUrl: activeSong?.coverArtUrl ?? null,
+    })
+  }, [activeSong?.name, activeSong?.artist, activeSong?.coverArtUrl])
+
+  // `playhead` updates every animation frame while playing, so publishing it
+  // straight through would re-render the player bar at 60fps for a readout
+  // that only shows whole seconds. Push play/pause and duration changes
+  // through immediately, and let position ride a 250ms interval instead.
+  const playheadRef = useRef(playhead)
+  playheadRef.current = playhead
+  const trackDuration = Math.max(0, ...tracks.map((tr) => tr.buffer.duration + tr.offsetSec))
+
+  useEffect(() => {
+    const publish = (): void => usePlayerStore.getState().setTransport({
+      playing,
+      position: playheadRef.current,
+      duration: trackDuration,
+    })
+    publish()
+    if (!playing) return
+    const id = setInterval(publish, 250)
+    return () => clearInterval(id)
+  }, [playing, trackDuration])
 
   // ── Cleanup everything on unmount ─────────────────────────
   useEffect(() => {
