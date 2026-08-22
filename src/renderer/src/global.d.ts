@@ -94,6 +94,7 @@ declare global {
       showInFolder:      (filePath: string) => Promise<void>
       encryptModel:      (modelPath: string) => Promise<{ encPath: string; sizeBytes: number }>
       decryptVerify:     (encPath: string) => Promise<{ decrypted: boolean; error?: string }>
+      downloadModel:     (modelPath: string, defaultName: string) => Promise<string | null>
       loadModels:        () => Promise<PersistedModel[]>
       saveModels:        (models: PersistedModel[]) => Promise<void>
       deleteDataFile:    (filePath: string) => Promise<boolean>

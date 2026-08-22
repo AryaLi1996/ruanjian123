@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useAppStore } from '../store/useAppStore'
-import { notify } from '../store/useNotificationStore'
+import { notify, useNotificationStore } from '../store/useNotificationStore'
+import { playCompletionChime } from '../utils/sound'
 import { AudioDropzone } from '../components/training/AudioDropzone'
 import { ModeSelector, type TrainingMode } from '../components/training/ModeSelector'
 import { TrainingProgress, type ProgressData } from '../components/training/TrainingProgress'
@@ -201,6 +202,11 @@ export function TrainingView(): JSX.Element {
         messageParams: { modelName: modelName.trim() || `Model ${id.slice(0, 6)}` },
         action: { type: 'view', view: 'training' },
       })
+      // Ticket 21: audible cue on completion, mirroring the taskCompletion
+      // toast/history suppression so muting that category also mutes the chime.
+      if (useNotificationStore.getState().preferences.categoriesEnabled.taskCompletion) {
+        playCompletionChime()
+      }
     } catch (err) {
       setError(String(err))
       setPhase('idle')
@@ -234,6 +240,27 @@ export function TrainingView(): JSX.Element {
       }
     }
     setPlayingModelId(m.id)
+  }
+
+  // ── download (encrypt + save-as) a model card ─────────────
+  async function handleDownload(m: typeof trainedModels[0]): Promise<void> {
+    try {
+      const saved = await window.engine.downloadModel(m.onnxPath, m.name)
+      if (!saved) return // user cancelled the save dialog
+      notify({
+        category: 'taskCompletion',
+        titleKey: 'notification.training.downloaded.title',
+        messageKey: 'notification.training.downloaded.message',
+        messageParams: { modelName: m.name },
+      })
+    } catch (err) {
+      notify({
+        category: 'taskFailure',
+        titleKey: 'notification.training.downloadFailed.title',
+        messageKey: 'notification.training.downloadFailed.message',
+        messageParams: { message: String(err) },
+      })
+    }
   }
 
   // ── delete a model card ───────────────────────────────────
@@ -426,6 +453,7 @@ export function TrainingView(): JSX.Element {
                   onDelete={() => handleDelete(m)}
                   onRetrain={() => handleRetrain(m)}
                   onPlay={() => void handlePlay(m)}
+                  onDownload={() => void handleDownload(m)}
                 />
                 {playingModelId === m.id && m.demoAudioUrl && (
                   <div style={{ marginTop: 8 }}>
