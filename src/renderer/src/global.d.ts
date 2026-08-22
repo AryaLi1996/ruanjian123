@@ -120,6 +120,8 @@ declare global {
       getTrainStatus:     (taskId: string) => Promise<TrainStatusResult>
       logRendererError:  (payload: unknown) => Promise<void>
       showInFolder:      (filePath: string) => Promise<void>
+      // Native "Browse…" file picker (PATCH-01 — Waveform Editor path field)
+      openFileDialog:    () => Promise<string | null>
       encryptModel:      (modelPath: string) => Promise<{ encPath: string; sizeBytes: number }>
       decryptVerify:     (encPath: string) => Promise<{ decrypted: boolean; error?: string }>
       downloadModel:     (modelPath: string, defaultName: string) => Promise<string | null>

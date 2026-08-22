@@ -537,6 +537,21 @@ ipcMain.handle('fs:show-in-folder', (_event, filePath: string) => {
   shell.showItemInFolder(filePath)
 })
 
+// Native "Browse…" file picker for the Waveform Editor's file path field
+// (PATCH-01) — a sandboxed/contextIsolated renderer can't read the absolute
+// path off a browser-selected/dropped File, so this is the only way the
+// path box gets a real filesystem path to display and load from.
+ipcMain.handle('dialog:openFile', async (event) => {
+  const win = BrowserWindow.fromWebContents(event.sender) ?? BrowserWindow.getFocusedWindow() ?? undefined
+  const { canceled, filePaths } = await dialog.showOpenDialog(win ?? undefined as never, {
+    title: 'Open Audio File',
+    properties: ['openFile'],
+    filters: [{ name: 'Audio', extensions: ['wav', 'mp3', 'flac', 'aac'] }],
+  })
+  if (canceled || !filePaths.length) return null
+  return filePaths[0]
+})
+
 // Online lyrics search (Playback/Monitor page) — proxied through main so the
 // renderer's CSP (connect-src 'self') doesn't have to allow third-party hosts.
 interface LyricsSearchResult {

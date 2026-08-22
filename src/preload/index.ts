@@ -57,6 +57,10 @@ contextBridge.exposeInMainWorld('engine', {
   showInFolder: (filePath: string): Promise<void> =>
     ipcRenderer.invoke('fs:show-in-folder', filePath),
 
+  // Native "Browse…" file picker (PATCH-01 — Waveform Editor path field)
+  openFileDialog: (): Promise<string | null> =>
+    ipcRenderer.invoke('dialog:openFile'),
+
   // Model encryption / decryption (machine-bound AES-256-GCM)
   encryptModel:     (modelPath: string): Promise<{ encPath: string; sizeBytes: number }> =>
     ipcRenderer.invoke('model:encrypt', modelPath),
