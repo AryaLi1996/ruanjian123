@@ -1,52 +1,70 @@
 import React from 'react'
 import { useTranslation } from 'react-i18next'
+import { COVER_STEPS, stepStatus, unmetPrerequisites, type StepDef } from '../../utils/wizardSteps'
 
-export interface StepDef {
-  number: number
-  label:  string
-  // Which earlier step must be completed to unlock this one. Defaults to
-  // `number - 1` (the previous step) — set explicitly for Step 5, which
-  // only needs synthesis (step 3) done, not the export step (4): building
-  // a training dataset doesn't require having exported a mixdown first.
-  requires?: number
-}
+export type { StepDef } from '../../utils/wizardSteps'
 
 interface Props {
   current:    number
   completed:  Set<number>
   onNavigate: (step: number) => void
+  /**
+   * FC-03: called instead of onNavigate when the user clicks a step that is
+   * still locked, with the steps they need to finish first (ascending). The
+   * button stays clickable on purpose — a disabled control that silently
+   * swallows the click is exactly what left users wondering why the training
+   * step "did nothing".
+   */
+  onBlocked?: (step: number, unmet: number[]) => void
 }
 
-export function StepWizard({ current, completed, onNavigate }: Props): JSX.Element {
+export function StepWizard({ current, completed, onNavigate, onBlocked }: Props): JSX.Element {
   const { t } = useTranslation()
-  const steps: StepDef[] = [
-    { number: 1, label: t('cover.stepUpload') },
-    { number: 2, label: t('cover.stepModel')  },
-    { number: 3, label: t('cover.stepMix')    },
-    { number: 4, label: t('cover.stepExport') },
-    { number: 5, label: t('cover.stepTrainingData'), requires: 3 },
-  ]
+  const labels: Record<number, string> = {
+    1: t('cover.stepUpload'),
+    2: t('cover.stepModel'),
+    3: t('cover.stepMix'),
+    4: t('cover.stepExport'),
+    5: t('cover.stepTrainingData'),
+  }
+
+  function handleClick(step: StepDef): void {
+    const unmet = unmetPrerequisites(step, completed)
+    if (step.number === current || completed.has(step.number) || unmet.length === 0) {
+      onNavigate(step.number)
+      return
+    }
+    onBlocked?.(step.number, unmet)
+  }
 
   return (
     <nav className="wizard-steps" aria-label={t('cover.workflowSteps')}>
-      {steps.map((step, i) => {
-        const isDone   = completed.has(step.number)
-        const isActive = current === step.number
-        const canNav   = isDone || isActive || completed.has(step.requires ?? step.number - 1)
+      {COVER_STEPS.map((step, i) => {
+        const status = stepStatus(step, current, completed)
+        const locked = status === 'locked'
+        const unmet  = unmetPrerequisites(step, completed)
 
         return (
           <React.Fragment key={step.number}>
             <button
-              className={`wizard-step${isActive ? ' active' : ''}${isDone ? ' done' : ''}`}
-              onClick={() => canNav && onNavigate(step.number)}
-              disabled={!canNav}
-              aria-current={isActive ? 'step' : undefined}
+              className={`wizard-step ${status}`}
+              onClick={() => handleClick(step)}
+              // Not `disabled`: a locked step still explains itself when
+              // clicked (see handleClick). aria-disabled keeps that visible
+              // to assistive tech without making the button unreachable.
+              aria-disabled={locked || undefined}
+              aria-current={status === 'active' ? 'step' : undefined}
+              title={locked
+                ? t('cover.stepLockedTooltip', { steps: unmet.map((n) => labels[n]).join('、') })
+                : undefined}
             >
-              <span className="step-circle">{isDone ? '✓' : step.number}</span>
-              <span className="step-label">{step.label}</span>
+              <span className="step-circle">
+                {status === 'completed' ? '✓' : locked ? '🔒' : step.number}
+              </span>
+              <span className="step-label">{labels[step.number]}</span>
             </button>
-            {i < steps.length - 1 && (
-              <div className={`step-connector${isDone ? ' done' : ''}`} />
+            {i < COVER_STEPS.length - 1 && (
+              <div className={`step-connector${completed.has(step.number) ? ' done' : ''}`} />
             )}
           </React.Fragment>
         )

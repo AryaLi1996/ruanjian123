@@ -9,7 +9,8 @@ import { SubscriptionMonitor } from './subscription-monitor'
 import { LICENSE_CONFIG, usingDefaultSigningSecret } from './license-config'
 import { loadModels, saveModels, type PersistedModel } from './model-registry'
 import { loadLyricsCache, saveLyricsCache, type LyricsCache } from './lyrics-cache'
-import { searchLibrary, fetchLibraryAudio, type LibrarySong } from './library'
+import { searchLibrary, fetchLibraryAudio, listCachedLibraryIds, type LibrarySong } from './library'
+import { collectProjectAssets, type SeparationMode } from './project-assets'
 import { uploadTrainDataset, getTrainStatus, type TrainStartConfig } from './train-upload'
 import {
   saveBackground, saveBackgroundMeta, loadBackground, loadBackgroundSource, removeBackground,
@@ -616,7 +617,33 @@ ipcMain.handle(
 )
 ipcMain.handle(
   'library:fetch-audio',
-  (_event, song: LibrarySong) => fetchLibraryAudio(song),
+  (event, song: LibrarySong) =>
+    // FC-01: forwarded per chunk so the modal can show download progress on a
+    // multi-MB file instead of a silent wait. Sent to the requesting window
+    // only — a second window's download shouldn't drive this one's progress
+    // bar.
+    fetchLibraryAudio(song, (p) => {
+      if (!event.sender.isDestroyed()) event.sender.send('library:download-progress', p)
+    }),
+)
+// FC-01: which songs already have a local copy, so the search results can be
+// marked "本地就绪" before the user commits to a pick.
+ipcMain.handle('library:cached-ids', () => listCachedLibraryIds())
+
+// ── Cover Creation project assets (FC-02) ──────────────────────────────────
+// Copies a finished separation's stems into a standard per-project folder
+// under userData, so the training step reads from fixed, predictable paths
+// rather than wherever the engine happened to write them.
+ipcMain.handle(
+  'project:collect-stems',
+  (_event, projectId: string, mode: SeparationMode, stems: Record<string, string>, originalPath?: string | null) =>
+    collectProjectAssets({
+      projectsDir: join(app.getPath('userData'), 'projects'),
+      projectId,
+      mode,
+      stems,
+      originalPath,
+    }),
 )
 
 // ── Upload & Start Training (Ticket 20) ─────────────────────────────────────

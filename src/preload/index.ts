@@ -45,6 +45,21 @@ contextBridge.exposeInMainWorld('engine', {
     ipcRenderer.invoke('library:search', keyword, page, pageSize),
   fetchLibraryAudio: (song: unknown): Promise<{ path: string; cached: boolean }> =>
     ipcRenderer.invoke('library:fetch-audio', song),
+  // FC-01: ids already cached locally ("本地就绪" badge in the search modal).
+  listCachedLibraryIds: (): Promise<string[]> => ipcRenderer.invoke('library:cached-ids'),
+  // FC-01: per-chunk download progress for the song currently being fetched.
+  onLibraryDownloadProgress: (cb: (p: unknown) => void): (() => void) => {
+    const handler = (_: Electron.IpcRendererEvent, payload: unknown): void => cb(payload)
+    ipcRenderer.on('library:download-progress', handler)
+    return () => ipcRenderer.removeListener('library:download-progress', handler)
+  },
+
+  // FC-02: copy a finished separation's stems into the standard project
+  // folder the training step reads from.
+  collectProjectStems: (
+    projectId: string, mode: string, stems: Record<string, string>, originalPath?: string | null,
+  ): Promise<unknown> =>
+    ipcRenderer.invoke('project:collect-stems', projectId, mode, stems, originalPath),
 
   // Upload & Start Training (Ticket 20)
   uploadTrainDataset: (zipPath: string, taskId: string, config: unknown): Promise<unknown> =>

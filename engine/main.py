@@ -140,7 +140,16 @@ def separate(args):
         sf.write(tmp.name, stereo, 44_100, subtype="PCM_16")
         input_path = tmp.name
 
-    result = _sep(input_path, mode=mode)
+    # FC-05: stream progress lines while the separation runs so the UI can
+    # show a real percentage instead of an indefinite spinner. Written to
+    # stdout ahead of the result, which both callers tolerate: the streaming
+    # bridge forwards each line as an engine:progress event, and the plain
+    # request/response bridge parses only the last line (the result).
+    def _emit(percent, stage):
+        print(json.dumps({"type": "separation_progress", "percent": percent, "stage": stage}),
+              flush=True)
+
+    result = _sep(input_path, mode=mode, progress_cb=_emit)
 
     # Crosstalk check for standard mode: stems must sum back to the mix
     crosstalk_db = None

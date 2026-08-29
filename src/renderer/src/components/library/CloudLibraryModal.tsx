@@ -1,9 +1,19 @@
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import type { LibrarySong } from '../../global'
+import type { LibrarySong, LibraryDownloadProgress } from '../../global'
 
 const PAGE_SIZE = 10
 const DEBOUNCE_MS = 400
+
+/**
+ * FC-01: cache files are named after a sanitized song id — mirrors
+ * main/library-search.ts's safeId(), which is what actually names them.
+ * Renderer and main are separate TS programs (see global.d.ts's header), so
+ * the rule is duplicated rather than imported; keep the two in step.
+ */
+function cacheKeyFor(id: string): string {
+  return id.replace(/[^a-zA-Z0-9_-]/g, '_') || 'song'
+}
 
 interface CloudLibraryModalProps {
   onClose:  () => void
@@ -30,12 +40,34 @@ export function CloudLibraryModal({ onClose, onSelect }: CloudLibraryModalProps)
   const [error,   setError]   = useState<string | null>(null)
   const [downloadingId, setDownloadingId] = useState<string | null>(null)
   const [downloadError, setDownloadError] = useState<string | null>(null)
+  // FC-01: which songs already have a local copy ("本地就绪"), and how far
+  // along the one currently downloading is.
+  const [cachedKeys, setCachedKeys] = useState<Set<string>>(new Set())
+  const [downloadPct, setDownloadPct] = useState<number | null>(null)
 
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const requestIdRef = useRef(0)
   const inputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => { inputRef.current?.focus() }, [])
+
+  // Cache contents are read once per open: nothing else adds to the cache
+  // while the modal is up except this modal's own downloads, which update
+  // the set directly in handleSelect.
+  useEffect(() => {
+    let alive = true
+    window.engine.listCachedLibraryIds()
+      .then((ids) => { if (alive) setCachedKeys(new Set(ids)) })
+      .catch(() => { /* the badge is a nicety — a failure here just shows none */ })
+    return () => { alive = false }
+  }, [])
+
+  useEffect(() => {
+    const unsub = window.engine.onLibraryDownloadProgress((p: LibraryDownloadProgress) => {
+      setDownloadPct(p.percent)
+    })
+    return unsub
+  }, [])
 
   // Debounced search — fires on keyword change, and again whenever page
   // changes (pagination clicks call runSearch directly, but this also
@@ -75,13 +107,16 @@ export function CloudLibraryModal({ onClose, onSelect }: CloudLibraryModalProps)
   async function handleSelect(song: LibrarySong): Promise<void> {
     setDownloadError(null)
     setDownloadingId(song.id)
+    setDownloadPct(null)
     try {
       const { path } = await window.engine.fetchLibraryAudio(song)
+      setCachedKeys((prev) => new Set(prev).add(cacheKeyFor(song.id)))
       onSelect(song, path)
     } catch (err) {
       setDownloadError(String(err))
     } finally {
       setDownloadingId(null)
+      setDownloadPct(null)
     }
   }
 
@@ -118,23 +153,45 @@ export function CloudLibraryModal({ onClose, onSelect }: CloudLibraryModalProps)
           {!loading && !error && results.length === 0 && (
             <div className="view-desc">{keyword.trim() ? t('library.noResults') : t('library.emptyPrompt')}</div>
           )}
-          {!loading && !error && results.map((song) => (
-            <div key={song.id} className="library-modal-result">
-              <div className="library-modal-result-info">
-                <div className="library-modal-result-title">{song.title}</div>
-                <div className="library-modal-result-meta">
-                  {[song.artist, song.original_key ? `Key: ${song.original_key}` : null].filter(Boolean).join(' · ')}
+          {!loading && !error && results.map((song) => {
+            const cached      = cachedKeys.has(cacheKeyFor(song.id))
+            const downloading = downloadingId === song.id
+            return (
+              <div key={song.id} className="library-modal-result">
+                <div className="library-modal-result-info">
+                  <div className="library-modal-result-title">{song.title}</div>
+                  <div className="library-modal-result-meta">
+                    {[song.artist, song.original_key ? `Key: ${song.original_key}` : null].filter(Boolean).join(' · ')}
+                  </div>
+                  {downloading && (
+                    <>
+                      <div className="library-modal-result-meta">
+                        {downloadPct !== null && downloadPct >= 0
+                          ? t('library.downloadingPercent', { percent: downloadPct })
+                          : t('library.downloadingResource')}
+                      </div>
+                      <div className="library-download-bar">
+                        <div
+                          className={`library-download-bar-fill${downloadPct === null || downloadPct < 0 ? ' indeterminate' : ''}`}
+                          style={downloadPct !== null && downloadPct >= 0 ? { width: `${downloadPct}%` } : undefined}
+                        />
+                      </div>
+                    </>
+                  )}
                 </div>
+                {cached && !downloading && (
+                  <span className="library-cached-badge">✓ {t('library.localReady')}</span>
+                )}
+                <button
+                  className="btn btn-primary pbm-mini-btn"
+                  disabled={downloadingId !== null}
+                  onClick={() => void handleSelect(song)}
+                >
+                  {downloading ? t('library.downloading') : t('library.select')}
+                </button>
               </div>
-              <button
-                className="btn btn-primary pbm-mini-btn"
-                disabled={downloadingId !== null}
-                onClick={() => void handleSelect(song)}
-              >
-                {downloadingId === song.id ? t('library.downloading') : t('library.select')}
-              </button>
-            </div>
-          ))}
+            )
+          })}
         </div>
 
         {!loading && !error && total > PAGE_SIZE && (

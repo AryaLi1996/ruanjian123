@@ -78,6 +78,9 @@ export function LibraryView(): JSX.Element {
         artist:           song.artist,
         originalKey:      song.original_key,
         audioPath:        path,
+        // FC-01: kept so separation can re-fetch the audio if this cache
+        // entry is gone by then — see CoverView's ensureTargetSongAudio.
+        audioUrl:         song.audio_url,
         coverUrl:         song.cover_url,
         pitchShift:       0,
         shiftedAudioPath: null,
