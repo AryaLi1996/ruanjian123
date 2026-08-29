@@ -2,7 +2,11 @@ import { app, BrowserWindow, shell, ipcMain, dialog, crashReporter, Menu } from 
 import { join, resolve, sep, dirname } from 'path'
 import { existsSync, renameSync } from 'fs'
 import { promises as fs } from 'fs'
-import { callPythonEngine, callPythonEngineStreaming, cancelPythonEngineStreaming } from './python-bridge'
+import {
+  callPythonEngine, callPythonEngineStreaming, cancelPythonEngineStreaming,
+  getEngineStartupTimeoutMs, onEngineLog, preflightEngine, setEngineStartupTimeoutMs,
+  type EngineLogEntry,
+} from './python-bridge'
 import { encryptModelFile, decryptModelFile } from './model-crypto'
 import { setupAutoUpdater, checkForUpdates, getLastUpdateResult, downloadUpdate, quitAndInstall } from './auto-updater'
 import { SubscriptionMonitor } from './subscription-monitor'
@@ -513,6 +517,60 @@ ipcMain.handle('engine:stream', (event, method: string, args: unknown[]) =>
 // renderer can tell a real cancellation from a run that finished between the
 // click and this call arriving.
 ipcMain.handle('engine:cancel', () => cancelPythonEngineStreaming())
+
+// ── Engine diagnostics (Tickets T1/T3) ─────────────────────────────────────
+// Every line the engine writes — verbose stage logs, heartbeats, stray
+// warnings, tracebacks — is broadcast to open windows so the Training view's
+// log panel can show what the engine is doing while it starts up. This is the
+// channel that makes a stuck launch visible instead of silent; JSON progress
+// keeps flowing on engine:progress as before.
+onEngineLog((entry: EngineLogEntry) => {
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (!window.isDestroyed()) window.webContents.send('engine:log', entry)
+  }
+})
+
+// Ticket T3: pre-flight self-check run before "开始本地训练" is enabled.
+// The main-process half (is the engine executable even there / launchable?)
+// is answered locally, because when it fails there is no engine to ask.
+const ENV_CHECK_TIMEOUT_MS = 2 * 60_000
+
+ipcMain.handle('engine:check-environment', async () => {
+  const preflightError = preflightEngine()
+  if (preflightError) {
+    return {
+      passed: false,
+      checks: [{
+        id: 'engine', status: 'fail', label: 'Python engine',
+        detail: preflightError, fix: null,
+      }],
+      missing: [], device: { training_device: 'cpu', gpu_available: false },
+      platform: `${process.platform} ${process.arch}`, python: null,
+    }
+  }
+  try {
+    return await callPythonEngine('check_environment', [], ENV_CHECK_TIMEOUT_MS)
+  } catch (error) {
+    // The check itself failing *is* a finding: the engine can't be launched
+    // or crashed on start-up, which is precisely what blocks training.
+    return {
+      passed: false,
+      checks: [{
+        id: 'engine', status: 'fail', label: 'Python engine',
+        detail: String(error instanceof Error ? error.message : error), fix: null,
+      }],
+      missing: [], device: { training_device: 'cpu', gpu_available: false },
+      platform: `${process.platform} ${process.arch}`, python: null,
+    }
+  }
+})
+
+// Ticket T1: the start-up timeout is user-adjustable (Settings) for machines
+// where even the raised default isn't enough — a network-mounted install
+// directory, or aggressive enterprise antivirus.
+ipcMain.handle('engine:get-startup-timeout', () => getEngineStartupTimeoutMs())
+ipcMain.handle('engine:set-startup-timeout', (_event, ms: number | null) =>
+  setEngineStartupTimeoutMs(ms))
 
 // Save uploaded audio files to a per-session training directory
 ipcMain.handle(

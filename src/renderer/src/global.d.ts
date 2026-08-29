@@ -65,6 +65,58 @@ export interface TrainStartConfig {
   [key: string]:        unknown
 }
 
+// ── Engine diagnostics & environment self-check (Tickets T1-T3) ────────────
+// Mirrors main/python-bridge.ts's EngineLogEntry (renderer and main are
+// separate TS programs — see PersistedModel above for why this file keeps
+// its own copies).
+export interface EngineLogEntry {
+  method: string
+  stream: 'stdout' | 'stderr'
+  kind:   'json' | 'diagnostic' | 'heartbeat' | 'error'
+  line:   string
+  at:     number
+}
+
+export type EnvCheckStatus = 'ok' | 'warn' | 'fail'
+
+/** One row of the pre-flight checklist — mirrors engine/env_check.py's Check. */
+export interface EnvCheck {
+  id:     string
+  status: EnvCheckStatus
+  label:  string
+  detail: string
+  fix:    string | null
+}
+
+/** Device facts from engine/device_detector.py's detect_device(). */
+export interface EngineDeviceInfo {
+  ep?:                  string
+  provider?:            string
+  providers?:           string[]
+  platform?:            string
+  python?:              string
+  torch_available?:     boolean
+  torch_version?:       string | null
+  cuda_available?:      boolean
+  mps_available?:       boolean
+  gpu_available?:       boolean
+  gpu_name?:            string | null
+  /** "cuda" | "mps" | "cpu" — what a training run will actually use. */
+  training_device?:     string
+  cpu_slowdown_factor?: number
+  detail?:              string | null
+}
+
+/** Mirrors engine/env_check.py's EnvironmentReport. */
+export interface EnvironmentReport {
+  passed:   boolean
+  checks:   EnvCheck[]
+  device:   EngineDeviceInfo
+  platform: string
+  python:   string | null
+  missing:  string[]
+}
+
 interface WarmupResult {
   passed:     boolean
   ep?:        string
@@ -120,6 +172,13 @@ declare global {
       stream:            (method: string, ...args: unknown[]) => Promise<unknown>
       /** Ticket UI-10: kills the streaming run in flight; true if one was killed. */
       cancelStream:      () => Promise<boolean>
+      /** Raw engine output — stage diagnostics, heartbeats, stray warnings (Tickets T1/T3). */
+      onEngineLog:       (cb: (entry: EngineLogEntry) => void) => () => void
+      /** Ticket T3: pre-flight environment self-check run before training starts. */
+      checkEnvironment:  () => Promise<EnvironmentReport>
+      /** Ticket T1: engine start-up timeout in ms; null resets to the default. */
+      getEngineStartupTimeout: () => Promise<number>
+      setEngineStartupTimeout: (ms: number | null) => Promise<number>
       saveTrainingFiles: (files: Array<{ name: string; buffer: ArrayBuffer }>) => Promise<string>
       readFile:          (filePath: string) => Promise<ArrayBuffer>
       saveRecording:     (buffer: ArrayBuffer, defaultName: string) => Promise<string | null>

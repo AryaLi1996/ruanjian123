@@ -1,8 +1,13 @@
-import { spawn } from 'child_process'
+import { spawn, type ChildProcessWithoutNullStreams } from 'child_process'
 import { join, dirname } from 'path'
 import { existsSync } from 'fs'
 import { app }   from 'electron'
 import log from 'electron-log'
+import {
+  DEFAULT_STARTUP_TIMEOUT_MS, STARTUP_HEARTBEAT_GRACE_FACTOR,
+  classifyEngineLine, describeMissingInterpreter, describeSpawnFailure, describeStartupTimeout,
+  resolveCommandOnPath, resolveStartupTimeoutMs, shouldRetryStartup, stripDiagnostics,
+} from './engine-preflight'
 
 interface EngineTarget {
   /** Executable to spawn — an absolute path to the bundled engine (or system Python in dev). */
@@ -125,13 +130,95 @@ function sandboxEnv(target: EngineTarget): NodeJS.ProcessEnv {
 }
 
 /**
+ * Verify the resolved engine can actually be launched, before spawning it.
+ *
+ * Ticket T1: a dev checkout with no Python on PATH, or an install whose
+ * engine files antivirus quarantined, used to surface as a 15-second silence
+ * followed by "Python engine failed to start" — no indication of *which*
+ * of those it was. Checking first means the failure names itself.
+ *
+ * Returns null when everything checks out, or a ready-to-show message.
+ */
+export function preflightEngine(): string | null {
+  let target: EngineTarget
+  try {
+    target = resolveEngine()
+  } catch (error) {
+    return (error as Error).message
+  }
+
+  const resolved = resolveCommandOnPath(target.executable, {
+    pathEnv:  process.env.PATH,
+    platform: process.platform,
+    pathExt:  process.env.PATHEXT,
+    exists:   existsSync,
+  })
+  if (!resolved) return describeMissingInterpreter(target.executable, process.platform)
+
+  // The dev target also needs the script itself; a packaged bundle embeds it.
+  const script = target.scriptArgs[0]
+  if (script && !existsSync(script)) {
+    return `找不到引擎脚本「${script}」。/ Engine script "${script}" is missing.`
+  }
+  return null
+}
+
+// ── Engine log fan-out ───────────────────────────────────────────────────
+// Ticket T1/T3: everything the engine writes — JSON progress, verbose stage
+// lines, heartbeats, and any raw traceback — is published here so the main
+// process can forward it to the training log panel. Without this the only
+// output that ever reached the UI was well-formed JSON on stdout, which is
+// exactly the output a failing-to-start engine never produces.
+export interface EngineLogEntry {
+  method: string
+  stream: 'stdout' | 'stderr'
+  kind:   'json' | 'diagnostic' | 'heartbeat' | 'error'
+  line:   string
+  at:     number
+}
+
+type EngineLogListener = (entry: EngineLogEntry) => void
+const logListeners = new Set<EngineLogListener>()
+
+/** Subscribe to engine output. Returns an unsubscribe function. */
+export function onEngineLog(listener: EngineLogListener): () => void {
+  logListeners.add(listener)
+  return () => { logListeners.delete(listener) }
+}
+
+function emitLog(entry: EngineLogEntry): void {
+  for (const listener of logListeners) {
+    try { listener(entry) } catch { /* a bad listener must not break the run */ }
+  }
+}
+
+// ── Start-up timeout configuration ───────────────────────────────────────
+// Ticket T1 allows the user to raise this (Settings → engine start-up
+// timeout) for a machine where even 60s isn't enough — an aggressive
+// enterprise AV, or a network-mounted install directory.
+let startupTimeoutOverrideMs: number | null = null
+
+export function setEngineStartupTimeoutMs(ms: number | null): number {
+  startupTimeoutOverrideMs = ms == null ? null : resolveStartupTimeoutMs(ms)
+  return getEngineStartupTimeoutMs()
+}
+
+export function getEngineStartupTimeoutMs(): number {
+  if (startupTimeoutOverrideMs != null) return startupTimeoutOverrideMs
+  const fromEnv = process.env.RUANJIAN_ENGINE_STARTUP_TIMEOUT_MS
+  return fromEnv ? resolveStartupTimeoutMs(fromEnv) : DEFAULT_STARTUP_TIMEOUT_MS
+}
+
+/**
  * Turn a non-zero engine exit code into an actionable message. Exit code
  * 9009 on Windows almost always means the thing that was spawned wasn't
  * the engine at all — see resolveEngine() above — so call that out
  * explicitly instead of surfacing the bare number.
  */
 function describeExitError(code: number | null, executable: string, stderr: string): string {
-  const detail = stderr.trim()
+  // Verbose diagnostics and heartbeats are noise in an error message — the
+  // interesting part is whatever the failure itself printed.
+  const detail = stripDiagnostics(stderr)
   if (process.platform === 'win32' && code === 9009) {
     return (
       `Python engine exited 9009 (command not found) while trying to run "${executable}". ` +
@@ -142,7 +229,42 @@ function describeExitError(code: number | null, executable: string, stderr: stri
   return `Python engine exited ${code}${detail ? `: ${detail}` : ''}`
 }
 
-export function callPythonEngine(method: string, args: unknown[], timeoutMs = 30_000): Promise<unknown> {
+/**
+ * Spawn the engine for one call.
+ *
+ * `verbose` adds --verbose, which makes engine/main.py narrate its stages and
+ * emit a liveness heartbeat on stderr — see that module's header for why the
+ * start-up logic depends on it.
+ */
+function spawnEngine(
+  target: EngineTarget, method: string, args: unknown[], verbose: boolean,
+): ChildProcessWithoutNullStreams {
+  const payload   = JSON.stringify({ method, args })
+  const spawnArgs = [...target.scriptArgs, ...(verbose ? ['--verbose'] : []), payload]
+  return spawn(target.executable, spawnArgs, {
+    env:         sandboxEnv(target),
+    shell:       false,
+    windowsHide: true,
+  })
+}
+
+/** Route one stderr chunk to the log fan-out, and report what kind of lines it held. */
+function publishStderr(method: string, chunk: string): { sawRealOutput: boolean; diagnostics: string[] } {
+  let sawRealOutput = false
+  const diagnostics: string[] = []
+  for (const line of chunk.split('\n')) {
+    if (!line.trim()) continue
+    const kind = classifyEngineLine(line)
+    if (kind !== 'heartbeat') sawRealOutput = true
+    if (kind !== 'error') diagnostics.push(line.trim())
+    emitLog({ method, stream: 'stderr', kind, line: line.trimEnd(), at: Date.now() })
+  }
+  return { sawRealOutput, diagnostics }
+}
+
+export function callPythonEngine(
+  method: string, args: unknown[], timeoutMs = 30_000, attempt = 0,
+): Promise<unknown> {
   return new Promise((resolve, reject) => {
     let target: EngineTarget
     try {
@@ -152,26 +274,49 @@ export function callPythonEngine(method: string, args: unknown[], timeoutMs = 30
       return
     }
 
-    const payload    = JSON.stringify({ method, args })
-    const spawnArgs  = [...target.scriptArgs, payload]
-    const proc = spawn(target.executable, spawnArgs, {
-      env:         sandboxEnv(target),
-      shell:       false,
-      windowsHide: true,
-    })
-    const timeout = setTimeout(() => {
-      proc.kill()
-      reject(new Error(`Python engine timed out after ${timeoutMs} ms`))
-    }, timeoutMs)
+    const proc = spawnEngine(target, method, args, true)
+    const startupTimeoutMs = getEngineStartupTimeoutMs()
 
-    let stdout = ''
-    let stderr = ''
+    let stdout   = ''
+    let stderr   = ''
+    let settled  = false
+    // A one-shot call gets whichever budget is larger: its own (which callers
+    // size for the *work*, e.g. 5 min for an export) or the start-up budget
+    // (which covers getting the interpreter off the ground at all). Taking
+    // the smaller of the two is how a slow cold start used to abort a call
+    // that had plenty of time left for the work itself.
+    const budgetMs = Math.max(timeoutMs, startupTimeoutMs)
+    const timeout  = setTimeout(() => {
+      if (settled) return
+      settled = true
+      proc.kill()
+      // Nothing at all came back: this is a start-up failure, not a slow
+      // computation, so it is worth one automatic retry (Ticket T1) — a cold
+      // filesystem cache or a first-run AV scan usually only bites once.
+      const neverStarted = stdout === '' && stripDiagnostics(stderr) === ''
+      if (neverStarted && shouldRetryStartup(attempt)) {
+        log.warn(`[python-bridge] "${method}" produced no output in ${budgetMs} ms; retrying once`)
+        callPythonEngine(method, args, timeoutMs, attempt + 1).then(resolve, reject)
+        return
+      }
+      reject(new Error(
+        neverStarted
+          ? describeStartupTimeout(budgetMs, process.platform, false)
+          : `Python engine timed out after ${budgetMs} ms`,
+      ))
+    }, budgetMs)
 
     proc.stdout.on('data', (chunk: Buffer) => { stdout += chunk.toString() })
-    proc.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString() })
+    proc.stderr.on('data', (chunk: Buffer) => {
+      const text = chunk.toString()
+      stderr += text
+      publishStderr(method, text)
+    })
 
     proc.on('close', (code) => {
       clearTimeout(timeout)
+      if (settled) return
+      settled = true
       if (code !== 0) {
         reject(new Error(describeExitError(code, target.executable, stderr)))
         return
@@ -188,8 +333,12 @@ export function callPythonEngine(method: string, args: unknown[], timeoutMs = 30
 
     proc.on('error', (error) => {
       clearTimeout(timeout)
+      if (settled) return
+      settled = true
       log.error(`[python-bridge] failed to spawn "${target.executable}":`, error)
-      reject(error)
+      reject(new Error(describeSpawnFailure(error as NodeJS.ErrnoException, {
+        platform: process.platform, executable: target.executable,
+      })))
     })
   })
 }
@@ -199,15 +348,21 @@ export function callPythonEngine(method: string, args: unknown[], timeoutMs = 30
  *
  * Unlike callPythonEngine, a single overall timeout doesn't fit here — a
  * training run can legitimately take much longer than any fixed budget. So
- * instead this uses a *stall* timeout: it resets every time the process
- * produces any output (progress line or stderr chatter) and only fires when
- * the engine goes completely silent, which means it's hung rather than busy.
+ * instead this uses two timers:
+ *
+ *  * a **start-up** timeout, until the engine proves it is running. Heartbeat
+ *    lines (see engine/main.py) push this out while the process is provably
+ *    alive, up to a hard ceiling, so a slow `import torch` is no longer
+ *    mistaken for a wedged process — that mistake is Ticket T1's
+ *    "failed to start within 15000 ms".
+ *  * a **stall** timeout afterwards, reset by real output only (never by a
+ *    heartbeat, or a hung run would be immortal).
  */
 // The streaming child currently in flight, if any (Ticket UI-10's 取消训练).
 // Only one streaming run happens at a time — the UI blocks starting a second
 // while one is in progress — so a single handle is enough, and it's cleared
 // as soon as the run settles either way.
-let activeStreamingProc: ReturnType<typeof spawn> | null = null
+let activeStreamingProc: ChildProcessWithoutNullStreams | null = null
 
 // Set by cancelPythonEngineStreaming so the close handler can tell a
 // deliberate cancellation from a crash — killing the process makes it exit
@@ -240,6 +395,7 @@ export function callPythonEngineStreaming(
   args: unknown[],
   onData: (data: unknown) => void,
   stallTimeoutMs = 5 * 60_000,
+  attempt = 0,
 ): Promise<unknown> {
   return new Promise((resolve, reject) => {
     let target: EngineTarget
@@ -250,13 +406,15 @@ export function callPythonEngineStreaming(
       return
     }
 
-    const payload    = JSON.stringify({ method, args })
-    const spawnArgs  = [...target.scriptArgs, payload]
-    const proc       = spawn(target.executable, spawnArgs, {
-      env:         sandboxEnv(target),
-      shell:       false,
-      windowsHide: true,
-    })
+    // Checked here rather than only in the IPC layer so *every* streaming
+    // caller gets the named failure instead of a silent timeout.
+    const preflightError = preflightEngine()
+    if (preflightError) {
+      reject(new Error(preflightError))
+      return
+    }
+
+    const proc = spawnEngine(target, method, args, true)
 
     activeStreamingProc = proc
     cancelRequested = false
@@ -267,34 +425,75 @@ export function callPythonEngineStreaming(
     let settled   = false
     // Distinguish "never even got going" from "legitimately busy". A stuck
     // spawn — antivirus holding the exe, a missing native dependency that
-    // blocks before the engine can print anything (Ticket 39 root cause #5)
-    // — should fail fast; a training run that's gone quiet *after* it has
-    // already proven it started should get the full stall budget.
+    // blocks before the engine can print anything — should fail fast; a
+    // training run that's gone quiet *after* it has already proven it
+    // started gets the full stall budget.
     let hasOutput = false
-    const startupTimeoutMs = Math.min(15_000, stallTimeoutMs)
+    const recentDiagnostics: string[] = []
+    const startupTimeoutMs = getEngineStartupTimeoutMs()
+    // Heartbeats may extend start-up, but only this far: an engine whose main
+    // thread is wedged while its heartbeat thread keeps ticking must still
+    // eventually fail rather than hang the UI forever.
+    const startupDeadline = Date.now() + startupTimeoutMs * STARTUP_HEARTBEAT_GRACE_FACTOR
 
-    let stallTimer: ReturnType<typeof setTimeout>
-    const resetStallTimer = (): void => {
-      clearTimeout(stallTimer)
-      const ms = hasOutput ? stallTimeoutMs : startupTimeoutMs
-      stallTimer = setTimeout(() => {
-        if (settled) return
-        settled = true
-        if (activeStreamingProc === proc) activeStreamingProc = null
-        proc.kill()
-        reject(new Error(
-          hasOutput
-            ? `Python engine produced no output for ${stallTimeoutMs} ms and was killed (likely hung)`
-            : `Python engine failed to start within ${startupTimeoutMs} ms — no output was produced. ` +
-              'It may be blocked by antivirus software or missing a required file; try reinstalling the application.',
-        ))
-      }, ms)
+    let timer: ReturnType<typeof setTimeout>
+
+    const fail = (message: string): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      if (activeStreamingProc === proc) activeStreamingProc = null
+      proc.kill()
+      reject(new Error(message))
     }
-    resetStallTimer()
+
+    const armStartupTimer = (): void => {
+      clearTimeout(timer)
+      timer = setTimeout(() => {
+        if (settled) return
+        // One automatic retry (Ticket T1): nothing has run yet, so restarting
+        // is side-effect free, and the usual culprits (cold cache, first-run
+        // AV scan of the executable) are one-shot.
+        if (shouldRetryStartup(attempt)) {
+          settled = true
+          clearTimeout(timer)
+          if (activeStreamingProc === proc) activeStreamingProc = null
+          proc.kill()
+          log.warn(`[python-bridge] "${method}" did not start within ${startupTimeoutMs} ms; retrying once`)
+          emitLog({
+            method, stream: 'stderr', kind: 'diagnostic', at: Date.now(),
+            line: describeStartupTimeout(startupTimeoutMs, process.platform, true, recentDiagnostics),
+          })
+          callPythonEngineStreaming(method, args, onData, stallTimeoutMs, attempt + 1).then(resolve, reject)
+          return
+        }
+        fail(describeStartupTimeout(startupTimeoutMs, process.platform, false, recentDiagnostics))
+      }, startupTimeoutMs)
+    }
+
+    const armStallTimer = (): void => {
+      clearTimeout(timer)
+      timer = setTimeout(() => {
+        fail(`Python engine produced no output for ${stallTimeoutMs} ms and was killed (likely hung)`)
+      }, stallTimeoutMs)
+    }
+
+    /** Real output means the engine is working: switch to (and reset) the stall budget. */
+    const noteRealOutput = (): void => {
+      hasOutput = true
+      armStallTimer()
+    }
+
+    /** A heartbeat only proves liveness — extend start-up, never the stall budget. */
+    const noteHeartbeat = (): void => {
+      if (hasOutput || Date.now() > startupDeadline) return
+      armStartupTimer()
+    }
+
+    armStartupTimer()
 
     proc.stdout.on('data', (chunk: Buffer) => {
-      hasOutput = true
-      resetStallTimer()
+      noteRealOutput()
       partial += chunk.toString()
       const lines = partial.split('\n')
       partial = lines.pop() ?? ''
@@ -304,21 +503,33 @@ export function callPythonEngineStreaming(
           const data = JSON.parse(line)
           lastData = data
           onData(data)
-        } catch { /* non-JSON diagnostic lines are silently skipped */ }
+          emitLog({ method, stream: 'stdout', kind: 'json', line: line.trimEnd(), at: Date.now() })
+        } catch {
+          // Not JSON — a print() from a library, or a warning. Previously
+          // dropped on the floor; now surfaced in the log panel, where it is
+          // often the only clue about where a run got stuck (Ticket T3).
+          emitLog({ method, stream: 'stdout', kind: 'diagnostic', line: line.trimEnd(), at: Date.now() })
+        }
       }
     })
 
     proc.stderr.on('data', (chunk: Buffer) => {
-      hasOutput = true
-      resetStallTimer()
-      stderr += chunk.toString()
+      const text = chunk.toString()
+      stderr += text
+      const { sawRealOutput, diagnostics } = publishStderr(method, text)
+      for (const d of diagnostics) {
+        recentDiagnostics.push(d)
+        if (recentDiagnostics.length > 20) recentDiagnostics.shift()
+      }
+      if (sawRealOutput) noteRealOutput()
+      else               noteHeartbeat()
     })
 
     proc.on('close', (code) => {
       if (activeStreamingProc === proc) activeStreamingProc = null
       if (settled) return
       settled = true
-      clearTimeout(stallTimer)
+      clearTimeout(timer)
       if (cancelRequested) {
         cancelRequested = false
         reject(new Error(ENGINE_CANCELLED))
@@ -338,9 +549,11 @@ export function callPythonEngineStreaming(
       if (activeStreamingProc === proc) activeStreamingProc = null
       if (settled) return
       settled = true
-      clearTimeout(stallTimer)
+      clearTimeout(timer)
       log.error(`[python-bridge] failed to spawn "${target.executable}":`, error)
-      reject(error)
+      reject(new Error(describeSpawnFailure(error as NodeJS.ErrnoException, {
+        platform: process.platform, executable: target.executable,
+      })))
     })
   })
 }

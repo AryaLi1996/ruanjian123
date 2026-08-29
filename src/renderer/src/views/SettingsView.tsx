@@ -23,6 +23,14 @@ import {
 } from '../store/useNotificationStore'
 import { BrandLogo } from '../components/brand/BrandLogo'
 
+// Ticket T1: bounds for the engine start-up timeout field below. Mirrors
+// main/engine-preflight.ts's MIN/MAX/DEFAULT_STARTUP_TIMEOUT_MS, in seconds —
+// the main process clamps to the same range, so a value typed here can never
+// put the engine into an unusable configuration.
+const ENGINE_TIMEOUT_MIN_SEC     = 5
+const ENGINE_TIMEOUT_MAX_SEC     = 600
+const ENGINE_TIMEOUT_DEFAULT_SEC = 60
+
 const APPEARANCE_OPTIONS: { value: Appearance; icon: string }[] = [
   { value: 'system', icon: '🖥️' },
   { value: 'light',  icon: '☀️' },
@@ -90,6 +98,28 @@ export function SettingsView(): JSX.Element {
   // About card (Ticket 32 §5)
   const [appVersion, setAppVersion] = useState<string | null>(null)
   useEffect(() => { window.engine.getAppVersion().then(setAppVersion).catch(() => setAppVersion(null)) }, [])
+
+  // AI engine card (Ticket T1) — how long the engine gets to produce its
+  // first output before the app gives up on it. Lives in the main process
+  // (python-bridge.ts) rather than this store, since that's where the timer
+  // actually runs; the current value is read back on mount so the field
+  // shows the effective setting, including one supplied via the
+  // RUANJIAN_ENGINE_STARTUP_TIMEOUT_MS environment variable.
+  const [engineTimeoutSec, setEngineTimeoutSec] = useState(ENGINE_TIMEOUT_DEFAULT_SEC)
+  useEffect(() => {
+    window.engine.getEngineStartupTimeout()
+      .then((ms) => setEngineTimeoutSec(Math.round(ms / 1000)))
+      .catch(() => { /* keep the default; the main process still clamps */ })
+  }, [])
+
+  function handleEngineTimeoutChange(seconds: number): void {
+    // Show what was typed (so the field stays editable mid-keystroke) but
+    // only push a value that's actually in range to the main process.
+    setEngineTimeoutSec(seconds)
+    if (!Number.isFinite(seconds)) return
+    if (seconds < ENGINE_TIMEOUT_MIN_SEC || seconds > ENGINE_TIMEOUT_MAX_SEC) return
+    void window.engine.setEngineStartupTimeout(seconds * 1000).catch(() => { /* best effort */ })
+  }
 
   // Updates card (Ticket 37) — manual "Check for Updates", rendered inline
   // instead of through the notification system. Reuses the same
@@ -540,6 +570,29 @@ export function SettingsView(): JSX.Element {
           <span>{t('settings.lyrics.autoFetch')}</span>
         </label>
         <p className="bg-hint" style={{ marginTop: 6 }}>{t('settings.lyrics.autoFetchHint')}</p>
+      </div>
+
+      {/* ── AI engine (Ticket T1) ───────────────────────────── */}
+      <div className="card">
+        <div className="card-title">{t('settings.engine.title')}</div>
+        <p className="view-desc" style={{ marginTop: -6, marginBottom: 14 }}>
+          {t('settings.engine.description')}
+        </p>
+        <div className="field" style={{ marginBottom: 0, maxWidth: 320 }}>
+          <label htmlFor="engine-startup-timeout">{t('settings.engine.startupTimeout')}</label>
+          <input
+            id="engine-startup-timeout"
+            className="input"
+            type="number"
+            min={ENGINE_TIMEOUT_MIN_SEC}
+            max={ENGINE_TIMEOUT_MAX_SEC}
+            value={engineTimeoutSec}
+            onChange={(e) => handleEngineTimeoutChange(Number(e.target.value))}
+          />
+        </div>
+        <p className="bg-hint" style={{ marginTop: 6 }}>
+          {t('settings.engine.startupTimeoutHint', { seconds: ENGINE_TIMEOUT_DEFAULT_SEC })}
+        </p>
       </div>
 
       {/* ── Updates (Ticket 37) ─────────────────────────────── */}

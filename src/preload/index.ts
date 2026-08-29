@@ -16,6 +16,24 @@ contextBridge.exposeInMainWorld('engine', {
   /** Ticket UI-10: kills the streaming run in flight. Resolves true if one was killed. */
   cancelStream: (): Promise<boolean> => ipcRenderer.invoke('engine:cancel'),
 
+  // Raw engine output (Tickets T1/T3) — stage diagnostics, heartbeats and
+  // stray warnings that never parse as JSON progress. Separate from
+  // onProgress so the log panel can show *everything* the engine said,
+  // including while it is still starting up and has no progress to report.
+  onEngineLog: (callback: (entry: unknown) => void): (() => void) => {
+    const handler = (_: Electron.IpcRendererEvent, entry: unknown): void => callback(entry)
+    ipcRenderer.on('engine:log', handler)
+    return () => ipcRenderer.removeListener('engine:log', handler)
+  },
+
+  // Ticket T3: pre-flight environment self-check (Python, deps, GPU, RAM, disk).
+  checkEnvironment: (): Promise<unknown> => ipcRenderer.invoke('engine:check-environment'),
+
+  // Ticket T1: user-adjustable engine start-up timeout, in milliseconds.
+  getEngineStartupTimeout: (): Promise<number> => ipcRenderer.invoke('engine:get-startup-timeout'),
+  setEngineStartupTimeout: (ms: number | null): Promise<number> =>
+    ipcRenderer.invoke('engine:set-startup-timeout', ms),
+
   saveTrainingFiles: (files: Array<{ name: string; buffer: ArrayBuffer }>): Promise<string> =>
     ipcRenderer.invoke('engine:save-files', files),
 

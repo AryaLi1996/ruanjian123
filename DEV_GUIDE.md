@@ -518,8 +518,16 @@ cd engine
 # Ping
 python3 main.py '{"method":"ping","args":["hello"]}'
 
-# Device detection
+# Device detection (ONNX Runtime EP + the PyTorch device training will use)
 python3 main.py '{"method":"detect_device","args":[]}'
+
+# Pre-flight environment self-check (Python, dependencies, GPU, RAM, disk)
+python3 main.py '{"method":"check_environment","args":[]}'
+
+# Any call can be run with stage diagnostics + a liveness heartbeat on stderr.
+# The Electron bridge passes this for every call and streams the output into
+# the Training view's engine-log panel.
+python3 main.py --verbose '{"method":"check_environment","args":[]}'
 
 # Quick inference
 python3 main.py '{"method":"test_inference","args":[]}'
