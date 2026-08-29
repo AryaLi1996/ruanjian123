@@ -41,10 +41,25 @@ export interface TargetSong {
   artist:           string
   originalKey:      string | null
   audioPath:        string
+  /**
+   * FC-01: the catalogue URL audioPath was downloaded from, kept so the file
+   * can be fetched again if the cache entry is gone by the time separation
+   * runs (cache cleared, temp sweep, another machine's profile restored).
+   * Without it a selected song whose cache file vanished could only fail.
+   */
+  audioUrl:         string
   /** Album art when the catalogue carried one; the status pin (Ticket UI-09) falls back to a generated tile. */
   coverUrl:         string | null
   pitchShift:       number
   shiftedAudioPath: string | null
+}
+
+/** FC-02: see main/project-assets.ts for how this folder is built. */
+export interface TrainingAssets {
+  projectDir: string
+  assets:     Record<string, string>
+  missing:    string[]
+  mode:       'standard' | 'enhanced'
 }
 
 interface AppState {
@@ -62,6 +77,12 @@ interface AppState {
   modelsHydrated:  boolean   // true once the persisted library has been loaded — gates autosave
                               // so an early empty render can't overwrite the saved file with []
   targetSong:      TargetSong | null
+  // FC-02: the standard project folder built from the last successful
+  // separation — file name (vocals.wav, lead_vocal.wav, …) → absolute path,
+  // plus whichever required assets are still missing. This is what the
+  // training step validates against, instead of guessing at engine-internal
+  // stem paths. Null until a separation has completed.
+  trainingAssets:  TrainingAssets | null
   // Whether the Cloud Library (云曲库) modal is open. Lifted out of
   // CoverView's local state for Ticket UI-02 so the sidebar's 云曲库 entry
   // can open the same modal the Cover page does, rather than a second copy
@@ -79,6 +100,7 @@ interface AppState {
   updateModelDemo:  (id: string, demoAudioUrl: string) => void
   hydrateModels:    (models: TrainedModel[]) => void
   setTargetSong:    (song: TargetSong | null) => void
+  setTrainingAssets: (assets: TrainingAssets | null) => void
   setLibraryOpen:   (open: boolean) => void
   // Ticket 19: records a newly-applied pitch shift (and its cached shifted
   // audio) on the current target song. No-ops if the song has since been
@@ -95,6 +117,7 @@ export const useAppStore = create<AppState>((set) => ({
   trainedModels:  [],
   modelsHydrated: false,
   targetSong:     null,
+  trainingAssets: null,
   libraryOpen:    false,
 
   setActiveView:    (view)  => set({ activeView: view }),
@@ -109,6 +132,7 @@ export const useAppStore = create<AppState>((set) => ({
     })),
   hydrateModels:    (models) => set({ trainedModels: models, modelsHydrated: true }),
   setTargetSong:    (song)   => set({ targetSong: song }),
+  setTrainingAssets: (assets) => set({ trainingAssets: assets }),
   setLibraryOpen:   (open)   => set({ libraryOpen: open }),
   setTargetSongShift: (shift, shiftedAudioPath) =>
     set((s) => (s.targetSong ? { targetSong: { ...s.targetSong, pitchShift: shift, shiftedAudioPath } } : s)),

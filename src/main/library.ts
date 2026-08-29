@@ -100,7 +100,42 @@ async function findCached(dir: string, id: string): Promise<string | null> {
   return null
 }
 
-export async function fetchLibraryAudio(song: LibrarySong): Promise<{ path: string; cached: boolean }> {
+/**
+ * Ids (as stored on disk — see safeId) of every song whose audio is already
+ * cached locally. FC-01: the search modal marks these "本地就绪" so the user
+ * can tell at a glance which picks are instant and which need a download.
+ */
+export async function listCachedLibraryIds(): Promise<string[]> {
+  const dir = cacheDir()
+  let entries: string[]
+  try {
+    entries = await fs.readdir(dir)
+  } catch {
+    return []   // cache dir not created yet — nothing downloaded so far
+  }
+  const ids = new Set<string>()
+  for (const name of entries) {
+    const dot = name.lastIndexOf('.')
+    if (dot <= 0) continue
+    const ext = name.slice(dot + 1).toLowerCase()
+    if ((CACHE_EXTENSIONS as readonly string[]).includes(ext)) ids.add(name.slice(0, dot))
+  }
+  return [...ids]
+}
+
+/** Progress of an in-flight download, reported per chunk. `total` is 0 when the server sends no Content-Length. */
+export interface DownloadProgress {
+  id:       string
+  received: number
+  total:    number
+  /** 0-100, or -1 when the total size is unknown and a percentage can't be computed. */
+  percent:  number
+}
+
+export async function fetchLibraryAudio(
+  song: LibrarySong,
+  onProgress?: (p: DownloadProgress) => void,
+): Promise<{ path: string; cached: boolean }> {
   const dir = cacheDir()
   await fs.mkdir(dir, { recursive: true })
   const id = safeId(song.id)
@@ -113,7 +148,12 @@ export async function fetchLibraryAudio(song: LibrarySong): Promise<{ path: stri
 
   if (song.audio_url.startsWith('mock://')) {
     const path = join(dir, `${id}.wav`)
-    await fs.writeFile(path, makePlaceholderWav(pseudoFrequency(id), 8))
+    const bytes = makePlaceholderWav(pseudoFrequency(id), 8)
+    await fs.writeFile(path, bytes)
+    // Synthesized locally and instant, but still reported so the caller's
+    // progress UI runs the same code path in offline/dev mode as it does
+    // against a real catalogue.
+    onProgress?.({ id: song.id, received: bytes.length, total: bytes.length, percent: 100 })
     return { path, cached: false }
   }
 
@@ -124,7 +164,40 @@ export async function fetchLibraryAudio(song: LibrarySong): Promise<{ path: stri
     if (!res.ok) throw new Error(`audio download responded ${res.status}`)
     const ext = extensionFor(song.audio_url, res.headers.get('content-type'))
     const path = join(dir, `${id}.${ext}`)
-    await fs.writeFile(path, Buffer.from(await res.arrayBuffer()))
+
+    // Read the body in chunks so the renderer can show "正在下载歌曲资源… X%"
+    // (FC-01) instead of a silent wait on a multi-MB file. Falls back to a
+    // single buffered read when the runtime gives no readable stream.
+    const total = Number(res.headers.get('content-length') ?? 0)
+    const report = onProgress
+    const body = report ? res.body : null
+    if (!body || !report) {
+      await fs.writeFile(path, Buffer.from(await res.arrayBuffer()))
+      onProgress?.({ id: song.id, received: total, total, percent: total > 0 ? 100 : -1 })
+      return { path, cached: false }
+    }
+
+    const chunks: Buffer[] = []
+    let received = 0
+    const reader = body.getReader()
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      const chunk = Buffer.from(value)
+      chunks.push(chunk)
+      received += chunk.length
+      report({
+        id:       song.id,
+        received,
+        total,
+        percent:  total > 0 ? Math.min(100, Math.round((received / total) * 100)) : -1,
+      })
+    }
+    // Written only once the whole body has arrived: a partial file left
+    // behind by an aborted download would otherwise look like a valid cache
+    // hit on the next selection.
+    await fs.writeFile(path, Buffer.concat(chunks))
+    report({ id: song.id, received, total: total || received, percent: 100 })
     return { path, cached: false }
   } finally {
     clearTimeout(timeout)

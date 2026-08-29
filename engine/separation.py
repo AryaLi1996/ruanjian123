@@ -17,6 +17,7 @@ from __future__ import annotations
 import tempfile
 import time
 from pathlib import Path
+from collections.abc import Callable
 from typing import Literal, TypedDict
 
 import numpy as np
@@ -171,9 +172,18 @@ class OLAProcessor:
         self._out_names   = [o.name for o in session.get_outputs()]
         self._window      = np.hanning(CHUNK_SAMPLES).astype(np.float32)  # COLA at 50% overlap
 
-    def run(self, audio: np.ndarray) -> list[np.ndarray]:
+    def run(
+        self,
+        audio: np.ndarray,
+        progress_cb: Callable[[float], None] | None = None,
+    ) -> list[np.ndarray]:
         """
         audio : float32 [2, N]
+        progress_cb : optional callback invoked after each chunk with this
+            stage's completion as a 0.0-1.0 fraction. Used by separate() to
+            report overall progress to the UI (FC-05) — the OLA loop is where
+            essentially all of a separation's wall-clock time is spent, so it
+            is the only place with anything meaningful to report.
         returns: list of float32 [2, N] stems (one per model output)
         """
         _, total = audio.shape
@@ -184,7 +194,10 @@ class OLAProcessor:
         accum  = [np.zeros((2, padded_len), np.float32) for _ in self._out_names]
         weight = np.zeros(padded_len, np.float32)
 
-        for start in range(0, padded_len - CHUNK_SAMPLES + 1, HOP_SAMPLES):
+        starts    = list(range(0, padded_len - CHUNK_SAMPLES + 1, HOP_SAMPLES))
+        n_chunks  = len(starts) or 1
+
+        for done, start in enumerate(starts, start=1):
             end  = start + CHUNK_SAMPLES
             inp  = audio_pad[:, start:end][np.newaxis]  # [1, 2, CHUNK_SAMPLES]
 
@@ -195,6 +208,9 @@ class OLAProcessor:
                 accum[i][:, start:end] += res[0] * self._window
 
             weight[start:end] += self._window
+
+            if progress_cb is not None:
+                progress_cb(done / n_chunks)
 
         denom = np.where(weight > 1e-8, weight, 1.0)
         return [acc[:, :total] / denom[:total] for acc in accum]
@@ -222,6 +238,7 @@ def separate(
     input_path: str | Path,
     mode: SeparationMode = "standard",
     output_dir: str | Path | None = None,
+    progress_cb: Callable[[float, str], None] | None = None,
 ) -> SeparationResult:
     """
     Separate audio stems from input_path.
@@ -232,6 +249,12 @@ def separate(
     mode:        "standard"  → vocals + accompaniment
                  "enhanced"  → lead_dry + harmony_dry + accompaniment
     output_dir:  Directory for stem WAVs (default: <input_stem>_separated/)
+    progress_cb: Optional callback invoked as (percent 0-100, stage name) while
+                 the separation runs (FC-05). Stage weights below are fixed
+                 fractions of the whole rather than measured ones: every stage
+                 runs the same OLA loop over the same audio, so per-chunk cost
+                 is near-identical between them and a static split tracks real
+                 progress closely enough for a progress bar.
 
     Returns
     -------
@@ -275,6 +298,18 @@ def separate(
     t0: float = time.perf_counter()
     stems: dict[str, np.ndarray] = {}
 
+    def _report(percent: float, stage: str) -> None:
+        if progress_cb is not None:
+            progress_cb(round(min(100.0, max(0.0, percent)), 1), stage)
+
+    def _stage(offset: float, weight: float, stage: str) -> Callable[[float], None] | None:
+        """Maps one OLA stage's 0-1 fraction onto its slice of the overall bar."""
+        if progress_cb is None:
+            return None
+        return lambda frac: _report(offset + frac * weight, stage)
+
+    _report(0.0, "loading")
+
     if mode == "standard":
         proc = OLAProcessor(
             _session(
@@ -282,7 +317,7 @@ def separate(
                 lambda: _build_fir_separator("demucs_nano", 4_000.0, "accompaniment", "vocals"),
             )
         )
-        acc, voc = proc.run(audio)
+        acc, voc = proc.run(audio, _stage(0.0, 95.0, "separating"))
         stems = {"accompaniment": acc, "vocals": voc}
 
     elif mode == "enhanced":
@@ -293,14 +328,14 @@ def separate(
                 lambda: _build_fir_separator("sep_main", 4_000.0, "accompaniment", "vocals"),
             )
         )
-        acc, voc = s1.run(audio)
+        acc, voc = s1.run(audio, _stage(0.0, 45.0, "separating"))
 
         # Stage 2 – mid-side lead / harmony split
         s2 = OLAProcessor(
             _session("vocal_harmony_split.onnx", _build_vocal_harmony_split),
             input_name="vocals",
         )
-        lead, harmony = s2.run(voc)
+        lead, harmony = s2.run(voc, _stage(45.0, 25.0, "splitting_harmony"))
 
         # Stage 3 – dereverb each vocal stem
         s3_lead = OLAProcessor(
@@ -311,8 +346,8 @@ def separate(
             _session("dereverb.onnx", _build_dereverb),
             input_name="wet",
         )
-        lead_dry    = s3_lead.run(lead)[0]
-        harmony_dry = s3_harm.run(harmony)[0]
+        lead_dry    = s3_lead.run(lead, _stage(70.0, 12.5, "dereverb"))[0]
+        harmony_dry = s3_harm.run(harmony, _stage(82.5, 12.5, "dereverb"))[0]
         stems = {
             "lead_dry":      lead_dry,
             "harmony_dry":   harmony_dry,
@@ -323,11 +358,14 @@ def separate(
         raise ValueError(f"Unknown mode {mode!r}. Use 'standard' or 'enhanced'.")
 
     # Write stems to 16-bit WAV
+    _report(95.0, "writing")
     stem_paths: dict[str, str] = {}
     for name, data in stems.items():
         out_file = output_dir / f"{input_path.stem}_{name}.wav"
         sf.write(str(out_file), data.T, SAMPLE_RATE, subtype="PCM_16")
         stem_paths[name] = str(out_file)
+
+    _report(100.0, "done")
 
     elapsed      = time.perf_counter() - t0
     duration_sec = audio.shape[1] / SAMPLE_RATE

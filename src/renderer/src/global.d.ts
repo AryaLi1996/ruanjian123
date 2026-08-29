@@ -85,6 +85,27 @@ export interface SaveBackgroundPayload {
   sourceDataUrl:  string
   meta:           BackgroundMeta
 }
+// FC-01: per-chunk progress of a cloud-library audio download. Mirrors
+// main/library.ts's DownloadProgress (see PersistedModel above for why
+// renderer and main keep separate copies).
+export interface LibraryDownloadProgress {
+  id:       string
+  received: number
+  total:    number
+  /** 0-100, or -1 when the server sent no Content-Length and no percentage can be computed. */
+  percent:  number
+}
+
+// FC-02: standard per-project asset folder built from a finished separation.
+// Mirrors main/project-assets.ts's CollectResult.
+export interface ProjectAssetsResult {
+  projectDir: string
+  /** Standard file name (vocals.wav, lead_vocal.wav, …) → absolute path. */
+  assets:     Record<string, string>
+  /** Required assets that couldn't be produced — non-empty means training stays blocked. */
+  missing:    string[]
+}
+
 export interface LoadedBackground {
   blurredDataUrl: string
   previewDataUrl: string
@@ -119,6 +140,16 @@ declare global {
       lyricsCacheSave: (cache: Record<string, { raw: string; source: string; cachedAt: number }>) => Promise<void>
       searchLibrary:     (keyword: string, page?: number, pageSize?: number) => Promise<LibrarySearchResult>
       fetchLibraryAudio: (song: LibrarySong) => Promise<{ path: string; cached: boolean }>
+      // FC-01
+      listCachedLibraryIds:      () => Promise<string[]>
+      onLibraryDownloadProgress: (cb: (p: LibraryDownloadProgress) => void) => () => void
+      // FC-02
+      collectProjectStems: (
+        projectId: string,
+        mode: 'standard' | 'enhanced',
+        stems: Record<string, string>,
+        originalPath?: string | null,
+      ) => Promise<ProjectAssetsResult>
       // Upload & Start Training (Ticket 20)
       uploadTrainDataset: (zipPath: string, taskId: string, config: TrainStartConfig) => Promise<TrainStartResult>
       getTrainStatus:     (taskId: string) => Promise<TrainStatusResult>

@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from 'react'
+import { useState, useRef, useCallback, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useAppStore } from '../store/useAppStore'
 import { notify } from '../store/useNotificationStore'
@@ -18,6 +18,18 @@ import type { LibrarySong } from '../global'
 type SepMode  = 'standard' | 'enhanced'
 type AlgoVer  = 'v1' | 'v2'
 
+/** FC-05: keep the log console's DOM small on a long enhanced-mode run. */
+const SEP_LOG_MAX_LINES = 200
+
+/** Step number → i18n key, for naming an unmet prerequisite (FC-03). */
+const STEP_LABEL_KEYS: Record<number, string> = {
+  1: 'cover.stepUpload',
+  2: 'cover.stepModel',
+  3: 'cover.stepMix',
+  4: 'cover.stepExport',
+  5: 'cover.stepTrainingData',
+}
+
 interface SeparationResult {
   mode: string; stems: Record<string, string>; elapsed_sec: number; duration_sec: number
 }
@@ -33,6 +45,10 @@ export function CoverView(): JSX.Element {
   // Ticket 18: the 云曲库-selected song, if any — see useAppStore's TargetSong.
   const targetSong    = useAppStore((s) => s.targetSong)
   const setTargetSong = useAppStore((s) => s.setTargetSong)
+  // FC-02: standard project folder built from the last separation — what the
+  // training step (step ⑤) validates against.
+  const trainingAssets    = useAppStore((s) => s.trainingAssets)
+  const setTrainingAssets = useAppStore((s) => s.setTrainingAssets)
   // Ticket UI-02: lifted to the store so the sidebar's 云曲库 entry opens
   // this same modal instead of a second copy of it. The modal element and
   // the selection handler still live here — picking a song has to clear this
@@ -59,6 +75,9 @@ export function CoverView(): JSX.Element {
   // an already-abandoned value could land after (and overwrite) it.
   const shiftRequestRef = useRef(0)
 
+  // FC-02: names this session's project folder under userData/projects.
+  const projectIdRef = useRef(`project_${Date.now()}`)
+
   // ── Wizard state ─────────────────────────────────────────
   const [step,      setStep]      = useState(1)
   const [completed, setCompleted] = useState(new Set<number>())
@@ -74,6 +93,35 @@ export function CoverView(): JSX.Element {
   const [separating, setSeparating] = useState(false)
   const [sepResult, setSepResult] = useState<SeparationResult | null>(null)
   const [sepError,  setSepError]  = useState<string | null>(null)
+  // FC-05: real feedback while separation runs. `sepPercent` comes from the
+  // engine's own per-chunk progress lines (engine/separation.py), `sepStage`
+  // names what it's doing, and `sepLog` keeps the raw lines for the
+  // collapsible console so a stuck run can actually be diagnosed.
+  const [sepPercent, setSepPercent] = useState(0)
+  const [sepStage,   setSepStage]   = useState<string>('')
+  const [sepLog,     setSepLog]     = useState<string[]>([])
+  const [sepJustDone, setSepJustDone] = useState(false)
+  // FC-01: "正在下载歌曲资源…" while a cache-missing cloud song is re-fetched
+  // before separation can start.
+  const [preparing, setPreparing] = useState(false)
+
+  // Engine progress lines arrive on a shared channel; only subscribe while
+  // this page's own separation is running, and ignore anything that isn't a
+  // separation update (training emits on the same channel).
+  useEffect(() => {
+    if (!separating) return
+    const unsub = window.engine.onProgress((raw) => {
+      const data = raw as { type?: string; percent?: number; stage?: string }
+      if (data?.type !== 'separation_progress') return
+      if (typeof data.percent === 'number') setSepPercent(data.percent)
+      if (data.stage) setSepStage(data.stage)
+      setSepLog((prev) => {
+        const next = [...prev, JSON.stringify(data)]
+        return next.length > SEP_LOG_MAX_LINES ? next.slice(-SEP_LOG_MAX_LINES) : next
+      })
+    })
+    return unsub
+  }, [separating])
 
   // ── Step 2 state ─────────────────────────────────────────
   const [selectedModelId, setSelectedModelId] = useState<string | null>(null)
@@ -97,27 +145,44 @@ export function CoverView(): JSX.Element {
   // ─────────────────────────────────────────────────────────
   async function handleSeparate(): Promise<void> {
     if (!songFile && !targetSong) { setSepError(t('cover.errUploadFirst')); return }
-    setSepError(null); setSeparating(true)
+    setSepError(null); setSepLog([]); setSepPercent(0); setSepStage(''); setSepJustDone(false)
+    setSeparating(true)
     setEngineBusy(true); setEngineStatus(t('status.separating'))
     try {
       // A local upload and a 云曲库 selection are mutually exclusive (each
       // clears the other — see handleLibrarySelect and the file input's
-      // onChange below), so at most one of these branches applies. The
-      // library song's audio is already a local, cached file — see
-      // main/library.ts's fetchLibraryAudio — so it needs no upload step.
+      // onChange below), so at most one of these branches applies.
       // Ticket 19: a pitch-shifted target song uses its cached shifted audio
       // (shiftedAudioPath) as the training target instead of the original
       // download — null at shift 0, where there's nothing to shift.
-      const inputPath = songFile
-        ? `${await window.engine.saveTrainingFiles([{ name: songFile.name, buffer: await songFile.arrayBuffer() }])}/${songFile.name}`
-        : targetSong!.shiftedAudioPath ?? targetSong!.audioPath
-      const res = await window.engine.call('separate', {
+      let originalPath: string
+      if (songFile) {
+        const dir = await window.engine.saveTrainingFiles([
+          { name: songFile.name, buffer: await songFile.arrayBuffer() },
+        ])
+        originalPath = `${dir}/${songFile.name}`
+      } else {
+        originalPath = await ensureTargetSongAudio()
+      }
+      const inputPath = songFile ? originalPath : (targetSong!.shiftedAudioPath ?? originalPath)
+
+      // FC-05: streamed rather than a plain call so the engine's per-chunk
+      // progress lines reach the progress bar and the log console. The
+      // result is the same either way — see main/python-bridge.ts.
+      const res = await window.engine.stream('separate', {
         mode:       sepMode,
         input_path: inputPath,
       }) as SeparationResult
 
       setSepResult(res)
-      complete(1, 2)
+      setSepPercent(100)
+      setSepJustDone(true)
+      await collectAssets(res, originalPath)
+      // Marks step ① done (unlocking ②) without navigating away from it:
+      // the stems, the pitch-analysis panel and FC-05's "分离完成！" all live
+      // on this step and were previously replaced the instant separation
+      // finished. The step's own "下一步：选择模型 →" button is what moves on.
+      setCompleted((prev) => new Set([...prev, 1]))
       notify({
         category: 'taskCompletion',
         titleKey: 'notification.separation.complete.title',
@@ -135,8 +200,75 @@ export function CoverView(): JSX.Element {
         action: { type: 'view', view: 'cover' },
       })
     } finally {
-      setSeparating(false); setEngineBusy(false); setEngineStatus(t('status.idle'))
+      setSeparating(false); setPreparing(false)
+      setEngineBusy(false); setEngineStatus(t('status.idle'))
     }
+  }
+
+  /**
+   * FC-01: guarantees the selected 云曲库 song has a local file to separate.
+   *
+   * The download happens at selection time, but the cache lives on disk and
+   * can be gone by the time the user actually hits 分离 (cache cleared, a
+   * temp sweep, a profile moved between machines). fetchLibraryAudio returns
+   * the cached copy when it's there and re-downloads when it isn't, so
+   * calling it again here costs nothing in the common case and turns the
+   * "file not found" failure into a transparent re-fetch.
+   */
+  async function ensureTargetSongAudio(): Promise<string> {
+    const song = targetSong!
+    setPreparing(true)
+    try {
+      const { path } = await window.engine.fetchLibraryAudio({
+        id:           song.id,
+        title:        song.title,
+        artist:       song.artist,
+        original_key: song.originalKey,
+        audio_url:    song.audioUrl,
+        cover_url:    song.coverUrl,
+      })
+      // The re-downloaded file can land under a different extension than the
+      // original pick did (a server that changed content-type), so keep the
+      // store pointing at what actually exists.
+      if (path !== song.audioPath) setTargetSong({ ...song, audioPath: path })
+      return path
+    } finally {
+      setPreparing(false)
+    }
+  }
+
+  /**
+   * FC-02: copies the finished separation's stems into the standard project
+   * folder the training step reads from. Best-effort: a failure here leaves
+   * the stems playable and the wizard usable, and shows up as "数据未就绪"
+   * on the training step rather than as a failed separation.
+   */
+  async function collectAssets(res: SeparationResult, originalPath: string): Promise<void> {
+    try {
+      const collected = await window.engine.collectProjectStems(
+        projectIdRef.current, sepMode, res.stems, originalPath,
+      )
+      setTrainingAssets({ ...collected, mode: sepMode })
+    } catch (err) {
+      setTrainingAssets(null)
+      setSepLog((prev) => [...prev, `collect assets failed: ${String(err)}`])
+    }
+  }
+
+  /**
+   * FC-03: a locked step explains itself instead of silently doing nothing.
+   * `unmet` is every prerequisite step still outstanding; the first one is
+   * what the user should do next, so it leads the message.
+   */
+  function handleStepBlocked(_stepNumber: number, unmet: number[]): void {
+    const names = unmet.map((n) => t(STEP_LABEL_KEYS[n] ?? '')).filter(Boolean).join('、')
+    notify({
+      category: 'system',
+      icon:     '🔒',
+      titleKey: 'cover.stepLockedTitle',
+      messageKey: 'cover.stepLockedMessage',
+      messageParams: { first: unmet[0], steps: names },
+    })
   }
 
   // ─────────────────────────────────────────────────────────
@@ -145,12 +277,14 @@ export function CoverView(): JSX.Element {
   function handleLibrarySelect(song: LibrarySong, audioPath: string): void {
     setSongFile(null)   // mutually exclusive with a local upload — see handleSeparate
     setShiftError(null)
+    setTrainingAssets(null)   // a new song invalidates the last separation's assets
     setTargetSong({
       id:               song.id,
       title:            song.title,
       artist:           song.artist,
       originalKey:      song.original_key,
       audioPath,
+      audioUrl:         song.audio_url,
       coverUrl:         song.cover_url,
       pitchShift:       0,
       shiftedAudioPath: null,
@@ -243,6 +377,14 @@ export function CoverView(): JSX.Element {
     }
   }
 
+  // FC-05: the green "分离完成！" confirmation is a moment, not a state — it
+  // steps back to 重新分离 so the button stays actionable.
+  useEffect(() => {
+    if (!sepJustDone) return
+    const timer = setTimeout(() => setSepJustDone(false), 2_000)
+    return () => clearTimeout(timer)
+  }, [sepJustDone])
+
   // ─────────────────────────────────────────────────────────
   // Derived data for sub-components
   // ─────────────────────────────────────────────────────────
@@ -266,6 +408,19 @@ export function CoverView(): JSX.Element {
     : []
 
   const selectedModel = trainedModels.find((m) => m.id === selectedModelId)
+
+  // FC-05: idle → downloading → separating(%) → done → re-run, so the button
+  // always says what the app is doing.
+  const busy = separating || preparing
+  const separateButtonLabel = preparing
+    ? `⏳ ${t('cover.preparingSource')}`
+    : separating
+      ? `⏳ ${t('cover.separatingPercent', { percent: Math.round(sepPercent) })}`
+      : sepJustDone
+        ? `✅ ${t('cover.separationDone')}`
+        : sepResult
+          ? `🔊 ${t('cover.reSeparate')}`
+          : `🔊 ${t('cover.startSeparation')}`
 
   // Ticket 16: prefer the driest lead vocal available for pitch analysis —
   // same fallback chain used to pick the reference vocal for synthesis.
@@ -300,7 +455,12 @@ export function CoverView(): JSX.Element {
         </div>
       )}
 
-      <StepWizard current={step} completed={completed} onNavigate={setStep} />
+      <StepWizard
+        current={step}
+        completed={completed}
+        onNavigate={setStep}
+        onBlocked={handleStepBlocked}
+      />
 
       {/* ── Step 1 ────────────────────────────────────────── */}
       {step === 1 && (
@@ -365,10 +525,37 @@ export function CoverView(): JSX.Element {
 
           {sepError && <div className="error-banner">{sepError}</div>}
 
+          {/* FC-01: the button used to require a local upload, which left a
+              云曲库 song selected and the only way to separate it disabled —
+              the "云曲库无法分离" report. Either source is a valid input. */}
           <button className="btn btn-primary" style={{ width: '100%', marginTop: 4 }}
-            onClick={handleSeparate} disabled={separating || !songFile}>
-            {separating ? `⏳ ${t('cover.separating')}` : `🔊 ${t('cover.startSeparation')}`}
+            onClick={handleSeparate}
+            disabled={busy || (!songFile && !targetSong)}
+            title={!songFile && !targetSong ? t('cover.errUploadFirst') : undefined}>
+            {separateButtonLabel}
           </button>
+
+          {/* FC-05: an actual percentage while the engine works, so a long
+              separation is visibly running rather than apparently ignored. */}
+          {busy && (
+            <div className="progress-track" style={{ marginTop: 10 }}
+                 role="progressbar" aria-valuenow={Math.round(sepPercent)} aria-valuemin={0} aria-valuemax={100}>
+              <div className="progress-fill" style={{ width: `${preparing ? 0 : sepPercent}%` }} />
+              <span className="progress-pct">{preparing ? '…' : `${Math.round(sepPercent)}%`}</span>
+            </div>
+          )}
+          {separating && sepStage && (
+            <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 6 }}>
+              {t(`cover.sepStage.${sepStage}`, { defaultValue: sepStage })}
+            </div>
+          )}
+
+          {sepLog.length > 0 && (
+            <details className="sep-log-console">
+              <summary>{t('cover.sepLogTitle', { count: sepLog.length })}</summary>
+              <pre className="sep-log-lines">{sepLog.join('\n')}</pre>
+            </details>
+          )}
 
           {sepResult && (
             <div style={{ marginTop: 20 }}>
@@ -515,6 +702,14 @@ export function CoverView(): JSX.Element {
             renderMix={renderMixRef.current}
             sampleRate={44_100}
           />
+          {/* FC-04: every step ends with the way forward, so the next step is
+              something the user is led to rather than something they have to
+              go looking for. Exporting is optional for training (see
+              utils/wizardSteps.ts), so this doesn't require one first. */}
+          <button className="btn btn-ghost" style={{ marginTop: 16 }}
+            onClick={() => complete(4, 5)}>
+            {t('cover.nextTrainingData')}
+          </button>
         </div>
       )}
 
@@ -526,6 +721,7 @@ export function CoverView(): JSX.Element {
         <div className="card">
           <div className="card-title">⑤ {t('cover.trainingDataTitle')}</div>
           <TrainingDatasetPanel
+            trainingAssets={trainingAssets}
             vocalPath={coverResult?.ai_vocal_path ?? null}
             vocalProtected={vocalProtected}
             dryVocalPath={sepResult?.stems['lead_dry'] ?? null}

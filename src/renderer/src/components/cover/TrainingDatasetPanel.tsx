@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { notify } from '../../store/useNotificationStore'
-import type { TargetSong } from '../../store/useAppStore'
+import type { TargetSong, TrainingAssets } from '../../store/useAppStore'
 
 // ── Engine response shapes (engine/train_dataset.py) ─────────────────────────
 interface MergeResult {
@@ -21,6 +21,12 @@ interface PackageResult {
 type UploadPhase = 'idle' | 'packaging' | 'uploading' | 'training' | 'done' | 'error'
 
 interface Props {
+  /**
+   * FC-02: the standard project folder built from the last separation
+   * (main/project-assets.ts). Null when no separation has completed — which
+   * is exactly the state this panel used to let users train from.
+   */
+  trainingAssets: TrainingAssets | null
   /** The AI vocal (coverResult.ai_vocal_path). Null until synthesis (step 3) has produced one. */
   vocalPath: string | null
   /** Whether Ticket 17's <HighPitchProtection> has actually run on `vocalPath` — see CoverView's onApplied. */
@@ -54,7 +60,8 @@ function combinedPercent(phase: UploadPhase, subPercent: number): number {
 }
 
 export function TrainingDatasetPanel({
-  vocalPath, vocalProtected, dryVocalPath, targetSong, pitchShiftBusy = false, onMerged,
+  trainingAssets, vocalPath, vocalProtected, dryVocalPath, targetSong,
+  pitchShiftBusy = false, onMerged,
 }: Props): JSX.Element {
   const { t } = useTranslation()
   const taskIdRef = useRef<string>(crypto.randomUUID())
@@ -88,7 +95,13 @@ export function TrainingDatasetPanel({
   // a missing one — so "target song selected" already covers it. A shift
   // still being computed is instead a (separate) disable-with-tooltip
   // condition below, not a listed prerequisite.
+  // FC-02: the separation's own output is the first prerequisite — without
+  // it there is nothing to train on, which is what made "skip to step ⑤ and
+  // train" produce a broken dataset rather than an error.
+  const assetsReady = !!trainingAssets && trainingAssets.missing.length === 0
+
   const missing: string[] = []
+  if (!assetsReady)    missing.push(t('cover.prereqSeparation'))
   if (!vocalProtected) missing.push(t('cover.prereqProtection'))
   if (!targetSong)     missing.push(t('cover.prereqTargetSong'))
   const prereqsMet = missing.length === 0
@@ -202,6 +215,18 @@ export function TrainingDatasetPanel({
       <p style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 16 }}>
         {t('cover.trainingDataDesc')}
       </p>
+
+      {/* ── FC-02: separation output check ─────────────────────── */}
+      <div className="field">
+        <label>{t('cover.datasetFilesTitle')}</label>
+        {assetsReady ? (
+          <div className="assets-ready">
+            ✓ {t('cover.datasetReady', { files: Object.keys(trainingAssets!.assets).join('、') })}
+          </div>
+        ) : (
+          <div className="assets-missing">{t('cover.datasetNotReady')}</div>
+        )}
+      </div>
 
       {/* ── Ticket 17 status (applied in step ③'s <HighPitchProtection>) ── */}
       <div className="field">
