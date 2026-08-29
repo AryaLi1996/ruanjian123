@@ -9,11 +9,26 @@ import { TrainingProgress, type ProgressData } from '../components/training/Trai
 import { AudioPlayer } from '../components/training/AudioPlayer'
 import { ModelCard } from '../components/training/ModelCard'
 import { ConfirmDialog } from '../components/common/ConfirmDialog'
+import { EnvironmentCheck } from '../components/training/EnvironmentCheck'
+import { DeviceSelector } from '../components/training/DeviceSelector'
+import { EngineLogPanel } from '../components/training/EngineLogPanel'
+import type { EngineDeviceInfo, EngineLogEntry, EnvironmentReport } from '../global'
+import {
+  CPU_SLOWDOWN_MAX, CPU_SLOWDOWN_MIN, describeDevice, engineDeviceFor,
+  needsCpuWarning, resolveDeviceMode, summarizeReport, type DeviceMode,
+} from '../utils/environmentCheck'
 
 type Phase = 'idle' | 'training' | 'finalizing' | 'done'
 
 /** Progress lines are capped so a long professional run can't grow the DOM without bound. */
 const MAX_LOG_LINES = 200
+
+/**
+ * Raw engine output is far chattier than progress JSON (every stage line and
+ * 5s heartbeat lands here), and it accumulates from app start rather than per
+ * run, so it gets its own, larger cap.
+ */
+const MAX_ENGINE_LOG_ENTRIES = 500
 
 interface DataQualityReport {
   n_files:          number
@@ -53,19 +68,60 @@ export function TrainingView(): JSX.Element {
   const [mode,        setMode]        = useState<TrainingMode>('standard')
   const [epochs,      setEpochs]      = useState(10)
 
-  // ── Hardware detection ────────────────────────────────────
-  // Detect if local hardware is CPU-only so we can warn that training (which
-  // always runs locally — there is no cloud backend) will be slower.
-  const [deviceEp, setDeviceEp] = useState<string | null>(null)
-  useEffect(() => {
-    window.engine.call('detect_device')
-      .then((res) => setDeviceEp((res as Record<string, unknown>).ep as string))
-      .catch(() => {})
+  // ── Environment self-check & hardware detection (Tickets T2/T3) ──
+  // One call answers both: env_check.py runs the full checklist (Python,
+  // dependencies, RAM, disk, writability) *and* returns detect_device()'s
+  // result, so the device shown in the UI is the device the pre-flight
+  // actually observed rather than a second, separately-timed probe.
+  const [envReport,  setEnvReport]  = useState<EnvironmentReport | null>(null)
+  const [envLoading, setEnvLoading] = useState(true)
+  const [envError,   setEnvError]   = useState<string | null>(null)
+  const [deviceMode, setDeviceMode] = useState<DeviceMode>('cpu')
+  // Set once from the first check so a re-run (e.g. after installing torch)
+  // doesn't silently override a choice the user has since made by hand.
+  const deviceModeInitialized = useRef(false)
+
+  const device: EngineDeviceInfo | null = envReport?.device ?? null
+  const envSummary = summarizeReport(envReport)
+
+  const runEnvCheck = useCallback(async (): Promise<void> => {
+    setEnvLoading(true)
+    setEnvError(null)
+    try {
+      const report = await window.engine.checkEnvironment()
+      setEnvReport(report)
+      if (!deviceModeInitialized.current) {
+        deviceModeInitialized.current = true
+        setDeviceMode(resolveDeviceMode(report.device))
+      }
+    } catch (err) {
+      setEnvError(String(err))
+      setEnvReport(null)
+    } finally {
+      setEnvLoading(false)
+    }
   }, [])
+
+  useEffect(() => { void runEnvCheck() }, [runEnvCheck])
+
+  // ── Raw engine output (Ticket T1/T3) ─────────────────────
+  // Subscribed for the whole time this view is mounted, not just during a
+  // run: the output that matters most — an engine that never starts — arrives
+  // before any run is under way.
+  const [engineLogs, setEngineLogs] = useState<EngineLogEntry[]>([])
+  useEffect(() => window.engine.onEngineLog((entry) => {
+    setEngineLogs((prev) => {
+      const next = [...prev, entry]
+      return next.length > MAX_ENGINE_LOG_ENTRIES ? next.slice(-MAX_ENGINE_LOG_ENTRIES) : next
+    })
+  }), [])
 
   // ── training state ───────────────────────────────────────
   const [phase,       setPhase]       = useState<Phase>('idle')
   const [cancelling,  setCancelling]  = useState(false)
+  // Ticket T2: a CPU run has to be acknowledged before it starts, so the
+  // 5-10x slowdown is a decision rather than a surprise discovered an hour in.
+  const [confirmingCpu, setConfirmingCpu] = useState(false)
   // The model queued for deletion, held until the user confirms (Ticket UI-11).
   const [pendingDelete, setPendingDelete] = useState<TrainedModel | null>(null)
   const [progress,    setProgress]    = useState<ProgressData | null>(null)
@@ -135,8 +191,19 @@ export function TrainingView(): JSX.Element {
   }, [])
 
   // ── start training ────────────────────────────────────────
-  async function handleTrain(): Promise<void> {
+  /**
+   * Gate keeper for the start button: name present, environment green, and —
+   * when the run will land on the CPU — an explicit confirmation first
+   * (Ticket T2). The run itself is in runTraining below.
+   */
+  function handleTrain(): void {
     if (!modelName.trim()) { setError(t('training.name')); return }
+    if (!envSummary.canTrain) { setError(t('envCheck.blocked')); return }
+    if (needsCpuWarning(deviceMode, device)) { setConfirmingCpu(true); return }
+    void runTraining()
+  }
+
+  async function runTraining(): Promise<void> {
     setError(null)
     setLogs([])
     setProgress(null)
@@ -173,6 +240,9 @@ export function TrainingView(): JSX.Element {
 
       const res = await window.engine.stream('train_model', {
         mode, epochs, batch: 16, model_id: id,
+        // Ticket T2: the device is decided here, not re-detected in the
+        // engine, so what the progress panel shows is what the run uses.
+        device: engineDeviceFor(deviceMode, device),
         ...(dataDir ? { data_dir: dataDir } : {}),
       }) as TrainingResult
 
@@ -401,21 +471,42 @@ export function TrainingView(): JSX.Element {
             <ModeSelector value={mode} onChange={setMode} />
           </div>
 
+          {/* Ticket T2: all training runs locally — there is no cloud backend
+              — so the device is a real choice with real consequences. The
+              selector states what was detected, disables GPU when torch can't
+              use one, and carries the slowdown warning the mode cards only
+              implied through their GPU/CPU time estimates. */}
+          <div className="card">
+            <div className="card-title">{t('training.deviceMode')}</div>
+            <DeviceSelector device={device} value={deviceMode} onChange={setDeviceMode} />
+          </div>
+
+          {/* Ticket T3: the pre-flight checklist, and the gate on the button below. */}
+          <div className="card">
+            <div className="card-title">{t('envCheck.title')}</div>
+            <EnvironmentCheck
+              report={envReport}
+              loading={envLoading}
+              error={envError}
+              onRerun={() => void runEnvCheck()}
+            />
+            <EngineLogPanel entries={engineLogs} />
+          </div>
+
           {error && <div className="error-banner">{error}</div>}
 
-          {/* All training runs locally — there is no cloud backend. This is
-              just a heads-up so a CPU-only user isn't surprised by the time,
-              which the mode cards above already spell out (cpuTime). */}
-          {deviceEp === 'CPU' && phase === 'idle' && (
-            <div className="cpu-notice">
-              ⚠ No GPU detected — training will run on this machine's CPU and take
-              noticeably longer (see the estimated times above).
-            </div>
-          )}
-
-          <button className="btn btn-primary" style={{ width: '100%', padding: 12 }} onClick={handleTrain}>
+          <button
+            className="btn btn-primary"
+            style={{ width: '100%', padding: 12 }}
+            onClick={handleTrain}
+            disabled={envLoading || !envSummary.canTrain}
+            title={envSummary.canTrain ? undefined : t('envCheck.blocked')}
+          >
             ▶ {t('training.start')}
           </button>
+          {!envLoading && !envSummary.canTrain && (
+            <p className="env-check-blocked-hint">{t('envCheck.blocked')}</p>
+          )}
         </>
       )}
 
@@ -427,9 +518,16 @@ export function TrainingView(): JSX.Element {
             progress={progress}
             logs={logs}
             mode={mode}
+            // Until the engine's first progress line arrives, the run's device
+            // is still known — it's the one the user just confirmed — so show
+            // that rather than an empty badge (Ticket T2).
+            deviceLabel={progress?.device
+              ? progress.device.toUpperCase()
+              : describeDevice(engineDeviceFor(deviceMode, device) === 'cpu' ? null : device)}
             onCancel={() => void handleCancelTraining()}
             cancelling={cancelling}
           />
+          <EngineLogPanel entries={engineLogs} defaultOpen />
         </div>
       )}
 
@@ -525,6 +623,21 @@ export function TrainingView(): JSX.Element {
           </div>
           )}
         </div>
+      )}
+
+      {/* Ticket T2: explicit acknowledgement that this run is CPU-bound. */}
+      {confirmingCpu && (
+        <ConfirmDialog
+          title={t('training.cpuWarningTitle')}
+          message={t('training.cpuWarningMessage', {
+            min: CPU_SLOWDOWN_MIN, max: CPU_SLOWDOWN_MAX,
+            mode: t(`training.${mode}`),
+            cpuTime: mode === 'professional' ? '≤ 6 h' : '≤ 20 min',
+          })}
+          confirmLabel={t('training.cpuWarningConfirm')}
+          onConfirm={() => { setConfirmingCpu(false); void runTraining() }}
+          onCancel={() => setConfirmingCpu(false)}
+        />
       )}
 
       {pendingDelete && (

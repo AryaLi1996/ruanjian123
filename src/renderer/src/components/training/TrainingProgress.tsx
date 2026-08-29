@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { formatDuration } from '../../utils/audio'
+import { estimateRemainingSec } from '../../utils/environmentCheck'
 
 export interface ProgressData {
   status:       'training' | 'done'
@@ -20,6 +21,12 @@ interface Props {
   progress: ProgressData | null
   logs:     string[]
   mode:     string
+  /**
+   * Device the run is using, e.g. "CPU" or "GPU · NVIDIA RTX 4090"
+   * (Ticket T2). Shown until the engine reports its own `device`, so the
+   * badge is never blank while a run is starting.
+   */
+  deviceLabel?: string
   /** Ticket UI-10: kills the run. Omitted where cancellation isn't offered. */
   onCancel?:  () => void
   cancelling?: boolean
@@ -31,7 +38,9 @@ interface Props {
  * Progress and ETA on top, a terminal-style log underneath that follows the
  * tail, and a destructive cancel behind a confirm step.
  */
-export function TrainingProgress({ progress, logs, mode, onCancel, cancelling }: Props): JSX.Element {
+export function TrainingProgress({
+  progress, logs, mode, deviceLabel, onCancel, cancelling,
+}: Props): JSX.Element {
   const { t } = useTranslation()
   const logRef = useRef<HTMLDivElement>(null)
   // Two-step cancel (Ticket UI-10 §4): stopping a long training run is
@@ -59,8 +68,11 @@ export function TrainingProgress({ progress, logs, mode, onCancel, cancelling }:
   const done    = progress?.status === 'done'
   const pct     = progress?.percent ?? (done ? 100 : 0)
   const elapsed = progress?.elapsed_sec ?? 0
-  const eta     = pct > 1 && pct < 100 ? (elapsed / pct) * (100 - pct) : null
+  // Derived from this run's own pace, so a CPU run reports a CPU-shaped ETA
+  // instead of the mode card's GPU estimate (Ticket T2).
+  const eta     = done ? null : estimateRemainingSec(pct, elapsed)
   const loss    = progress?.loss ?? progress?.best_loss
+  const device  = progress?.device ? progress.device.toUpperCase() : deviceLabel
 
   return (
     <div className="tc-console">
@@ -68,9 +80,9 @@ export function TrainingProgress({ progress, logs, mode, onCancel, cancelling }:
       <div className="progress-header">
         <div>
           <span className="badge">{mode}</span>
-          {progress?.device && (
-            <span className="badge badge-dim" style={{ marginLeft: 6 }}>
-              {progress.device.toUpperCase()}
+          {device && (
+            <span className="badge badge-dim" style={{ marginLeft: 6 }} title={t('training.currentDevice', { device })}>
+              {device}
             </span>
           )}
         </div>
@@ -81,7 +93,9 @@ export function TrainingProgress({ progress, logs, mode, onCancel, cancelling }:
                 <span>{t('training.epoch', { current: progress.epoch, total: progress.total_epochs })}</span>
               )}
               {loss != null && <span>{t('training.loss', { value: loss.toFixed(5) })}</span>}
-              {eta != null && <span className="tc-eta">{t('training.eta', { value: formatDuration(eta) })}</span>}
+              {eta != null
+                ? <span className="tc-eta">{t('training.eta', { value: formatDuration(eta) })}</span>
+                : !done && <span className="tc-eta tc-eta-pending">{t('training.etaPending')}</span>}
             </>
           )}
         </div>

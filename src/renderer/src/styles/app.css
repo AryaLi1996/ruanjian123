@@ -4107,3 +4107,114 @@ html, body, #root {
 }
 .assets-ready  { font-size: 12px; color: var(--success); }
 .assets-missing { font-size: 12px; color: var(--text-muted); }
+
+/* ── Device selector (Ticket T2) ─────────────────────────── */
+.device-selector   { display: flex; flex-direction: column; gap: 12px; }
+.device-current    { font-size: 13px; font-weight: 600; }
+.device-options    { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+
+.device-option {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  background: var(--bg);
+  border: 2px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.15s, background 0.15s;
+}
+.device-option:hover:not(.disabled) { border-color: var(--accent); }
+.device-option.selected {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+/* An unavailable GPU stays visible but unmistakably inert — the point of the
+   ticket is that the UI stops implying a choice the machine can't honour. */
+.device-option.disabled { opacity: 0.5; cursor: not-allowed; }
+.device-option-name     { font-weight: 600; font-size: 14px; }
+.device-option-detail   { font-size: 12px; color: var(--text-muted); }
+.device-detail-note     { color: var(--text-muted); }
+
+/* ── Environment self-check (Ticket T3) ──────────────────── */
+.env-check          { display: flex; flex-direction: column; gap: 12px; }
+.env-check-head     { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.env-check-headline { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; }
+.env-check-rerun    { flex-shrink: 0; }
+
+.env-check-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.env-check-row {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 8px 10px;
+  border-radius: var(--radius);
+  background: var(--bg-hover);
+  font-size: 12px;
+}
+.env-check-row.env-warn { background: color-mix(in srgb, var(--warning) 12%, transparent); }
+.env-check-row.env-fail { background: color-mix(in srgb, var(--danger) 12%, transparent); }
+.env-check-icon         { line-height: 1.5; }
+.env-ok   .env-check-icon { color: var(--success); }
+.env-warn .env-check-icon { color: var(--warning); }
+.env-fail .env-check-icon { color: var(--danger); }
+
+.env-check-body   { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.env-check-label  { font-weight: 600; }
+.env-check-detail { color: var(--text-muted); word-break: break-word; }
+.env-check-fix    { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 4px; }
+.env-check-cmd {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  user-select: all;    /* the whole install command is meant to be copied */
+  word-break: break-all;
+}
+.env-check-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.env-check-install { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 12px; }
+.env-check-blocked-hint { font-size: 12px; color: var(--danger); margin-top: 8px; text-align: center; }
+
+/* ── Engine log panel (Tickets T1/T3) ────────────────────── */
+.engine-log        { margin-top: 12px; }
+.engine-log-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  background: none;
+  border: none;
+  padding: 6px 0;
+  cursor: pointer;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+}
+.engine-log-count  { color: var(--text-muted); font-weight: 400; }
+.engine-log-errors { color: var(--danger); font-weight: 600; }
+
+.engine-log-body {
+  max-height: 220px;
+  overflow-y: auto;
+  padding: 8px 10px;
+  border-radius: var(--radius);
+  background: var(--bg-hover);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  line-height: 1.5;
+}
+.engine-log-line       { white-space: pre-wrap; word-break: break-word; color: var(--text-muted); }
+.engine-log-muted      { font-style: italic; }
+/* Heartbeats are pure liveness noise — dimmed so real output stands out. */
+.engine-log-heartbeat  { opacity: 0.55; }
+.engine-log-json       { color: var(--text); }
+.engine-log-error      { color: var(--danger); }

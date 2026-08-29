@@ -381,7 +381,11 @@ All IPC is exposed via `window.engine.*` in the renderer. The preload (`src/prel
 
 ```
 ping                 →  {pong, status}
-detect_device        →  {ep, provider, providers, platform, python}
+detect_device        →  {ep, provider, providers, platform, python,
+                         torch_available, cuda_available, mps_available,
+                         gpu_available, gpu_name, training_device, detail}
+check_environment    →  {passed, checks: [{id, status, label, detail, fix}],
+                         device, platform, python, missing}
 test_inference       →  {passed, ep, elapsed_ms, output_shape, max_abs_error}
 synthesize           →  {duration_sec, elapsed_ms, ep, n_frames, sample_rate, rms, ...}
                         (+ audio: float[] when include_audio=true)

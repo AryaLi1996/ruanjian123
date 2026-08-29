@@ -1,15 +1,73 @@
 #!/usr/bin/env python3
 """AI engine entry point.
 
-Reads a JSON payload from argv[1]: {"method": "...", "args": [...]}
+Reads a JSON payload from the last argv entry: {"method": "...", "args": [...]}
 Prints a JSON result to stdout and exits 0, or exits 1 on error.
+
+Flags may precede the payload:
+
+    --verbose   emit stage diagnostics (and a liveness heartbeat) on stderr
+
+Ticket T1: stdout is the JSON protocol channel and must stay clean, so every
+diagnostic goes to stderr, tagged with LOG_PREFIX / HEARTBEAT_PREFIX. The
+Electron bridge (src/main/python-bridge.ts) forwards those lines to the
+training log panel and uses them to tell "still starting up" from "hung",
+which is what the old, silent 15s startup timeout could not do: a cold
+`import torch` off a slow disk regularly takes longer than that while being
+perfectly healthy.
 """
 from __future__ import annotations
 
 import sys
 import json
+import os
+import threading
 import time
 from pathlib import Path
+
+# Tags let the bridge classify stderr lines: diagnostics to show the user,
+# heartbeats that prove liveness, and everything else (a real traceback).
+LOG_PREFIX       = "[engine]"
+HEARTBEAT_PREFIX = "[engine:heartbeat]"
+
+# Verbose is opt-in via --verbose or RUANJIAN_ENGINE_VERBOSE=1, so direct
+# CLI/test callers keep the quiet, machine-readable behaviour they had.
+_verbose = os.environ.get("RUANJIAN_ENGINE_VERBOSE") == "1"
+_stage   = "starting"
+
+
+def _log(message: str) -> None:
+    """Stage diagnostic on stderr. No-op unless verbose."""
+    if not _verbose:
+        return
+    try:
+        print(f"{LOG_PREFIX} {message}", file=sys.stderr, flush=True)
+    except Exception:
+        pass  # a broken stderr pipe must never take down the engine
+
+
+def _start_heartbeat(interval_sec: float = 5.0) -> None:
+    """Print a liveness line every few seconds while a handler runs.
+
+    Long, silent stretches are normal here (importing torch, loading an ONNX
+    session, the first epoch of a CPU training run). Without this the bridge
+    cannot distinguish them from a process that antivirus has frozen before
+    `main()` ever ran, and had to guess with a fixed timeout.
+    """
+    if not _verbose:
+        return
+
+    def _beat() -> None:
+        started = time.monotonic()
+        while True:
+            time.sleep(interval_sec)
+            try:
+                elapsed = time.monotonic() - started
+                print(f"{HEARTBEAT_PREFIX} {_stage} ({elapsed:.0f}s)", file=sys.stderr, flush=True)
+            except Exception:
+                return
+
+    threading.Thread(target=_beat, daemon=True).start()
 
 # Apply Python-level network sandbox before any engine imports
 try:
@@ -30,6 +88,16 @@ def ping(args):
 def detect_device(_args):
     from device_detector import detect_device as _detect  # noqa: PLC0415
     return _detect()
+
+
+def check_environment(args):
+    """Ticket T3: full pre-flight self-check (Python, deps, GPU, RAM, disk).
+
+    Returns a checklist rather than raising, so the UI can show which single
+    item is broken instead of one opaque "training failed" at the end of a run.
+    """
+    from env_check import check_environment as _check  # noqa: PLC0415
+    return _check(args)
 
 
 def test_inference(_args):
@@ -323,6 +391,10 @@ def train_model(args):
 
     params     = args[0] if args and isinstance(args[0], dict) else {}
     mode       = params.get("mode",   "standard")
+    # Ticket T2: the UI resolves the device up front (and makes the user
+    # confirm a CPU run), so honour its choice rather than re-picking here.
+    # Anything unrecognised falls through to trainer's own auto-detection.
+    device     = params.get("device") if params.get("device") in ("cuda", "mps", "cpu") else None
     epochs     = int(params.get("epochs",  10))   # small default for quick CI smoke-test
     batch_size = int(params.get("batch",   16))
     lr         = float(params.get("lr",    1e-4))
@@ -352,6 +424,7 @@ def train_model(args):
         epochs        = epochs,
         batch_size    = batch_size,
         lr            = lr,
+        device        = device,
         progress_path = output.parent / f"progress_{mode}.json",
     )
     return {k: (bool(v) if isinstance(v, (bool,)) else v) for k, v in result.items()}
@@ -548,6 +621,8 @@ def package_train_dataset(args):
 HANDLERS = {
     "ping":                        ping,
     "detect_device":               detect_device,
+    # Ticket T3: pre-flight environment self-check shown before training starts.
+    "check_environment":           check_environment,
     "test_inference":              test_inference,
     "synthesize":                  synthesize,
     "benchmark_synthesis":         benchmark_synthesis,
@@ -575,11 +650,23 @@ HANDLERS = {
 
 
 def main() -> None:
-    if len(sys.argv) < 2:
+    global _verbose, _stage
+
+    argv = sys.argv[1:]
+    if "--verbose" in argv:
+        _verbose = True
+        argv = [a for a in argv if a != "--verbose"]
+
+    # Emitted before anything else so the bridge learns the process is alive
+    # the moment it starts, instead of after the first heavy import returns.
+    _log(f"engine started (pid {os.getpid()}, python {sys.version.split()[0]})")
+    _start_heartbeat()
+
+    if not argv:
         _fail("no payload provided")
 
     try:
-        payload = json.loads(sys.argv[1])
+        payload = json.loads(argv[-1])
     except json.JSONDecodeError as exc:
         _fail(f"invalid JSON payload: {exc}")
 
@@ -590,7 +677,23 @@ def main() -> None:
     if handler is None:
         _fail(f"unknown method: {method!r}")
 
-    result = handler(args)
+    _stage = f"running {method}"
+    _log(f"dispatching {method}")
+    started = time.monotonic()
+    try:
+        result = handler(args)
+    except Exception as exc:
+        # Previously this propagated as a bare traceback and exit code 1,
+        # which reached the user as an unparseable wall of text. Keep the
+        # traceback in the verbose log, but exit through _fail so the bridge
+        # still gets a structured {"error": ...}.
+        if _verbose:
+            import traceback  # noqa: PLC0415
+            _log("handler raised:\n" + traceback.format_exc())
+        _fail(f"{method} failed: {exc}")
+        return
+    _stage = "writing result"
+    _log(f"{method} finished in {time.monotonic() - started:.2f}s")
     print(json.dumps(result))
 
 
