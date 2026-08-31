@@ -402,6 +402,11 @@ export function SubscriptionView(): JSX.Element {
         // but ask for a refresh too so the status card above flips out of
         // "✕ Invalid token" immediately rather than on the next poll.
         window.engine.refreshLicense().catch(() => {})
+      } else if (res.appIdMismatch) {
+        // Ticket 65b §4: distinct from a bad key — the license is real, it
+        // just unlocks another product, so point the user at this app's
+        // subscription/trial instead of telling them to re-check the key.
+        setError(t('subscription.activateWrongApp'))
       } else {
         // WIN-SYNC-03 §2: one plain, actionable message. The server's own
         // error string is opaque/untranslated, so it never reaches the user.

@@ -272,6 +272,9 @@ const resources = {
         payNowAmount: '立即支付 {{amount}}',
         selectPlanFirst: '请先选择订阅计划', selectMethodFirst: '请先选择支付方式',
         activateSuccess: '许可证激活成功！', activateInvalid: '无效密钥，请检查后重试',
+        // Ticket 65b: the key is valid but was issued for another product
+        // sharing the same License service.
+        activateWrongApp: '该密钥属于其他应用，无法在 SootheVoice 中使用。请使用 SootheVoice 的订阅或开始免费试用。',
         // Ticket 34: multi-period plan cards.
         plans: { monthly: '月付', quarterly: '季付', semi_annual: '半年付', annual: '年付', trial: '试用' },
         planDesc: {
@@ -668,6 +671,7 @@ const resources = {
         selectPlanFirst: 'Choose a subscription plan first.', selectMethodFirst: 'Choose a payment method first.',
         activateSuccess: '✓ License activated! All features unlocked.',
         activateInvalid: 'Invalid key — please check it and try again.',
+        activateWrongApp: 'That key belongs to a different app and can\u2019t be used in SootheVoice. Use a SootheVoice subscription, or start the free trial.',
         // Ticket 34: multi-period plan cards.
         plans: { monthly: 'Monthly', quarterly: 'Quarterly', semi_annual: 'Semi-Annual', annual: 'Annual', trial: 'Trial' },
         planDesc: {

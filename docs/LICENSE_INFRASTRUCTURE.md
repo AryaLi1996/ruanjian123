@@ -146,6 +146,32 @@ Stack 名默认 `ruanjian-license`，区域 `us-east-1`，AWS 账号 `6416289811
 （`Allow-Origin: *`，`Allow-Headers: Content-Type, Stripe-Signature`）。
 未配置的能力返回 **501**（`_not_configured()`），而不是 500。
 
+### 3.1 `appId` —— 多应用共用同一套 License 服务（Ticket 65a / 65b）
+
+同一个 Function URL 同时服务多个产品，所以每个请求都必须声明"我是哪个应用"，
+否则在 A 应用买的订阅会顺带解锁 B 应用。约定的取值（**两个客户端和服务端必须完全一致**）：
+
+| 应用 | `appId` |
+|---|---|
+| SootheVoice（本仓库） | `smoothvoice` |
+| 舒音水印去除 | 该应用自身的 appId（由 Ticket 65a 服务端登记） |
+
+客户端侧（Ticket 65b）：
+
+- 常量定义在 `src/main/license-config.ts` 的 `APP_ID`，同时挂在 `LICENSE_CONFIG.appId` 上；
+  构建时可用 `VITE_APP_ID`（或 `APP_ID`）环境变量覆盖，留空则回落到默认值。
+- 附加逻辑集中在 `subscription-monitor.ts` 的 `_request()` 这一个出口：
+  **POST 写进请求体、GET 拼进 query string**（工具函数在 `src/main/license-request.ts`）。
+  因此上表里的每条路由——verify、`trial/*`、`create-order`、`order-status`、
+  `payment-history`、`plans`、`payment-methods`——都自动带上 `appId`，新增路由无需再记得加。
+- 设备 ID 生成逻辑不变（`device-id.ts`）；试用记录仍按设备存储，由服务端按 `appId` 分区。
+- 向后兼容：老 token 里没有 `appId` 字段，本地视为合法，服务端在下一次 verify 时补齐。
+  只有明确标记为**别的** `appId` 的 token 才会被拒绝。
+- 不匹配时（服务端返回 `code: 'app_id_mismatch'` 或消息含 appId mismatch）：
+  手动激活会给出"该密钥属于其他应用"的专门提示；后台刷新则删除本地 token、
+  回到 `unlicensed` 并重新同步试用状态，把用户引导到本应用的试用/订阅。
+- 支付回调无需客户端参与：订单记录里已含 `appId`，服务端回调时自动为正确的应用签发 license。
+
 ---
 
 ## 4. 授权令牌（License Token）
@@ -162,9 +188,12 @@ base64url(header) . base64url(payload) . hex(HMAC-SHA256)
   {
     "userId": "…", "planId": "monthly", "licenseKey": "SOOTHEVOICE-XXXX-XXXX-XXXX",
     "expiresAt": 1767225600, "issuedAt": 1764547200,
-    "features": ["training", "synthesis", "separation", "cover"]
+    "features": ["training", "synthesis", "separation", "cover"],
+    "appId": "smoothvoice"
   }
   ```
+  （`appId` 由 Ticket 65a 起签发，见 §3.1；早于该版本签发的 token 没有这个字段，
+  客户端按向后兼容处理。）
 - 签名：`HMAC-SHA256(LICENSE_SIGNING_SECRET, "header.payload")`，hex 输出
 
 服务端签发（`create_token()` in `handler.py`），客户端本地校验
@@ -526,3 +555,4 @@ Function URL 是 `AuthType: NONE`，即完全公开，所有输入都是攻击�
 | 改宽限期 / 刷新频率 | `license-config.ts` 的 `gracePeriodDays` / `refreshIntervalHours` |
 | 换部署账号或 stack 名 | `scripts/deploy-license.sh` 的 `EXPECTED_ACCOUNT` / `STACK_NAME` |
 | 加新 API 路由 | `handler.py` 末尾 `handler()` 的路径分发链 + `subscription-monitor.ts` 的 `_request()` 调用 |
+| 改本应用的 `appId` | `license-config.ts` 的 `APP_ID`（或构建时 `VITE_APP_ID`），并同步服务端登记与本文档 §3.1 |
