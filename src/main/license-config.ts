@@ -16,6 +16,23 @@ const DEFAULT_SIGNING_SECRET = 'ruanjian-dev-signing-secret-v1-change-in-product
 // One payment = one order = license extended by that plan's duration.
 // This is independent of Stripe's own "subscription" object — the source of
 // truth for expiry is our own signed license token, not Stripe billing state.
+// ── Application identity (Ticket 65b) ─────────────────────────────────────────
+// The shared License service (Ticket 65a) hosts more than one product, so every
+// request has to say *which* app it is talking about: a subscription bought in
+// SootheVoice must unlock SootheVoice only, and the watermark-removal app's
+// trial/subscription must not leak into this one (and vice versa).
+//
+// The value is contractual — it has to match exactly what the server and the
+// other client use, so it is recorded once in docs/LICENSE_INFRASTRUCTURE.md
+// and read from here everywhere else. VITE_APP_ID (the name the ticket
+// specifies, kept so the same variable works for a renderer-side build) or
+// APP_ID can override it at build time; anything blank falls back to the
+// default rather than sending an empty appId the server would reject.
+const DEFAULT_APP_ID = 'smoothvoice'
+
+export const APP_ID: string =
+  process.env['VITE_APP_ID']?.trim() || process.env['APP_ID']?.trim() || DEFAULT_APP_ID
+
 export type PaymentMethod = 'wechat_pay' | 'alipay' | 'douyin_pay' | 'card'
 
 // ── Multi-period plans (Ticket 34, pricing updated by Ticket 36) ──────────────
@@ -90,6 +107,9 @@ export const PLANS: readonly PlanDef[] = [
 export const PAYMENT_METHODS: readonly PaymentMethod[] = ['wechat_pay', 'alipay', 'douyin_pay', 'card']
 
 export const LICENSE_CONFIG = {
+  // ── Application id sent with every License API request (Ticket 65b) ────────
+  appId: APP_ID,
+
   // ── Serverless verification endpoint ───────────────────────────────────────
   // Replace with your actual deployed URL. All payment routes below live on
   // this same Function URL, dispatched by path (see serverless/verify-license).

@@ -12,6 +12,8 @@ export interface LicensePayload {
   licenseKey: string
   expiresAt: number
   issuedAt: number
+  /** Ticket 65b: which application this license unlocks; absent on tokens issued before appId existed. */
+  appId?: string
   features: string[]
 }
 
@@ -39,6 +41,8 @@ export interface ActivationResult {
   success: boolean
   error?: string
   state?: SubscriptionState
+  /** Ticket 65b: the key is valid but issued for a different application. */
+  appIdMismatch?: boolean
 }
 
 // ── Multi-channel payment (Ticket 28) ─────────────────────────────────────────

@@ -12,6 +12,7 @@ import { join }                          from 'path'
 import { EventEmitter }                  from 'events'
 import { app }                           from 'electron'
 import { LICENSE_CONFIG, PAYMENT_METHODS, PLANS, FALLBACK_USD_EXCHANGE_RATE, type PaymentMethod, type PlanId, type PlanPeriod } from './license-config'
+import { tagRequest, isAppIdMismatch, tokenAppIdMatches } from './license-request'
 import { encryptModelBytes, decryptModelBytes } from './model-crypto'
 import { getDeviceId } from './device-id'
 import { capTrialDuration } from './trial-duration'
@@ -33,6 +34,10 @@ export interface LicensePayload {
   expiresAt:  number   // Unix epoch seconds
   issuedAt:   number
   features:   string[] // ['training','synthesis','separation','cover']
+  // Ticket 65b: which application this license unlocks. Optional because
+  // tokens issued before the shared License service learned about appId
+  // carry none — see tokenAppIdMatches() for how those are treated.
+  appId?:     string
 }
 
 export interface SubscriptionState {
@@ -96,10 +101,26 @@ const NO_TRIAL: TrialState = {
   daysRemaining: 0, hoursRemaining: 0, source: 'none',
 }
 
+/**
+ * Ticket 65b §4: raised when the shared License service reports that a license
+ * belongs to a different application (e.g. a subscription bought in the
+ * watermark-removal app). Distinct from a generic verification failure so
+ * callers can clear the local token and route the user to a trial/subscription
+ * for *this* app rather than surfacing a retryable network-ish error.
+ */
+export class AppIdMismatchError extends Error {
+  constructor(serverError?: string) {
+    super(serverError ?? `License belongs to a different application (expected appId '${LICENSE_CONFIG.appId}')`)
+    this.name = 'AppIdMismatchError'
+  }
+}
+
 export interface ActivationResult {
   success: boolean
   error?:  string
   state?:  SubscriptionState
+  /** Ticket 65b §4: the key is valid but issued for a different application. */
+  appIdMismatch?: boolean
 }
 
 // ── Payment orders (Ticket 28) ──────────────────────────────────────────────
@@ -322,6 +343,13 @@ export class SubscriptionMonitor extends EventEmitter {
 
     const payload = verifyToken(token)
     if (!payload) { this._setState(this._buildState('invalid', null)); return }
+    // Ticket 65b §3: a token with no appId predates the shared service and is
+    // accepted (the server backfills it on the next verify); one stamped for
+    // another product never unlocks this app, even offline.
+    if (!tokenAppIdMatches(payload.appId, LICENSE_CONFIG.appId)) {
+      await this._discardForeignLicense()
+      return
+    }
 
     const now = Math.floor(Date.now() / 1000)
     if (await this._clockTampered(now)) {
@@ -357,6 +385,12 @@ export class SubscriptionMonitor extends EventEmitter {
       try {
         token = await this._verifyWithServer(licenseKey)
       } catch (err) {
+        if (err instanceof AppIdMismatchError) {
+          // Nothing to clear (activation never stored a token) — just report
+          // it as the distinct failure it is so the UI can say "that key is
+          // for another app" rather than "verification failed".
+          return { success: false, error: err.message, appIdMismatch: true }
+        }
         return { success: false, error: String(err) }
       }
     }
@@ -372,6 +406,21 @@ export class SubscriptionMonitor extends EventEmitter {
     this._setState(state)
     this._startRefreshTimer()
     return { success: true, state }
+  }
+
+  /**
+   * Ticket 65b §4: removes a license that belongs to another application and
+   * returns the app to `unlicensed`, which is what drives the UI back to the
+   * trial / subscribe path. The trial record is untouched: a still-running
+   * trial for *this* app keeps working, and a used-up one is re-activated (or
+   * refused) by the server on the next _syncTrial() exactly as it would be
+   * for a device that never had a license.
+   */
+  private async _discardForeignLicense(): Promise<void> {
+    await this._deleteToken()
+    this._stopRefreshTimer()
+    this._setState(this._buildState('unlicensed', null))
+    await this._syncTrial()
   }
 
   async deactivate(): Promise<void> {
@@ -398,7 +447,13 @@ export class SubscriptionMonitor extends EventEmitter {
       await this._saveMaxSeenTs(now)
       const p2     = verifyToken(fresh)
       if (p2) this._setState(this._buildState(this._resolveStatus(p2, now), p2, now))
-    } catch {
+    } catch (err) {
+      // Ticket 65b §4: a mismatch is permanent, so — unlike a network
+      // failure — the local token must not keep unlocking this app through
+      // the grace period. Drop it and fall back to unlicensed; the trial
+      // state re-synced at the top of refresh() still applies, and the gate
+      // shows the subscribe prompt when it doesn't.
+      if (err instanceof AppIdMismatchError) { await this._discardForeignLicense(); return }
       // Network failure: rely on local token + grace period
     }
   }
@@ -432,9 +487,16 @@ export class SubscriptionMonitor extends EventEmitter {
         'License verification URL is not configured. Set LICENSE_URL to the deployed Lambda Function URL.',
       )
     }
+    // Ticket 65b: every route on the shared License service is scoped by
+    // application, and tagging here rather than at each call site is what
+    // makes that true of *all* of them — verify, trial/status,
+    // trial/activate, create-order, order-status, payment-history, plans,
+    // payment-methods — with no way for a later route to forget.
+    const { path: taggedPath, body: taggedBody } = tagRequest(method, path, body, LICENSE_CONFIG.appId)
+
     const { net } = await import('electron')
     const base = LICENSE_CONFIG.verificationUrl.replace(/\/+$/, '')
-    const req  = net.request({ method, url: `${base}/${path}` })
+    const req  = net.request({ method, url: `${base}/${taggedPath}` })
     return new Promise((resolve, reject) => {
       let settled = false
       const timer = setTimeout(() => {
@@ -460,9 +522,9 @@ export class SubscriptionMonitor extends EventEmitter {
         clearTimeout(timer)
         reject(e)
       })
-      if (body !== undefined) {
+      if (taggedBody !== undefined) {
         req.setHeader('Content-Type', 'application/json')
-        req.write(JSON.stringify(body))
+        req.write(JSON.stringify(taggedBody))
       }
       req.end()
     })
@@ -470,8 +532,13 @@ export class SubscriptionMonitor extends EventEmitter {
 
   private async _verifyWithServer(licenseKey: string): Promise<string> {
     const d = await this._request('POST', '', { licenseKey, appVersion: app.getVersion() }) as
-      { token?: string; valid?: boolean; error?: string }
+      { token?: string; valid?: boolean; error?: string; code?: string }
     if (d.token && d.valid) return d.token
+    // Ticket 65b §4: a license that exists but belongs to another product is
+    // not a transient failure — it will never verify here, so it's raised as
+    // its own error type and the callers below drop the token and fall back
+    // to the trial / subscribe path instead of retrying it forever.
+    if (isAppIdMismatch(d)) throw new AppIdMismatchError(d.error)
     throw new Error(d.error ?? 'Verification failed')
   }
 
