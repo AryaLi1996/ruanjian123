@@ -27,6 +27,7 @@
  */
 import type { EngineDeviceInfo } from '../global'
 import { CPU_SLOWDOWN_MAX, CPU_SLOWDOWN_MIN, engineDeviceFor, type DeviceMode } from './environmentCheck'
+import { RECOMMENDED_DURATION_SEC, SHORT_DATA_WARN_SEC } from './trainingQuality'
 
 /** Extensions the engine can actually read — mirrors engine/trainer.py's `exts`. */
 export const ENGINE_AUDIO_EXTS = ['.wav', '.flac', '.ogg', '.mp3'] as const
@@ -36,15 +37,6 @@ export const ENGINE_AUDIO_EXTS = ['.wav', '.flac', '.ogg', '.mp3'] as const
  * samples at SYNTH_SR (engine/trainer.py) → 65536 / 22050 ≈ 2.97 s.
  */
 export const MIN_CHUNK_SEC = (256 * 256) / 22_050
-
-/** Below this the material is too short to be worth a run at all (Ticket P1). */
-export const SHORT_TOTAL_SEC = 120
-
-/** What the engine recommends per mode — mirrors trainer.py's MIN_DURATION_SEC. */
-export const RECOMMENDED_TOTAL_SEC: Record<TrainingModeId, number> = {
-  standard:     300,
-  professional: 900,
-}
 
 /** Headroom on top of the raw upload: IPC copy + decode + the trainer's own working set. */
 export const MEMORY_OVERHEAD_FACTOR = 1.5
@@ -171,12 +163,15 @@ export function checkTrainingInputs(input: PreflightInput): PreflightResult {
 
   // ── Total duration ────────────────────────────────────────────────────
   const totalSec = measurable.reduce((sum, f) => sum + (f.duration as number), 0)
-  const recommended = RECOMMENDED_TOTAL_SEC[mode]
+  // Same thresholds the short-data dialog used before this checklist absorbed
+  // it (Ticket T3) — kept in trainingQuality.ts so the pre-flight and the
+  // finished-run report speak about duration in one voice.
+  const recommended = RECOMMENDED_DURATION_SEC[mode] ?? RECOMMENDED_DURATION_SEC.standard
   if (files.length === 0) {
     items.push({ id: 'duration', severity: 'warning', messageKey: 'preflight.duration.none', params: {} })
   } else if (measurable.length === 0) {
     items.push({ id: 'duration', severity: 'warning', messageKey: 'preflight.duration.unknown', params: {} })
-  } else if (totalSec < SHORT_TOTAL_SEC || totalSec < recommended) {
+  } else if (totalSec < SHORT_DATA_WARN_SEC || totalSec < recommended) {
     items.push({
       id: 'duration', severity: 'warning', messageKey: 'preflight.duration.short',
       params: { actual: minutes(totalSec), recommended: minutes(recommended) },

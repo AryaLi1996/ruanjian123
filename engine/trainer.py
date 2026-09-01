@@ -239,6 +239,11 @@ class DataQualityReport(TypedDict):
     duration_ok:      bool
     snr_db:           float | None
     snr_ok:           bool
+    # The SNR bar this report was judged against. Reported (rather than left
+    # for the UI to hardcode) so the quality report can quote the threshold
+    # the engine actually applied instead of a second copy of it that can
+    # drift — see src/renderer/src/utils/trainingQuality.ts.
+    min_snr_db:       float
     warnings:         list[str]
     passed:           bool
 
@@ -310,6 +315,7 @@ def validate_training_data(
         duration_ok=duration_ok,
         snr_db=round(snr_db, 2) if snr_db is not None else None,
         snr_ok=snr_ok,
+        min_snr_db=MIN_SNR_DB,
         warnings=warnings,
         passed=bool(duration_ok and snr_ok) if files else True,
     )

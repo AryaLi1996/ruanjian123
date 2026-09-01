@@ -23,6 +23,13 @@ export interface TrainingUpload {
 }
 
 interface Props {
+  /**
+   * Ticket P1: the selection, each file paired with the duration this
+   * component has already decoded for its own display. It supersedes the
+   * separate `onDurationChange` total (Ticket T3): the pre-flight needs
+   * per-file durations — a clip too short to yield a training chunk is
+   * invisible in a sum — and derives the total from the same list.
+   */
   onFilesChange: (files: TrainingUpload[]) => void
 }
 

@@ -13,11 +13,14 @@ import { TrainingPreflightDialog } from '../components/training/TrainingPrefligh
 import { EnvironmentCheck } from '../components/training/EnvironmentCheck'
 import { DeviceSelector } from '../components/training/DeviceSelector'
 import { EngineLogPanel } from '../components/training/EngineLogPanel'
+import { QualityReport } from '../components/training/QualityReport'
 import type { EngineDeviceInfo, EngineLogEntry, EnvironmentReport } from '../global'
 import {
   describeDevice, engineDeviceFor, resolveDeviceMode, summarizeReport, type DeviceMode,
 } from '../utils/environmentCheck'
 import { describeError } from '../utils/errorMessage'
+import { interpretProgress, interpretTrainingResult } from '../utils/engineLog'
+import type { DataQualityReport } from '../utils/trainingQuality'
 import { checkTrainingInputs, type PreflightResult } from '../utils/trainingPreflight'
 import { classifyTrainingFailure } from '../utils/trainingError'
 
@@ -43,16 +46,6 @@ const MAX_ENGINE_LOG_ENTRIES = 500
  */
 const CPU_PROFESSIONAL_STALL_TIMEOUT_MS = 30 * 60_000
 
-interface DataQualityReport {
-  n_files:          number
-  duration_sec:     number
-  min_required_sec: number
-  duration_ok:      boolean
-  snr_db:           number | null
-  snr_ok:           boolean
-  warnings:         string[]
-  passed:           boolean
-}
 
 interface TrainingResult {
   status:           string
@@ -133,11 +126,16 @@ export function TrainingView(): JSX.Element {
   const [phase,       setPhase]       = useState<Phase>('idle')
   const [cancelling,  setCancelling]  = useState(false)
   // Ticket P1: the local self-check the user acknowledges before a run starts.
-  // It replaces the bare CPU confirmation: the slowdown is now one row on a
-  // checklist that also covers the silent data limits (see
-  // utils/trainingPreflight.ts), so one dialog answers "why did nothing
-  // happen?" for every one of them.
+  // It subsumes both earlier pre-run dialogs: the CPU slowdown (Ticket T2) and
+  // the too-short-dataset question (Ticket T3) are now rows on one checklist
+  // that also covers the limits that used to fail silently (see
+  // utils/trainingPreflight.ts). One click, one dialog, one answer to "why did
+  // nothing happen?" — asking the same user three modals in a row is how a
+  // warning gets clicked through unread.
   const [preflight, setPreflight] = useState<PreflightResult | null>(null)
+  // Ticket T2: the quality report shown once a run finishes. Kept separate
+  // from `result` so dismissing the report doesn't discard the run.
+  const [showQuality, setShowQuality] = useState(false)
   // The model queued for deletion, held until the user confirms (Ticket UI-11).
   const [pendingDelete, setPendingDelete] = useState<TrainedModel | null>(null)
   const [progress,    setProgress]    = useState<ProgressData | null>(null)
@@ -159,6 +157,12 @@ export function TrainingView(): JSX.Element {
   // button doing nothing at all.
   const [nameError,   setNameError]   = useState<string | null>(null)
   const nameInputRef = useRef<HTMLInputElement>(null)
+  // Ticket T3: measured by the dropzone as each file decodes; a lower bound,
+  // since a file whose duration can't be read contributes nothing.
+  // Ticket T1: the reason from a `{"status":"failed"}` on the progress
+  // stream, kept so the run's own words survive into the error banner — the
+  // stream's rejection afterwards is usually a bare non-zero exit code.
+  const streamFailureRef = useRef<string | null>(null)
 
   // ── model list state (player overlay) ────────────────────
   const [playingModelId, setPlayingModelId] = useState<string | null>(null)
@@ -173,24 +177,40 @@ export function TrainingView(): JSX.Element {
   const updateModelDemo = useAppStore((s) => s.updateModelDemo)
   const setEngineBusy  = useAppStore((s) => s.setEngineBusy)
   const setEngineStatus = useAppStore((s) => s.setEngineStatus)
+  // Ticket T2: the fix for a noisy recording is 执行降噪, which lives in Data
+  // Preparation — the report links straight to it instead of naming a screen
+  // and leaving the user to find it.
+  const setActiveView  = useAppStore((s) => s.setActiveView)
   const retrainParamsRef = useRef<{ mode: TrainingMode; epochs: number } | null>(null)
 
   // ── subscribe to engine:progress while training ──────────
   useEffect(() => {
     if (phase !== 'training') return
     const unsub = window.engine.onProgress((raw) => {
-      const data = raw as ProgressData & { type?: string; message?: string }
-      // Only real progress drives the progress bar (Ticket T1/T2): the engine
-      // also emits warning notices on this channel, and anything unrecognised
-      // is logged rather than trusted to have the progress fields.
-      if (data.status === 'training' || data.status === 'done') setProgress(data)
-      else if (data.type === 'notice' && typeof data.message === 'string') {
-        const message = data.message
+      // Ticket T1: the console shows what the *run* said, not every object
+      // that crossed the channel. Anything unrecognised — most notably the
+      // engine's interstitial {"error": ...} lines, which used to be pasted
+      // straight into the console and read as a failed run — is dropped here;
+      // it is already in the engine log panel below, verbatim, where a
+      // developer can find it and a singer isn't confronted with it.
+      const event = interpretProgress(raw)
+      if (event.kind === 'ignored') return
+
+      if (event.kind === 'progress') setProgress(event.data as ProgressData)
+      else if (event.kind === 'notice') {
+        const message = event.message
         setNotices((prev) => (prev.includes(message) ? prev : [...prev, message]))
+      } else {
+        // The run declaring itself failed — the one terminal failure the
+        // stream itself can report. Held for the banner; the phase change
+        // happens when the call unwinds, so there is still one exit path.
+        streamFailureRef.current = event.message
       }
+
       // Professional runs emit thousands of lines; keep the tail so the DOM stays small.
       setLogs((prev) => {
-        const next = [...prev, JSON.stringify(data)]
+        const line = event.kind === 'progress' ? JSON.stringify(event.data) : `⚠ ${event.message ?? ''}`
+        const next = [...prev, line]
         return next.length > MAX_LOG_LINES ? next.slice(-MAX_LOG_LINES) : next
       })
     })
@@ -268,6 +288,9 @@ export function TrainingView(): JSX.Element {
       return
     }
     if (!envSummary.canTrain) { setError(t('envCheck.blocked')); return }
+    // Ticket T3's short-data question and Ticket T2's CPU acknowledgement
+    // both live in this checklist now — checkTrainingInputs() carries the
+    // same thresholds (SHORT_DATA_WARN_SEC, RECOMMENDED_DURATION_SEC).
     setPreflight(runPreflight())
   }
 
@@ -280,6 +303,8 @@ export function TrainingView(): JSX.Element {
     setNotices([])
     setResult(null)
     setDemoUrl(null)
+    setShowQuality(false)
+    streamFailureRef.current = null
     setPhase('training')
     setEngineBusy(true)
     setEngineStatus(t('status.training', { mode: t(`training.${mode}`) }))
@@ -310,7 +335,7 @@ export function TrainingView(): JSX.Element {
       }
 
       const engineDevice = engineDeviceFor(deviceMode, device)
-      const res = await window.engine.stream('train_model', {
+      const raw = await window.engine.stream('train_model', {
         mode, epochs, batch: 16, model_id: id,
         // Ticket T2: the device is decided here, not re-detected in the
         // engine, so what the progress panel shows is what the run uses.
@@ -319,7 +344,19 @@ export function TrainingView(): JSX.Element {
       }, mode === 'professional' && engineDevice === 'cpu'
         ? { stallTimeoutMs: CPU_PROFESSIONAL_STALL_TIMEOUT_MS }
         : undefined,
-      ) as TrainingResult
+      )
+
+      // Ticket T1: the bridge resolves with the last JSON object the engine
+      // printed, which is a bare {"error": ...} when a handler bailed out
+      // without raising. That used to flow on as if it were a model — an
+      // undefined path handed to the demo synthesiser, a library card
+      // pointing at nothing, and no error shown anywhere. A run without a
+      // model file is a failed run, and says so.
+      const outcome = interpretTrainingResult<TrainingResult>(raw)
+      if (!outcome.ok) {
+        throw new Error(outcome.message ?? streamFailureRef.current ?? t('training.failed'))
+      }
+      const res = outcome.result
 
       // Leave the training view before doing post-processing so the progress
       // component and its log nodes are unmounted and can be collected.
@@ -346,6 +383,12 @@ export function TrainingView(): JSX.Element {
       })
 
       setPhase('done')
+      // Ticket T2: the report is the run's conclusion, not an optional extra
+      // — a quiet "✓ 训练完成" over a model trained on 34 seconds of noisy
+      // audio is exactly how users ended up with a voice that wasn't theirs
+      // and no idea why. It always opens; the model is already saved either
+      // way, so this only decides what the user knows about it.
+      setShowQuality(true)
       // Ticket 35 §5: fires even if the user has since navigated away from
       // Model Training, since it's an app-wide notification, not local state.
       notify({
@@ -371,11 +414,13 @@ export function TrainingView(): JSX.Element {
       }
       // Ticket T2: surface what the engine actually said (disk full, dataset
       // unreadable, missing Python) rather than Electron's IPC wrapper around it.
-      // Ticket P3: and where that sentence is a known failure mode, lead with
-      // what to do about it — the raw text stays available below it.
-      const raw     = describeError(err, t('training.failed'))
-      const failure = classifyTrainingFailure(raw)
-      const message = failure.messageKey ? t(failure.messageKey) : raw
+      // Ticket T1: when the run announced its own failure on the progress
+      // stream, that sentence beats the exit code the process died with.
+      // Ticket P3: either way, where it is a known failure mode, lead with
+      // what to do about it and keep the engine's text below.
+      const rawMessage = streamFailureRef.current ?? describeError(err, t('training.failed'))
+      const failure    = classifyTrainingFailure(rawMessage)
+      const message    = failure.messageKey ? t(failure.messageKey) : rawMessage
       setError(message)
       setErrorDetail(failure.messageKey ? failure.detail : null)
       setPhase('idle')
@@ -468,31 +513,41 @@ export function TrainingView(): JSX.Element {
     setCoverUrl(m.coverDataUrl)
     setMode(m.mode)
     setEpochs(m.epochs)
+    returnToForm()
+    window.scrollTo({ top: 0, behavior: 'smooth' })
+  }
+
+  /**
+   * Ticket T2's 重新训练: back to the form with this run's settings intact,
+   * ready for better material.
+   *
+   * The file selection is cleared with everything else because the dropzone
+   * unmounts while a run is in flight and comes back empty — keeping the
+   * previous File objects in state behind an empty dropzone meant the next
+   * click silently retrained on exactly the material the report had just
+   * asked the user to replace.
+   */
+  function returnToForm(): void {
     setPhase('idle')
+    setShowQuality(false)
+    setAudioFiles([])
     setResult(null)
     setDemoUrl(null)
     setError(null)
     setErrorDetail(null)
     setNameError(null)
-    window.scrollTo({ top: 0, behavior: 'smooth' })
+    setProgress(null)
+    setNotices([])
+    setLogs([])
   }
 
   // ── reset to form ─────────────────────────────────────────
   function handleReset(): void {
-    setPhase('idle')
     setModelName('')
     setCoverUrl(null)
-    setAudioFiles([])
     setMode('standard')
     setEpochs(10)
-    setProgress(null)
-    setNotices([])
-    setLogs([])
-    setResult(null)
-    setDemoUrl(null)
-    setError(null)
-    setErrorDetail(null)
-    setNameError(null)
+    returnToForm()
   }
 
   return (
@@ -667,24 +722,32 @@ export function TrainingView(): JSX.Element {
           <div className="card">
             <div className="card-title" style={{ color: 'var(--success)' }}>{t('training.complete')}</div>
 
-            {/* Ticket 48 §7: low similarity between the exported model and its
-                training material means the voice likely won't resemble the
-                singer — surface that plainly instead of letting a bad model
-                look identical to a good one in the UI. */}
-            {result.quality_warning && (
-              <div className="cpu-notice" style={{ marginBottom: 12 }}>
-                ⚠ {result.quality_warning}
-              </div>
-            )}
-            {result.data_quality?.warnings.map((w, i) => (
-              <div key={i} className="cpu-notice" style={{ marginBottom: 12 }}>
-                ⚠ {w}
-              </div>
-            ))}
-
-            <div className="result-box">
-              {JSON.stringify({ ...result, output_path: result.output_path.split('/').pop() }, null, 2)}
+            {/* Ticket T2: the findings live in the report card now — the
+                banners and the raw JSON dump that used to sit here were the
+                whole problem: unreadable, unranked, and indistinguishable
+                from an error. What stays on the page is a one-line summary
+                and a way back into the report. */}
+            <div className="tc-summary">
+              <span className="tc-summary-item">
+                {t('training.epochs')}: {result.epochs}
+              </span>
+              <span className="tc-summary-item">
+                {t('training.loss', { value: result.best_loss.toFixed(5) })}
+              </span>
+              <span className="tc-summary-item">{result.device.toUpperCase()}</span>
+              <button type="button" className="quality-link" onClick={() => setShowQuality(true)}>
+                {t('quality.reopen')}
+              </button>
             </div>
+
+            {/* Kept for anyone diagnosing a run, collapsed so it is a tool
+                rather than the first thing the page says. */}
+            <details className="tc-raw">
+              <summary>{t('training.rawResult')}</summary>
+              <div className="result-box">
+                {JSON.stringify({ ...result, output_path: result.output_path.split('/').pop() }, null, 2)}
+              </div>
+            </details>
 
             {demoUrl && (
               <div style={{ marginTop: 16 }}>
@@ -748,8 +811,10 @@ export function TrainingView(): JSX.Element {
       )}
 
       {/* Ticket P1/P2: the local self-check, acknowledged before the engine
-          is started. Blockers disable the confirm button; a professional run
-          heading for the CPU also gets a one-click way out. */}
+          is started. It carries the short-data question (Ticket T3) and the
+          CPU acknowledgement (Ticket T2) as rows of its own checklist.
+          Blockers disable the confirm button; a professional run heading for
+          the CPU also gets a one-click way out. */}
       {preflight && (
         <TrainingPreflightDialog
           result={preflight}
@@ -758,6 +823,16 @@ export function TrainingView(): JSX.Element {
             : undefined}
           onConfirm={() => { setPreflight(null); void runTraining() }}
           onCancel={() => setPreflight(null)}
+        />
+      )}
+
+      {/* Ticket T2: what the run actually produced, and what to do about it. */}
+      {showQuality && result && (
+        <QualityReport
+          result={result}
+          onKeep={() => setShowQuality(false)}
+          onRetrain={returnToForm}
+          onOpenDenoise={() => { setShowQuality(false); setActiveView('waveform') }}
         />
       )}
 

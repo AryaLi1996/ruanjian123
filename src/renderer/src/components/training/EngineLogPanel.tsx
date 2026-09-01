@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { EngineLogEntry } from '../../global'
+import { countErrors, severityOf } from '../../utils/engineLog'
 
 interface Props {
   entries: EngineLogEntry[]
@@ -38,7 +39,13 @@ export function EngineLogPanel({ entries, defaultOpen = false }: Props): JSX.Ele
     pinnedRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24
   }
 
-  const errorCount = entries.filter((e) => e.kind === 'error').length
+  // Ticket T1: the bridge labels every untagged stderr line "error" because
+  // its classification drives timeouts, not presentation — so a healthy run's
+  // library warnings and interstitial {"error": ...} lines used to be counted
+  // here and shown in red, telling the user a successful run had failed a
+  // dozen times. severityOf() re-reads the line and only genuine failures
+  // reach the badge; everything else is still listed, just not shouted.
+  const errorCount = countErrors(entries)
 
   return (
     <div className="engine-log">
@@ -67,10 +74,10 @@ export function EngineLogPanel({ entries, defaultOpen = false }: Props): JSX.Ele
           aria-label={t('training.engineLog')}
         >
           {entries.length === 0 ? (
-            <div className="engine-log-line engine-log-muted">{t('training.engineLogEmpty')}</div>
+            <div className="engine-log-line engine-log-muted engine-log-empty">{t('training.engineLogEmpty')}</div>
           ) : (
             entries.map((entry, i) => (
-              <div key={i} className={`engine-log-line engine-log-${entry.kind}`}>
+              <div key={i} className={`engine-log-line engine-log-${severityOf(entry)}`}>
                 {entry.line}
               </div>
             ))
