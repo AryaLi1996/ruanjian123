@@ -728,6 +728,25 @@ All targets measured on a CPU-only system (Intel Core i5, no GPU):
 | Watermark embed (1 s audio) | — | imperceptible (SNR > 40 dB) | 54 dB |
 | Model encrypt/decrypt | 527 KB | — | < 5 ms |
 
+### Training-material limits (Tickets P1-P3)
+
+None of these is a configurable quota — they fall out of how the pipeline is
+built, and each one used to fail silently. `utils/trainingPreflight.ts` now
+checks all of them locally before the engine is started, and shows the result
+as a checklist on the 开始本地训练 button.
+
+| Limit | Where it comes from | What happens without the check |
+|---|---|---|
+| Readable formats: `.wav` `.flac` `.ogg` `.mp3` | `engine/trainer.py` (`preprocess_vocals`, `validate_training_data`) | `.m4a` is accepted by the dropzone, listed in the UI, then skipped — it never trains |
+| One chunk ≈ 2.97 s (`CHUNK_FRAMES × SYNTH_HOP / SYNTH_SR`) | `engine/trainer.py` | Shorter clips produce no chunks; if *every* file is short, `VocalDataset` falls back to synthetic sine waves and reports success |
+| Unique file names | `engine:save-files` writes into one directory keyed by `file.name` | Same-named files overwrite each other; only the last one trains |
+| Recommended duration: 5 min standard / 15 min professional | `MIN_DURATION_SEC` in `engine/trainer.py` | Warning only — a short upload still trains, just poorly |
+| Silence budget: 5 min default, 30 min for professional-on-CPU | `callPythonEngineStreaming`'s stall timer; the engine emits progress once per *epoch* | A large CPU run is killed as "hung" while working correctly |
+| Memory: `upload × 1.5 + 2 GB` | Renderer reads every file into an ArrayBuffer and sends them in one IPC message | Renderer OOM before the engine ever starts |
+
+There is deliberately **no** cap on file count or total duration; the checks
+above warn and explain rather than refuse.
+
 **Note**: Timing with stub models is near-instantaneous. Production models will be larger and slower. Benchmarks should be re-run with real trained ONNX models before shipping.
 
 ---

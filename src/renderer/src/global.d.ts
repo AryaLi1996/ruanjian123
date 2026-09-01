@@ -115,6 +115,10 @@ export interface EnvironmentReport {
   platform: string
   python:   string | null
   missing:  string[]
+  // Ticket P1: raw memory figures for the training pre-flight's sizing
+  // check. Older engine builds omit them — treat as "unknown", never as 0.
+  total_ram_gb?:     number | null
+  available_ram_gb?: number | null
 }
 
 interface WarmupResult {
@@ -169,7 +173,9 @@ declare global {
     engine: {
       call:              (method: string, ...args: unknown[]) => Promise<unknown>
       onProgress:        (callback: (data: unknown) => void) => () => void
-      stream:            (method: string, ...args: unknown[]) => Promise<unknown>
+      stream:            (
+        method: string, params: unknown, options?: { stallTimeoutMs?: number },
+      ) => Promise<unknown>
       /** Ticket UI-10: kills the streaming run in flight; true if one was killed. */
       cancelStream:      () => Promise<boolean>
       /** Raw engine output — stage diagnostics, heartbeats, stray warnings (Tickets T1/T3). */

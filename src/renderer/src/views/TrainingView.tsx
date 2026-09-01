@@ -3,24 +3,26 @@ import { useTranslation } from 'react-i18next'
 import { useAppStore, type TrainedModel } from '../store/useAppStore'
 import { notify, useNotificationStore } from '../store/useNotificationStore'
 import { playCompletionChime } from '../utils/sound'
-import { AudioDropzone } from '../components/training/AudioDropzone'
+import { AudioDropzone, type TrainingUpload } from '../components/training/AudioDropzone'
 import { ModeSelector, type TrainingMode } from '../components/training/ModeSelector'
 import { TrainingProgress, type ProgressData } from '../components/training/TrainingProgress'
 import { AudioPlayer } from '../components/training/AudioPlayer'
 import { ModelCard } from '../components/training/ModelCard'
 import { ConfirmDialog } from '../components/common/ConfirmDialog'
+import { TrainingPreflightDialog } from '../components/training/TrainingPreflightDialog'
 import { EnvironmentCheck } from '../components/training/EnvironmentCheck'
 import { DeviceSelector } from '../components/training/DeviceSelector'
 import { EngineLogPanel } from '../components/training/EngineLogPanel'
 import { QualityReport } from '../components/training/QualityReport'
 import type { EngineDeviceInfo, EngineLogEntry, EnvironmentReport } from '../global'
 import {
-  CPU_SLOWDOWN_MAX, CPU_SLOWDOWN_MIN, describeDevice, engineDeviceFor,
-  needsCpuWarning, resolveDeviceMode, summarizeReport, type DeviceMode,
+  describeDevice, engineDeviceFor, resolveDeviceMode, summarizeReport, type DeviceMode,
 } from '../utils/environmentCheck'
 import { describeError } from '../utils/errorMessage'
 import { interpretProgress, interpretTrainingResult } from '../utils/engineLog'
-import { checkShortData, type DataQualityReport, type ShortDataWarning } from '../utils/trainingQuality'
+import type { DataQualityReport } from '../utils/trainingQuality'
+import { checkTrainingInputs, type PreflightResult } from '../utils/trainingPreflight'
+import { classifyTrainingFailure } from '../utils/trainingError'
 
 type Phase = 'idle' | 'training' | 'finalizing' | 'done'
 
@@ -33,6 +35,17 @@ const MAX_LOG_LINES = 200
  * run, so it gets its own, larger cap.
  */
 const MAX_ENGINE_LOG_ENTRIES = 500
+
+/**
+ * Ticket P2: silence budget for a professional-mode run that will happen on
+ * the CPU. The engine reports progress once per epoch (engine/trainer.py) and
+ * preprocesses the whole upload before the first one, so on a laptop CPU it
+ * routinely stays quiet for longer than the bridge's 5-minute default and is
+ * killed as "hung" while working correctly. The user has explicitly accepted
+ * the slow path by this point; give it room instead of a false diagnosis.
+ */
+const CPU_PROFESSIONAL_STALL_TIMEOUT_MS = 30 * 60_000
+
 
 interface TrainingResult {
   status:           string
@@ -57,7 +70,7 @@ export function TrainingView(): JSX.Element {
   // ── form state ───────────────────────────────────────────
   const [modelName,   setModelName]   = useState('')
   const [coverUrl,    setCoverUrl]    = useState<string | null>(null)
-  const [audioFiles,  setAudioFiles]  = useState<File[]>([])
+  const [audioFiles,  setAudioFiles]  = useState<TrainingUpload[]>([])
   const [mode,        setMode]        = useState<TrainingMode>('standard')
   const [epochs,      setEpochs]      = useState(10)
 
@@ -112,13 +125,14 @@ export function TrainingView(): JSX.Element {
   // ── training state ───────────────────────────────────────
   const [phase,       setPhase]       = useState<Phase>('idle')
   const [cancelling,  setCancelling]  = useState(false)
-  // Ticket T2: a CPU run has to be acknowledged before it starts, so the
-  // 5-10x slowdown is a decision rather than a surprise discovered an hour in.
-  const [confirmingCpu, setConfirmingCpu] = useState(false)
-  // Ticket T3: the same acknowledgement, one step earlier, for a dataset far
-  // too short to produce a usable voice. Holds the numbers the dialog quotes,
-  // or null when there is nothing to question.
-  const [confirmingShortData, setConfirmingShortData] = useState<ShortDataWarning | null>(null)
+  // Ticket P1: the local self-check the user acknowledges before a run starts.
+  // It subsumes both earlier pre-run dialogs: the CPU slowdown (Ticket T2) and
+  // the too-short-dataset question (Ticket T3) are now rows on one checklist
+  // that also covers the limits that used to fail silently (see
+  // utils/trainingPreflight.ts). One click, one dialog, one answer to "why did
+  // nothing happen?" — asking the same user three modals in a row is how a
+  // warning gets clicked through unread.
+  const [preflight, setPreflight] = useState<PreflightResult | null>(null)
   // Ticket T2: the quality report shown once a run finishes. Kept separate
   // from `result` so dismissing the report doesn't discard the run.
   const [showQuality, setShowQuality] = useState(false)
@@ -134,6 +148,9 @@ export function TrainingView(): JSX.Element {
   const [result,      setResult]      = useState<TrainingResult | null>(null)
   const [demoUrl,     setDemoUrl]     = useState<string | null>(null)
   const [error,       setError]       = useState<string | null>(null)
+  // Ticket P3: the engine's own words behind a localized explanation, shown
+  // in a collapsible panel rather than as the headline.
+  const [errorDetail, setErrorDetail] = useState<string | null>(null)
   // Ticket T1/T2: the model-name check is a field-level problem, so it is
   // reported on the field (and focused) instead of only in the page-wide
   // banner sitting a screen further down, where a failed click read as the
@@ -142,7 +159,6 @@ export function TrainingView(): JSX.Element {
   const nameInputRef = useRef<HTMLInputElement>(null)
   // Ticket T3: measured by the dropzone as each file decodes; a lower bound,
   // since a file whose duration can't be read contributes nothing.
-  const [audioSeconds, setAudioSeconds] = useState(0)
   // Ticket T1: the reason from a `{"status":"failed"}` on the progress
   // stream, kept so the run's own words survive into the error banner — the
   // stream's rejection afterwards is usually a bare non-zero exit code.
@@ -233,12 +249,32 @@ export function TrainingView(): JSX.Element {
 
   // ── start training ────────────────────────────────────────
   /**
-   * Gate keeper for the start button: name present, environment green, and —
-   * when the run will land on the CPU — an explicit confirmation first
-   * (Ticket T2). The run itself is in runTraining below.
+   * Everything the pre-flight needs to know about the current form, in the
+   * shape checkTrainingInputs() takes.
+   */
+  function runPreflight(forMode: TrainingMode = mode): PreflightResult {
+    return checkTrainingInputs({
+      files: audioFiles.map((u) => ({
+        name: u.file.name, sizeBytes: u.file.size, duration: u.duration,
+      })),
+      mode: forMode,
+      deviceMode,
+      device,
+      // Older engine builds don't report this; null means "couldn't tell",
+      // which the check reports as a warning rather than inventing a number.
+      availableRamGb: envReport?.available_ram_gb ?? null,
+    })
+  }
+
+  /**
+   * Gate keeper for the start button: name present, environment green, then
+   * the local self-check (Ticket P1) — data problems and the CPU slowdown
+   * alike are shown as one acknowledgeable checklist before the engine is
+   * started at all. The run itself is in runTraining below.
    */
   function handleTrain(): void {
     setError(null)
+    setErrorDetail(null)
     setNameError(null)
     if (!modelName.trim()) {
       // Ticket T1: this used to set the *label* ('模型名称 *') as the error and
@@ -252,29 +288,15 @@ export function TrainingView(): JSX.Element {
       return
     }
     if (!envSummary.canTrain) { setError(t('envCheck.blocked')); return }
-    // Ticket T3: 34 seconds of audio cannot produce a usable voice on any
-    // setting, and the user only found that out an hour later, from a model
-    // that sounded nothing like them. Ask first — the check is free, since
-    // the dropzone has already decoded these durations for its own display.
-    const shortData = checkShortData(audioFiles.length, audioSeconds, mode)
-    if (shortData) { setConfirmingShortData(shortData); return }
-    startAfterDataCheck()
-  }
-
-  /**
-   * Second half of the gate: the CPU acknowledgement, then the run.
-   *
-   * Split out so the short-data dialog can hand off to it rather than
-   * skipping the CPU warning — the two questions are independent, and a short
-   * *and* CPU-bound run deserves both.
-   */
-  function startAfterDataCheck(): void {
-    if (needsCpuWarning(deviceMode, device)) { setConfirmingCpu(true); return }
-    void runTraining()
+    // Ticket T3's short-data question and Ticket T2's CPU acknowledgement
+    // both live in this checklist now — checkTrainingInputs() carries the
+    // same thresholds (SHORT_DATA_WARN_SEC, RECOMMENDED_DURATION_SEC).
+    setPreflight(runPreflight())
   }
 
   async function runTraining(): Promise<void> {
     setError(null)
+    setErrorDetail(null)
     setNameError(null)
     setLogs([])
     setProgress(null)
@@ -307,18 +329,22 @@ export function TrainingView(): JSX.Element {
       let dataDir: string | undefined
       if (audioFiles.length > 0) {
         const files = await Promise.all(
-          audioFiles.map(async (f) => ({ name: f.name, buffer: await f.arrayBuffer() }))
+          audioFiles.map(async ({ file }) => ({ name: file.name, buffer: await file.arrayBuffer() }))
         )
         dataDir = await window.engine.saveTrainingFiles(files)
       }
 
+      const engineDevice = engineDeviceFor(deviceMode, device)
       const raw = await window.engine.stream('train_model', {
         mode, epochs, batch: 16, model_id: id,
         // Ticket T2: the device is decided here, not re-detected in the
         // engine, so what the progress panel shows is what the run uses.
-        device: engineDeviceFor(deviceMode, device),
+        device: engineDevice,
         ...(dataDir ? { data_dir: dataDir } : {}),
-      })
+      }, mode === 'professional' && engineDevice === 'cpu'
+        ? { stallTimeoutMs: CPU_PROFESSIONAL_STALL_TIMEOUT_MS }
+        : undefined,
+      )
 
       // Ticket T1: the bridge resolves with the last JSON object the engine
       // printed, which is a bare {"error": ...} when a handler bailed out
@@ -390,8 +416,13 @@ export function TrainingView(): JSX.Element {
       // unreadable, missing Python) rather than Electron's IPC wrapper around it.
       // Ticket T1: when the run announced its own failure on the progress
       // stream, that sentence beats the exit code the process died with.
-      const message = streamFailureRef.current ?? describeError(err, t('training.failed'))
+      // Ticket P3: either way, where it is a known failure mode, lead with
+      // what to do about it and keep the engine's text below.
+      const rawMessage = streamFailureRef.current ?? describeError(err, t('training.failed'))
+      const failure    = classifyTrainingFailure(rawMessage)
+      const message    = failure.messageKey ? t(failure.messageKey) : rawMessage
       setError(message)
+      setErrorDetail(failure.messageKey ? failure.detail : null)
       setPhase('idle')
       notify({
         category: 'taskFailure',
@@ -500,10 +531,10 @@ export function TrainingView(): JSX.Element {
     setPhase('idle')
     setShowQuality(false)
     setAudioFiles([])
-    setAudioSeconds(0)
     setResult(null)
     setDemoUrl(null)
     setError(null)
+    setErrorDetail(null)
     setNameError(null)
     setProgress(null)
     setNotices([])
@@ -560,7 +591,7 @@ export function TrainingView(): JSX.Element {
                     onChange={(e) => {
                       setModelName(e.target.value)
                       if (nameError) setNameError(null)
-                      if (error) setError(null)
+                      if (error) { setError(null); setErrorDetail(null) }
                     }}
                     aria-invalid={nameError ? true : undefined}
                     aria-describedby={nameError ? 'training-model-name-error' : undefined}
@@ -587,7 +618,7 @@ export function TrainingView(): JSX.Element {
 
           <div className="card">
             <div className="card-title">{t('training.material')}</div>
-            <AudioDropzone onFilesChange={setAudioFiles} onDurationChange={setAudioSeconds} />
+            <AudioDropzone onFilesChange={setAudioFiles} />
             {audioFiles.length === 0 && (
               <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 8 }}>
                 {t('training.noFiles')}
@@ -622,7 +653,17 @@ export function TrainingView(): JSX.Element {
             <EngineLogPanel entries={engineLogs} />
           </div>
 
-          {error && <div className="error-banner" role="alert">{error}</div>}
+          {error && (
+            <div className="error-banner" role="alert">
+              <div>{error}</div>
+              {errorDetail && (
+                <details className="error-detail">
+                  <summary>{t('training.error.showDetail')}</summary>
+                  <pre className="error-detail-body">{errorDetail}</pre>
+                </details>
+              )}
+            </div>
+          )}
 
           <button
             className="btn btn-primary"
@@ -769,19 +810,19 @@ export function TrainingView(): JSX.Element {
         </div>
       )}
 
-      {/* Ticket T3: a dataset too short to work, questioned before the run
-          rather than explained after it. */}
-      {confirmingShortData && (
-        <ConfirmDialog
-          title={t('training.shortDataTitle')}
-          message={t('training.shortDataMessage', {
-            seconds: confirmingShortData.seconds,
-            minutes: confirmingShortData.recommended,
-            mode:    t(`training.${mode}`),
-          })}
-          confirmLabel={t('training.shortDataConfirm')}
-          onConfirm={() => { setConfirmingShortData(null); startAfterDataCheck() }}
-          onCancel={() => setConfirmingShortData(null)}
+      {/* Ticket P1/P2: the local self-check, acknowledged before the engine
+          is started. It carries the short-data question (Ticket T3) and the
+          CPU acknowledgement (Ticket T2) as rows of its own checklist.
+          Blockers disable the confirm button; a professional run heading for
+          the CPU also gets a one-click way out. */}
+      {preflight && (
+        <TrainingPreflightDialog
+          result={preflight}
+          onSwitchToStandard={preflight.cpuProfessional
+            ? () => { setMode('standard'); setPreflight(runPreflight('standard')) }
+            : undefined}
+          onConfirm={() => { setPreflight(null); void runTraining() }}
+          onCancel={() => setPreflight(null)}
         />
       )}
 
@@ -792,21 +833,6 @@ export function TrainingView(): JSX.Element {
           onKeep={() => setShowQuality(false)}
           onRetrain={returnToForm}
           onOpenDenoise={() => { setShowQuality(false); setActiveView('waveform') }}
-        />
-      )}
-
-      {/* Ticket T2: explicit acknowledgement that this run is CPU-bound. */}
-      {confirmingCpu && (
-        <ConfirmDialog
-          title={t('training.cpuWarningTitle')}
-          message={t('training.cpuWarningMessage', {
-            min: CPU_SLOWDOWN_MIN, max: CPU_SLOWDOWN_MAX,
-            mode: t(`training.${mode}`),
-            cpuTime: mode === 'professional' ? '≤ 6 h' : '≤ 20 min',
-          })}
-          confirmLabel={t('training.cpuWarningConfirm')}
-          onConfirm={() => { setConfirmingCpu(false); void runTraining() }}
-          onCancel={() => setConfirmingCpu(false)}
         />
       )}
 

@@ -10,8 +10,12 @@ contextBridge.exposeInMainWorld('engine', {
     return () => ipcRenderer.removeListener('engine:progress', handler)
   },
 
-  stream: (method: string, ...args: unknown[]): Promise<unknown> =>
-    ipcRenderer.invoke('engine:stream', method, args),
+  // Ticket P2: `options.stallTimeoutMs` raises the "engine has gone quiet"
+  // budget for runs that legitimately take longer between progress lines.
+  stream: (
+    method: string, params: unknown, options?: { stallTimeoutMs?: number },
+  ): Promise<unknown> =>
+    ipcRenderer.invoke('engine:stream', method, [params], options),
 
   /** Ticket UI-10: kills the streaming run in flight. Resolves true if one was killed. */
   cancelStream: (): Promise<boolean> => ipcRenderer.invoke('engine:cancel'),

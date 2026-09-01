@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useEffect } from 'react'
+import { useState, useRef, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { getAudioInfo, formatDuration } from '../../utils/audio'
 
@@ -10,16 +10,27 @@ interface AudioFileEntry {
   loading:     boolean
 }
 
+/**
+ * One uploaded file plus the duration decoded for its waveform. Ticket P1:
+ * the pre-flight needs both, and the dropzone has already paid for the
+ * decode — re-deriving it at start time would decode every file a second
+ * time just to answer "is this long enough?".
+ */
+export interface TrainingUpload {
+  file:     File
+  /** Seconds, or null while still decoding / when the browser could not decode it. */
+  duration: number | null
+}
+
 interface Props {
-  onFilesChange: (files: File[]) => void
   /**
-   * Ticket T3: total measured duration of the current selection, in seconds,
-   * reported as each file's metadata finishes decoding. The training view
-   * uses it to question a run before it starts rather than after it has spent
-   * an hour producing a model from 34 seconds of audio. Files whose duration
-   * could not be read contribute nothing, so this is a lower bound.
+   * Ticket P1: the selection, each file paired with the duration this
+   * component has already decoded for its own display. It supersedes the
+   * separate `onDurationChange` total (Ticket T3): the pre-flight needs
+   * per-file durations — a clip too short to yield a training chunk is
+   * invisible in a sum — and derives the total from the same list.
    */
-  onDurationChange?: (totalSeconds: number) => void
+  onFilesChange: (files: TrainingUpload[]) => void
 }
 
 const ACCEPT = new Set(['.wav', '.flac', '.mp3', '.ogg', '.m4a'])
@@ -29,7 +40,10 @@ function isAudioFile(f: File): boolean {
   return ACCEPT.has(ext) || f.type.startsWith('audio/')
 }
 
-export function AudioDropzone({ onFilesChange, onDurationChange }: Props): JSX.Element {
+const toUploads = (entries: AudioFileEntry[]): TrainingUpload[] =>
+  entries.map((e) => ({ file: e.file, duration: e.duration }))
+
+export function AudioDropzone({ onFilesChange }: Props): JSX.Element {
   const [entries, setEntries]   = useState<AudioFileEntry[]>([])
   const [dragging, setDragging] = useState(false)
   const inputRef                = useRef<HTMLInputElement>(null)
@@ -46,7 +60,7 @@ export function AudioDropzone({ onFilesChange, onDurationChange }: Props): JSX.E
 
     setEntries((prev) => {
       const next = [...prev, ...placeholders]
-      onFilesChange(next.map((e) => e.file))
+      onFilesChange(toUploads(next))
       return next
     })
 
@@ -56,9 +70,17 @@ export function AudioDropzone({ onFilesChange, onDurationChange }: Props): JSX.E
     // waveform/duration to this entry.
     for (const placeholder of placeholders) {
       const info = await getAudioInfo(placeholder.file)
-      setEntries((prev) => prev.map((e) =>
-        e.id === placeholder.id ? { ...e, ...info, loading: false } : e
-      ))
+      setEntries((prev) => {
+        const next = prev.map((e) =>
+          e.id === placeholder.id
+            ? { ...e, ...info, duration: info.duration > 0 ? info.duration : null, loading: false }
+            : e
+        )
+        // Republish as each duration lands: the pre-flight's duration and
+        // chunk checks are only as good as what has finished decoding.
+        onFilesChange(toUploads(next))
+        return next
+      })
     }
   }, [onFilesChange])
 
@@ -70,17 +92,12 @@ export function AudioDropzone({ onFilesChange, onDurationChange }: Props): JSX.E
   function handleRemove(id: string): void {
     setEntries((prev) => {
       const next = prev.filter((e) => e.id !== id)
-      onFilesChange(next.map((e) => e.file))
+      onFilesChange(toUploads(next))
       return next
     })
   }
 
   const totalDuration = entries.reduce((s, e) => s + (e.duration ?? 0), 0)
-
-  // Reported from an effect rather than from addFiles/handleRemove: durations
-  // arrive asynchronously per file, so the total at the moment the list
-  // changes is not the total once decoding settles.
-  useEffect(() => { onDurationChange?.(totalDuration) }, [totalDuration, onDurationChange])
 
   return (
     <div>

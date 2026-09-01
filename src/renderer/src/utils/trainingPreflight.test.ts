@@ -1,0 +1,149 @@
+import { describe, expect, it } from 'vitest'
+import {
+  checkTrainingInputs, estimateTrainingMemoryGb, isEngineReadable,
+  MIN_CHUNK_SEC, type PreflightInput, type TrainingFileInfo,
+} from './trainingPreflight'
+
+const MB = 1024 * 1024
+
+function file(name: string, duration: number | null, sizeMb = 10): TrainingFileInfo {
+  return { name, sizeBytes: sizeMb * MB, duration }
+}
+
+function input(over: Partial<PreflightInput> = {}): PreflightInput {
+  return {
+    files: [file('a.wav', 600), file('b.wav', 600)],
+    mode: 'standard',
+    deviceMode: 'gpu',
+    device: { gpu_available: true, training_device: 'cuda' },
+    availableRamGb: 16,
+    ...over,
+  }
+}
+
+/** Severity of the row with this id, or undefined when the row isn't shown. */
+function severity(result: ReturnType<typeof checkTrainingInputs>, id: string): string | undefined {
+  return result.items.find((i) => i.id === id)?.severity
+}
+
+describe('isEngineReadable', () => {
+  it('accepts what engine/trainer.py reads', () => {
+    for (const name of ['a.wav', 'B.FLAC', 'c.ogg', 'd.mp3']) {
+      expect(isEngineReadable(name)).toBe(true)
+    }
+  })
+
+  it('rejects .m4a, which the dropzone accepts but the engine skips silently', () => {
+    expect(isEngineReadable('vocal.m4a')).toBe(false)
+    expect(isEngineReadable('no-extension')).toBe(false)
+  })
+})
+
+describe('estimateTrainingMemoryGb', () => {
+  it('adds the fixed working-set allowance on top of the upload', () => {
+    expect(estimateTrainingMemoryGb(0)).toBe(2)
+    expect(estimateTrainingMemoryGb(2 * 1024 ** 3)).toBeCloseTo(5, 5)
+  })
+})
+
+describe('checkTrainingInputs', () => {
+  it('passes a clean GPU run with enough material', () => {
+    const result = checkTrainingInputs(input())
+    expect(result.canProceed).toBe(true)
+    expect(result.cpuProfessional).toBe(false)
+    expect(result.items.every((i) => i.severity === 'ok')).toBe(true)
+  })
+
+  it('blocks formats the engine cannot read', () => {
+    const result = checkTrainingInputs(input({ files: [file('a.wav', 600), file('b.m4a', 600)] }))
+    expect(severity(result, 'format')).toBe('blocker')
+    expect(result.canProceed).toBe(false)
+    expect(result.items[0].params.names).toBe('b.m4a')
+  })
+
+  it('blocks duplicate names, which overwrite each other on save', () => {
+    const result = checkTrainingInputs(input({ files: [file('干音.wav', 600), file('干音.wav', 600)] }))
+    expect(severity(result, 'duplicateNames')).toBe('blocker')
+    expect(result.canProceed).toBe(false)
+  })
+
+  it('warns when some clips are shorter than one training chunk', () => {
+    const result = checkTrainingInputs(input({ files: [file('a.wav', 600), file('b.wav', 1)] }))
+    expect(severity(result, 'chunkable')).toBe('warning')
+    expect(result.canProceed).toBe(true)
+  })
+
+  it('blocks when every clip is too short to produce any chunk', () => {
+    const result = checkTrainingInputs(input({ files: [file('a.wav', 1), file('b.wav', 2)] }))
+    expect(severity(result, 'chunkable')).toBe('blocker')
+    expect(result.canProceed).toBe(false)
+  })
+
+  it('treats exactly one chunk of audio as usable', () => {
+    const result = checkTrainingInputs(input({ files: [file('a.wav', MIN_CHUNK_SEC)] }))
+    expect(severity(result, 'chunkable')).toBeUndefined()
+  })
+
+  it('warns below the mode-specific recommended duration', () => {
+    const short = checkTrainingInputs(input({ files: [file('a.wav', 200)] }))
+    expect(severity(short, 'duration')).toBe('warning')
+
+    // 6 minutes clears standard mode's 5 but not professional mode's 15.
+    const forStandard = checkTrainingInputs(input({ files: [file('a.wav', 360)] }))
+    expect(severity(forStandard, 'duration')).toBe('ok')
+    const forPro = checkTrainingInputs(input({ files: [file('a.wav', 360)], mode: 'professional' }))
+    expect(severity(forPro, 'duration')).toBe('warning')
+  })
+
+  it('warns when no material was uploaded at all (synthetic-data run)', () => {
+    const result = checkTrainingInputs(input({ files: [] }))
+    expect(severity(result, 'duration')).toBe('warning')
+    expect(result.canProceed).toBe(true)
+  })
+
+  it('warns when the estimated memory exceeds what is free', () => {
+    const result = checkTrainingInputs(input({
+      files: [file('a.wav', 600, 4096)], availableRamGb: 4,
+    }))
+    expect(severity(result, 'memory')).toBe('warning')
+    // Advisory, not a blocker: the estimate is coarse and the user can act on it.
+    expect(result.canProceed).toBe(true)
+  })
+
+  it('reports unknown memory rather than assuming it is fine', () => {
+    const result = checkTrainingInputs(input({ availableRamGb: null }))
+    expect(severity(result, 'memory')).toBe('warning')
+    expect(result.items.find((i) => i.id === 'memory')?.messageKey)
+      .toBe('preflight.memory.unknown')
+  })
+
+  it('flags a professional run that will land on the CPU', () => {
+    const result = checkTrainingInputs(input({ mode: 'professional', deviceMode: 'cpu' }))
+    expect(result.cpuProfessional).toBe(true)
+    expect(result.items.find((i) => i.id === 'device')?.messageKey)
+      .toBe('preflight.cpuProfessional.warn')
+  })
+
+  it('treats GPU mode without a usable GPU as a CPU run', () => {
+    const result = checkTrainingInputs(input({
+      mode: 'professional', deviceMode: 'gpu', device: { gpu_available: false },
+    }))
+    expect(result.cpuProfessional).toBe(true)
+  })
+
+  it('warns about the plain CPU slowdown outside professional mode', () => {
+    const result = checkTrainingInputs(input({ deviceMode: 'cpu' }))
+    expect(result.cpuProfessional).toBe(false)
+    expect(result.items.find((i) => i.id === 'device')?.messageKey).toBe('preflight.device.cpu')
+  })
+
+  it('lists blockers before warnings before passes', () => {
+    const result = checkTrainingInputs(input({
+      files: [file('a.m4a', 600), file('b.wav', 10)],
+      deviceMode: 'cpu', mode: 'professional', availableRamGb: 16,
+    }))
+    const order = result.items.map((i) => i.severity)
+    expect(order).toEqual([...order].sort((a, b) =>
+      ({ blocker: 0, warning: 1, ok: 2 })[a] - ({ blocker: 0, warning: 1, ok: 2 })[b]))
+  })
+})

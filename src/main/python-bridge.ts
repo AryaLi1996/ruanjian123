@@ -8,7 +8,13 @@ import {
   classifyEngineLine, describeMissingInterpreter, describeSpawnFailure, describeStartupTimeout,
   parseEngineJsonLine, parseEngineStdout,
   resolveCommandOnPath, resolveStartupTimeoutMs, shouldRetryStartup, stripDiagnostics,
+  DEFAULT_STALL_TIMEOUT_MS, resolveStallTimeoutMs, STALL_TIMEOUT_MARKER, tailLines,
 } from './engine-preflight'
+
+// Re-exported so callers keep importing engine plumbing from one module even
+// though the pure, electron-free halves live in engine-preflight.ts (which is
+// what makes them unit-testable — see vitest.config.ts).
+export { DEFAULT_STALL_TIMEOUT_MS, MAX_STALL_TIMEOUT_MS, MIN_STALL_TIMEOUT_MS, resolveStallTimeoutMs } from './engine-preflight'
 
 interface EngineTarget {
   /** Executable to spawn — an absolute path to the bundled engine (or system Python in dev). */
@@ -219,7 +225,7 @@ export function getEngineStartupTimeoutMs(): number {
 function describeExitError(code: number | null, executable: string, stderr: string): string {
   // Verbose diagnostics and heartbeats are noise in an error message — the
   // interesting part is whatever the failure itself printed.
-  const detail = stripDiagnostics(stderr)
+  const detail = tailLines(stripDiagnostics(stderr))
   if (process.platform === 'win32' && code === 9009) {
     return (
       `Python engine exited 9009 (command not found) while trying to run "${executable}". ` +
@@ -405,7 +411,7 @@ export function callPythonEngineStreaming(
   method: string,
   args: unknown[],
   onData: (data: unknown) => void,
-  stallTimeoutMs = 5 * 60_000,
+  stallTimeoutMs = DEFAULT_STALL_TIMEOUT_MS,
   attempt = 0,
 ): Promise<unknown> {
   return new Promise((resolve, reject) => {
@@ -485,7 +491,15 @@ export function callPythonEngineStreaming(
     const armStallTimer = (): void => {
       clearTimeout(timer)
       timer = setTimeout(() => {
-        fail(`Python engine produced no output for ${stallTimeoutMs} ms and was killed (likely hung)`)
+        // Ticket P3: carry a stable marker and whatever the engine last said
+        // on stderr. Without them the renderer can only show the raw English
+        // sentence, and an OOM kill that printed a traceback right before
+        // going quiet loses its one piece of evidence.
+        const detail = stripDiagnostics(stderr)
+        fail(
+          `${STALL_TIMEOUT_MARKER}: Python engine produced no output for ${stallTimeoutMs} ms ` +
+          `and was killed (likely hung)${detail ? `. Details: ${tailLines(detail)}` : ''}`
+        )
       }, stallTimeoutMs)
     }
 

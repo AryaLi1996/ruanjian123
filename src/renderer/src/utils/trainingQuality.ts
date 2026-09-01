@@ -43,7 +43,9 @@ export const RECOMMENDED_DURATION_SEC: Record<string, number> = {
 }
 
 /**
- * Below this much material a run is worth questioning before it starts.
+ * Below this much material a run is worth questioning before it starts. The
+ * question itself is now a row on the pre-flight checklist (Ticket P1,
+ * utils/trainingPreflight.ts) rather than a dialog of its own.
  *
  * Deliberately far under the recommended minimum: a 4-minute upload is
  * merely short, and stopping to ask about it every time would train the user
@@ -142,34 +144,4 @@ export function assessQuality(result: QualityInput): QualityAssessment {
 export function scoreStars(score: number | null): number {
   if (score == null) return 0
   return Math.max(1, Math.min(5, Math.round(score * 5)))
-}
-
-// ── Pre-flight check (Ticket T3) ───────────────────────────────────────────
-
-export interface ShortDataWarning {
-  /** Total material the dropzone could measure, in seconds. */
-  seconds:     number
-  /** Recommended minimum for the chosen mode, in minutes. */
-  recommended: number
-}
-
-/**
- * Decide whether starting a run on this much audio deserves a confirmation.
- *
- * Returns null when there is nothing to warn about — including the
- * no-files-at-all case, which is already explained on the form (the run will
- * use demo data) and is not what this dialog is for.
- */
-export function checkShortData(
-  fileCount: number, totalSeconds: number, mode: string,
-): ShortDataWarning | null {
-  if (fileCount === 0) return null
-  // Durations are decoded asynchronously; a total of zero across real files
-  // means none of them have been measured yet, and guessing "0 seconds" would
-  // put a false warning in front of a perfectly good dataset.
-  if (totalSeconds <= 0) return null
-  if (totalSeconds >= SHORT_DATA_WARN_SEC) return null
-
-  const recommendedSec = RECOMMENDED_DURATION_SEC[mode] ?? RECOMMENDED_DURATION_SEC.standard
-  return { seconds: Math.round(totalSeconds), recommended: Math.round(recommendedSec / 60) }
 }

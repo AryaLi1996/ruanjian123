@@ -131,6 +131,37 @@ export function stripDiagnostics(stderr: string): string {
     .trim()
 }
 
+/**
+ * Ticket P3: marks a stall-timeout rejection so the renderer can recognise it
+ * without pattern-matching an English sentence (utils/trainingError.ts).
+ */
+export const STALL_TIMEOUT_MARKER = 'ENGINE_STALL_TIMEOUT'
+
+/** Last `limit` lines of engine output — enough context to diagnose, short enough to show. */
+export function tailLines(text: string, limit = 50): string {
+  const lines = text.split('\n').filter((line) => line.trim())
+  return lines.slice(-limit).join('\n')
+}
+
+/** Default stall budget: how long a healthy run may stay silent before it counts as hung. */
+export const DEFAULT_STALL_TIMEOUT_MS = 5 * 60_000
+/**
+ * Ticket P2: a professional-mode CPU run legitimately goes quiet for far
+ * longer than the default — the engine emits progress once per epoch, and
+ * preprocessing precedes the first one. Callers may raise the budget up to
+ * this ceiling; beyond it a genuinely wedged process would hang the UI for
+ * most of an hour with no way out but 取消训练.
+ */
+export const MAX_STALL_TIMEOUT_MS = 60 * 60_000
+export const MIN_STALL_TIMEOUT_MS = 60_000
+
+/** Clamp a renderer-supplied stall budget — it crosses the IPC boundary, so it is untrusted. */
+export function resolveStallTimeoutMs(value: unknown): number {
+  const ms = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(ms) || ms <= 0) return DEFAULT_STALL_TIMEOUT_MS
+  return Math.min(MAX_STALL_TIMEOUT_MS, Math.max(MIN_STALL_TIMEOUT_MS, Math.round(ms)))
+}
+
 /** Retry a start-up timeout once: a cold cache or an AV scan usually only bites the first run. */
 export function shouldRetryStartup(attempt: number, limit = STARTUP_RETRY_LIMIT): boolean {
   return attempt < limit

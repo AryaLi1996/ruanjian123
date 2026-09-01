@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
-  assessQuality, checkShortData, scoreStars,
+  assessQuality, scoreStars,
   type DataQualityReport,
 } from './trainingQuality'
 
@@ -96,25 +96,5 @@ describe('scoreStars', () => {
     expect(scoreStars(0.62)).toBe(3)
     expect(scoreStars(0.01)).toBe(1)   // never zero stars for a real score
     expect(scoreStars(null)).toBe(0)
-  })
-})
-
-describe('checkShortData', () => {
-  it('warns about a dataset far under the recommended minimum', () => {
-    expect(checkShortData(2, 43, 'professional')).toEqual({ seconds: 43, recommended: 15 })
-    expect(checkShortData(1, 43, 'standard')).toEqual({ seconds: 43, recommended: 5 })
-  })
-
-  it('stays quiet for a merely short dataset', () => {
-    expect(checkShortData(3, 240, 'professional')).toBeNull()
-  })
-
-  it('stays quiet when there is nothing measured to judge', () => {
-    expect(checkShortData(0, 0, 'standard')).toBeNull()   // demo-data run
-    expect(checkShortData(2, 0, 'standard')).toBeNull()   // durations still decoding
-  })
-
-  it('falls back to the standard minimum for an unknown mode', () => {
-    expect(checkShortData(1, 30, 'experimental')).toEqual({ seconds: 30, recommended: 5 })
   })
 })

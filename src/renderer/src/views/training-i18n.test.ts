@@ -12,8 +12,21 @@ import i18n, { SUPPORTED_LANGUAGES } from '../i18n'
  * keeps them the same shape.
  */
 const REQUIRED_KEYS = [
-  'training.shortDataTitle', 'training.shortDataMessage', 'training.shortDataConfirm',
   'training.rawResult',
+  // Ticket P1/P2: the pre-flight checklist, which absorbed the short-data
+  // question these keys used to phrase as its own dialog.
+  'preflight.title', 'preflight.summary', 'preflight.blockedSummary', 'preflight.blockedHint',
+  'preflight.proceed', 'preflight.tryAnyway', 'preflight.switchToStandard',
+  'preflight.format.ok', 'preflight.format.fail',
+  'preflight.duplicateNames.ok', 'preflight.duplicateNames.fail',
+  'preflight.chunkable.warn', 'preflight.chunkable.fail',
+  'preflight.duration.ok', 'preflight.duration.short', 'preflight.duration.none',
+  'preflight.duration.unknown',
+  'preflight.memory.ok', 'preflight.memory.low', 'preflight.memory.unknown',
+  'preflight.device.gpu', 'preflight.device.cpu', 'preflight.cpuProfessional.warn',
+  // Ticket P3: the failure explanations shown in place of an English diagnostic.
+  'training.error.timeout', 'training.error.oom', 'training.error.dataLoader',
+  'training.error.showDetail',
   'quality.title', 'quality.scoreLabel', 'quality.scoreValue', 'quality.scoreUnknown',
   'quality.level.good', 'quality.level.fair', 'quality.level.poor',
   'quality.clean', 'quality.issuesTitle', 'quality.tipsTitle',
@@ -38,8 +51,11 @@ describe('training quality translations', () => {
         expect(t('quality.issue.duration', { minutes: 0.6, seconds: 34, recommended: 15 }))
           .toContain('34')
         expect(t('quality.issue.snr', { snr: 8.4, required: 15 })).toContain('8.4')
-        expect(t('training.shortDataMessage', { seconds: 43, minutes: 15, mode: 'x' }))
-          .toContain('43')
+        expect(t('preflight.duration.short', { actual: '0.7', recommended: '15.0' }))
+          .toContain('0.7')
+        expect(t('preflight.memory.low', { available: '3.2', needed: '9.8' })).toContain('9.8')
+        expect(t('preflight.format.fail', { count: 1, names: 'a.m4a', exts: '.wav' }))
+          .toContain('a.m4a')
       })
     })
   }
