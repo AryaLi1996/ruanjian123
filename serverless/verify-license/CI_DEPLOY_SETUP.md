@@ -375,6 +375,16 @@ Every step here is on the AWS/GitHub side and has to be done by a human
 with those consoles. Getting the order wrong breaks deploys rather than
 losing anything, but it does break them:
 
+Until these are done, every run fails at the **Check required secrets are
+configured** step and names what is missing — that failure is incomplete
+setup, not a broken workflow. (Before that guard existed, the same state
+surfaced one step later as
+`Credentials could not be loaded ... Could not load credentials from any
+providers`, which named neither the secret nor this file: an unset secret
+interpolates to an empty string, so `configure-aws-credentials` drops
+`role-to-assume` from its inputs and falls back to the default provider
+chain.)
+
 1. **Create the plan role** (§2a trust policy with `:environment:license-plan`,
    §2c permission policy).
 2. **Add `:environment:production` to the existing deploy role's trust

@@ -50,10 +50,11 @@ name: Deploy License Backend
 #     naming that environment can, and `production` additionally requires a
 #     reviewer to release the run.
 #
-# Until those are configured, this workflow runs and fails cleanly at the
-# credentials/secret check rather than silently doing nothing — deliberate,
-# so a missing secret shows up as a red X in the Actions tab instead of a
-# deploy nobody notices never happened.
+# Until those are configured, this workflow runs and fails at its "Check
+# required secrets are configured" step, naming the secrets that are
+# missing, rather than silently doing nothing — deliberate, so incomplete
+# setup shows up as a red X in the Actions tab instead of a deploy nobody
+# notices never happened.
 #
 # ── About `environment:` and the OIDC `sub` claim — READ BEFORE EDITING ─────
 # Naming a GitHub Environment on a job changes the OIDC `sub` claim GitHub
@@ -139,6 +140,27 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # An unset secret interpolates to an empty string, and
+      # configure-aws-credentials then silently drops `role-to-assume` from
+      # its inputs and falls back to the default provider chain — failing
+      # with "Could not load credentials from any providers", which names
+      # neither the secret nor this repo's setup doc. Check first so the
+      # error says what is actually missing.
+      - name: Check required secrets are configured
+        env:
+          PLAN_ROLE_ARN:          ${{ secrets.AWS_PLAN_ROLE_ARN }}
+          LICENSE_SIGNING_SECRET: ${{ secrets.LICENSE_SIGNING_SECRET }}
+        run: |
+          missing=()
+          [[ -n "$PLAN_ROLE_ARN" ]]          || missing+=("AWS_PLAN_ROLE_ARN")
+          [[ -n "$LICENSE_SIGNING_SECRET" ]] || missing+=("LICENSE_SIGNING_SECRET")
+          if (( ${#missing[@]} )); then
+            printf 'Missing environment secret(s) on `license-plan`: %s\n' "${missing[*]}" >&2
+            printf 'This is one-time setup, not a code failure — see\n' >&2
+            printf 'serverless/verify-license/CI_DEPLOY_SETUP.md sections 2c, 3 and 4.\n' >&2
+            exit 1
+          fi
+
       - name: Configure AWS credentials (OIDC, plan role)
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -177,6 +199,24 @@ jobs:
       id-token: write
     steps:
       - uses: actions/checkout@v4
+
+      # Same guard as `plan` — see the note there. Reached only after a
+      # reviewer has released the run, so a missing secret here costs an
+      # approval; worth naming precisely rather than failing opaquely.
+      - name: Check required secrets are configured
+        env:
+          DEPLOY_ROLE_ARN:        ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          LICENSE_SIGNING_SECRET: ${{ secrets.LICENSE_SIGNING_SECRET }}
+        run: |
+          missing=()
+          [[ -n "$DEPLOY_ROLE_ARN" ]]        || missing+=("AWS_DEPLOY_ROLE_ARN")
+          [[ -n "$LICENSE_SIGNING_SECRET" ]] || missing+=("LICENSE_SIGNING_SECRET")
+          if (( ${#missing[@]} )); then
+            printf 'Missing environment secret(s) on `production`: %s\n' "${missing[*]}" >&2
+            printf 'This is one-time setup, not a code failure — see\n' >&2
+            printf 'serverless/verify-license/CI_DEPLOY_SETUP.md sections 2b, 3 and 4.\n' >&2
+            exit 1
+          fi
 
       - name: Configure AWS credentials (OIDC, deploy role)
         uses: aws-actions/configure-aws-credentials@v4
