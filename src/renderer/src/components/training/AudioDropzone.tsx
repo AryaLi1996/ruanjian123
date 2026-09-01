@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from 'react'
+import { useState, useRef, useCallback, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { getAudioInfo, formatDuration } from '../../utils/audio'
 
@@ -12,6 +12,14 @@ interface AudioFileEntry {
 
 interface Props {
   onFilesChange: (files: File[]) => void
+  /**
+   * Ticket T3: total measured duration of the current selection, in seconds,
+   * reported as each file's metadata finishes decoding. The training view
+   * uses it to question a run before it starts rather than after it has spent
+   * an hour producing a model from 34 seconds of audio. Files whose duration
+   * could not be read contribute nothing, so this is a lower bound.
+   */
+  onDurationChange?: (totalSeconds: number) => void
 }
 
 const ACCEPT = new Set(['.wav', '.flac', '.mp3', '.ogg', '.m4a'])
@@ -21,7 +29,7 @@ function isAudioFile(f: File): boolean {
   return ACCEPT.has(ext) || f.type.startsWith('audio/')
 }
 
-export function AudioDropzone({ onFilesChange }: Props): JSX.Element {
+export function AudioDropzone({ onFilesChange, onDurationChange }: Props): JSX.Element {
   const [entries, setEntries]   = useState<AudioFileEntry[]>([])
   const [dragging, setDragging] = useState(false)
   const inputRef                = useRef<HTMLInputElement>(null)
@@ -68,6 +76,11 @@ export function AudioDropzone({ onFilesChange }: Props): JSX.Element {
   }
 
   const totalDuration = entries.reduce((s, e) => s + (e.duration ?? 0), 0)
+
+  // Reported from an effect rather than from addFiles/handleRemove: durations
+  // arrive asynchronously per file, so the total at the moment the list
+  // changes is not the total once decoding settles.
+  useEffect(() => { onDurationChange?.(totalDuration) }, [totalDuration, onDurationChange])
 
   return (
     <div>
