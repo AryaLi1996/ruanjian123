@@ -98,6 +98,12 @@ export interface PreflightResult {
   cpuProfessional: boolean
   /** Estimated peak memory for this upload, in GB. */
   estimatedMemoryGb: number
+  /**
+   * Ticket P6: how many files merging would actually fold together — the
+   * engine-readable ones. Offering to merge a selection whose only extra
+   * file is an unreadable .m4a would promise something merging can't do.
+   */
+  mergeableCount: number
 }
 
 /** One uploaded file as the dropzone knows it: the file plus its decoded duration. */
@@ -332,5 +338,6 @@ export function checkTrainingInputs(input: PreflightInput): PreflightResult {
     canProceed: items.every((i) => i.severity !== 'blocker'),
     cpuProfessional,
     estimatedMemoryGb,
+    mergeableCount: readable.length,
   }
 }

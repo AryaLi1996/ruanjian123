@@ -42,6 +42,16 @@ interface Props {
    * the lever the user still has, and they can only pull it from here.
    */
   onSwitchToStandard?: () => void
+  /**
+   * Ticket P7: drop what the *renderer* is holding — engine log entries,
+   * progress lines, waveform images. It cannot touch the engine process's
+   * own memory, which is what the warning is usually about, so the label and
+   * the note beside it say exactly what it frees rather than implying a
+   * rescue it can't perform.
+   */
+  onReleaseCache?: () => void
+  /** Bytes-worth of buffered log lines, so the button can say what it will drop. */
+  cachedEntryCount?: number
 }
 
 /**
@@ -52,6 +62,7 @@ interface Props {
  */
 export function TrainingProgress({
   progress, logs, mode, deviceLabel, onCancel, cancelling, onSwitchToStandard,
+  onReleaseCache, cachedEntryCount,
 }: Props): JSX.Element {
   const { t } = useTranslation()
   const logRef = useRef<HTMLDivElement>(null)
@@ -145,9 +156,11 @@ export function TrainingProgress({
         </div>
       )}
 
+      {/* Ticket P7: the warning names the steps that actually help, in the
+          order worth trying, so it reads as instructions rather than alarm. */}
       {!done && memory.critical && (
-        <div className="tc-advice danger" role="alert">
-          <span>
+        <div className="tc-advice danger tc-advice-block" role="alert">
+          <div className="tc-advice-headline">
             {memory.rssGb != null && memory.totalGb != null
               ? t('training.memoryCritical', {
                   used: memory.rssGb.toFixed(1), total: memory.totalGb.toFixed(1),
@@ -155,7 +168,17 @@ export function TrainingProgress({
               : t('training.memoryCriticalFree', {
                   available: (memory.availableGb ?? 0).toFixed(1),
                 })}
-          </span>
+          </div>
+          <ol className="tc-advice-steps">
+            <li>{t('training.memoryStepClose')}</li>
+            <li>{t('training.memoryStepCache')}</li>
+            <li>{t('training.memoryStepRestart')}</li>
+          </ol>
+          {onReleaseCache && (
+            <button type="button" className="btn btn-ghost tc-advice-btn" onClick={onReleaseCache}>
+              {t('training.releaseCache', { count: cachedEntryCount ?? 0 })}
+            </button>
+          )}
         </div>
       )}
 

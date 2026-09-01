@@ -32,7 +32,18 @@ const REQUIRED_KEYS = [
   'quality.clean', 'quality.issuesTitle', 'quality.tipsTitle',
   'quality.issue.noData', 'quality.issue.duration', 'quality.issue.snr', 'quality.issue.similarity',
   'quality.tip.noData', 'quality.tip.duration', 'quality.tip.snr', 'quality.tip.similarity',
-  'quality.openDenoise', 'quality.retrain', 'quality.keep', 'quality.reopen', 'quality.savedNote',
+  'quality.openCleanup', 'quality.retrain', 'quality.keep', 'quality.reopen', 'quality.savedNote',
+  // Ticket P8: the report's single recommendation and the button that runs it.
+  'quality.planTitle',
+  'quality.plan.addMaterial', 'quality.plan.cleanup', 'quality.plan.rerecord', 'quality.plan.tune',
+  'quality.planAction.addMaterial', 'quality.planAction.cleanup',
+  'quality.planAction.rerecord', 'quality.planAction.tune',
+  // Ticket P6: merging as the alternative to deleting material.
+  'preflight.merge.hint', 'preflight.merge.action', 'preflight.merge.working',
+  'preflight.merge.failed',
+  // Ticket P7: what to do when memory runs tight mid-run.
+  'training.memoryStepClose', 'training.memoryStepCache', 'training.memoryStepRestart',
+  'training.releaseCache',
 ]
 
 describe('training quality translations', () => {
@@ -56,6 +67,8 @@ describe('training quality translations', () => {
         expect(t('preflight.memory.low', { available: '3.2', needed: '9.8' })).toContain('9.8')
         expect(t('preflight.format.fail', { count: 1, names: 'a.m4a', exts: '.wav' }))
           .toContain('a.m4a')
+        expect(t('preflight.merge.hint', { count: 7 })).toContain('7')
+        expect(t('training.releaseCache', { count: 42 })).toContain('42')
       })
     })
   }

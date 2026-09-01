@@ -3952,6 +3952,48 @@ html, body, #root {
 }
 .tc-advice-btn { flex-shrink: 0; padding: 4px 14px; font-size: 11.5px; }
 
+/* Ticket P6: merging as the alternative to deleting material. */
+.preflight-merge {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 0 0 16px;
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  border: 1px dashed var(--border);
+  background: var(--bg-hover);
+}
+.preflight-merge-text { font-size: 12px; line-height: 1.6; color: var(--text-muted); flex: 1 1 220px; }
+.preflight-merge-btn { flex-shrink: 0; padding: 5px 14px; font-size: 12px; }
+
+/* Ticket P7: the memory warning reads as steps, so it needs block layout. */
+.tc-advice-block { flex-direction: column; align-items: stretch; }
+.tc-advice-headline { font-weight: 600; }
+.tc-advice-steps {
+  margin: 0;
+  padding-left: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--text-muted);
+}
+.tc-advice-block .tc-advice-btn { align-self: flex-start; }
+
+/* Ticket P8: the report's closing recommendation. */
+.quality-plan {
+  margin-top: 16px;
+  padding: 12px 14px;
+  border-radius: var(--radius);
+  border: 1px solid var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+.quality-plan-text { margin: 0 0 10px; font-size: 12.5px; line-height: 1.7; color: var(--text); }
+.quality-plan-btn { padding: 5px 16px; font-size: 12px; }
+
 .tc-mem { font-variant-numeric: tabular-nums; opacity: 0.85; }
 .tc-mem.critical { color: var(--danger); opacity: 1; font-weight: 600; }
 

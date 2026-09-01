@@ -145,3 +145,51 @@ export function scoreStars(score: number | null): number {
   if (score == null) return 0
   return Math.max(1, Math.min(5, Math.round(score * 5)))
 }
+
+// ── Retrain plan (Ticket P8) ───────────────────────────────────────────────
+
+/**
+ * What the user should actually do next, and which button does it.
+ *
+ *  - `addMaterial`: the run was short of material. Back to the form.
+ *  - `cleanup`: the recordings are noisy or reverberant. Enhanced separation
+ *    (Audio Tools) runs dereverb over the vocal stems and ships today —
+ *    unlike Data Preparation's 执行降噪, which is still disabled, and which
+ *    this used to point at.
+ *  - `rerecord`: short *and* noisy. Neither tool fixes a recording that is
+ *    both; say so rather than sending the user round a loop that can't help.
+ *  - `tune`: the data was fine and the model still didn't converge — the
+ *    lever is epochs or mode, not material.
+ */
+export type RetrainActionId = 'addMaterial' | 'cleanup' | 'rerecord' | 'tune'
+
+export interface RetrainPlan {
+  id: RetrainActionId
+  /** Numbers the plan's sentence quotes, taken from the issues it answers. */
+  values: Record<string, string | number>
+}
+
+/**
+ * Turn the findings into one plan.
+ *
+ * Deliberately one, not a list: a report that ends in four suggestions is a
+ * report that ends in no decision. The combinations are ordered by how much
+ * they invalidate the others — a recording that is both too short and too
+ * noisy needs re-recording, and telling that user to "add more material"
+ * would send them back with the same problem.
+ */
+export function buildRetrainPlan(assessment: QualityAssessment): RetrainPlan | null {
+  const ids = new Set(assessment.issues.map((i) => i.id))
+  const valuesOf = (id: QualityIssueId): Record<string, string | number> =>
+    assessment.issues.find((i) => i.id === id)?.values ?? {}
+
+  if (ids.has('noData')) return { id: 'addMaterial', values: valuesOf('noData') }
+
+  const short = ids.has('duration')
+  const noisy = ids.has('snr')
+  if (short && noisy) return { id: 'rerecord', values: { ...valuesOf('duration'), ...valuesOf('snr') } }
+  if (short)          return { id: 'addMaterial', values: valuesOf('duration') }
+  if (noisy)          return { id: 'cleanup', values: valuesOf('snr') }
+  if (ids.has('similarity')) return { id: 'tune', values: valuesOf('similarity') }
+  return null
+}

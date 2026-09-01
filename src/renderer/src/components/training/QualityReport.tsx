@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
-  assessQuality, scoreStars,
+  assessQuality, buildRetrainPlan, scoreStars,
   type QualityInput, type QualityIssueId,
 } from '../../utils/trainingQuality'
 
@@ -12,10 +12,15 @@ interface Props {
   /** Dismisses the report and keeps the model that was just saved. */
   onKeep:    () => void
   /**
-   * Opens Data Preparation, where 执行降噪 lives. Offered only for the noise
-   * issue — the tool is useless for a recording that is merely too short.
+   * Ticket P8: opens Audio Tools, whose enhanced separation runs dereverb
+   * over the vocal stems — the cleanup path that actually ships. Offered
+   * only for the noise finding; it does nothing for a short recording.
+   *
+   * This used to open Data Preparation, where 执行降噪 is still disabled:
+   * the one button the report offered a noisy run led to a button that
+   * could not be pressed.
    */
-  onOpenDenoise?: () => void
+  onOpenCleanup?: () => void
 }
 
 /**
@@ -34,10 +39,13 @@ interface Props {
  * keep the model knowing what it is. The model is saved either way; this
  * dialog never deletes anything.
  */
-export function QualityReport({ result, onRetrain, onKeep, onOpenDenoise }: Props): JSX.Element {
+export function QualityReport({ result, onRetrain, onKeep, onOpenCleanup }: Props): JSX.Element {
   const { t } = useTranslation()
-  const { score, level, issues } = assessQuality(result)
+  const assessment = assessQuality(result)
+  const { score, level, issues } = assessment
   const stars = scoreStars(score)
+  // Ticket P8: one recommendation, with the button that carries it out.
+  const plan = buildRetrainPlan(assessment)
 
   // Focus lands on "keep" — the run succeeded, and the non-destructive option
   // should be the one a stray Enter hits.
@@ -106,9 +114,9 @@ export function QualityReport({ result, onRetrain, onKeep, onOpenDenoise }: Prop
                   <span aria-hidden="true">💡</span>
                   <span>
                     {tipFor(issue.id)}
-                    {issue.id === 'snr' && onOpenDenoise && (
-                      <button type="button" className="quality-link" onClick={onOpenDenoise}>
-                        {t('quality.openDenoise')}
+                    {issue.id === 'snr' && onOpenCleanup && (
+                      <button type="button" className="quality-link" onClick={onOpenCleanup}>
+                        {t('quality.openCleanup')}
                       </button>
                     )}
                   </span>
@@ -116,6 +124,27 @@ export function QualityReport({ result, onRetrain, onKeep, onOpenDenoise }: Prop
               ))}
             </ul>
           </>
+        )}
+
+        {/* Ticket P8: the findings above say what went wrong; this says what
+            to do about it, as one recommendation with the button that starts
+            it. A report that ends in four suggestions ends in no decision. */}
+        {plan && (
+          <div className="quality-plan">
+            <div className="quality-section-title">{t('quality.planTitle')}</div>
+            <p className="quality-plan-text">{t(`quality.plan.${plan.id}`, plan.values)}</p>
+            {plan.id === 'cleanup'
+              ? onOpenCleanup && (
+                  <button type="button" className="btn btn-ghost quality-plan-btn" onClick={onOpenCleanup}>
+                    {t('quality.planAction.cleanup')}
+                  </button>
+                )
+              : (
+                  <button type="button" className="btn btn-ghost quality-plan-btn" onClick={onRetrain}>
+                    {t(`quality.planAction.${plan.id}`)}
+                  </button>
+                )}
+          </div>
         )}
 
         {/* The engine's own sentence, when it had one to add beyond the

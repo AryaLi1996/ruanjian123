@@ -80,6 +80,13 @@ const resources = {
         },
         durationUnknown: '时长未知',
         removeSuggested: '一键移除这 {{count}} 个文件',
+        // Ticket P6：不想删素材时的另一条路。
+        merge: {
+          hint: '不想删除任何素材？可将这 {{count}} 个文件按顺序合并为 1 个（总时长不变，仅减少文件数带来的内存与传输压力）。',
+          action: '合并为 1 个文件',
+          working: '正在合并…',
+          failed: '合并失败：有文件无法解码，素材列表未做改动。',
+        },
         cpuProfessional: {
           warn: '运行设备：专业模式在 CPU 上训练需要大量内存和时间，普通笔记本可能无法完成。建议切换到标准模式，或改用 GPU 训练。',
         },
@@ -103,6 +110,11 @@ const resources = {
         memoryOfTotal: '引擎已占用 {{used}} GB / 共 {{total}} GB',
         memoryCritical: '内存使用过高（已用 {{used}} GB / 总计 {{total}} GB），训练可能被系统中断，建议关闭其他程序。',
         memoryCriticalFree: '系统可用内存仅剩 {{available}} GB，训练可能被系统中断，建议关闭其他程序。',
+        // Ticket P7：告警要能照着做，而不只是报警。
+        memoryStepClose: '关闭浏览器、聊天软件等占内存的程序，训练会自行受益（引擎会持续申请内存）。',
+        memoryStepCache: '释放本应用缓存：清空下方引擎日志与进度日志（不影响训练本身）。',
+        memoryStepRestart: '若仍然吃紧或长时间无进展，可“取消训练”后改用标准模式、或减少/合并素材后重试。',
+        releaseCache: '释放应用缓存（{{count}} 行日志）',
         switchModeTitle: '切换为标准模式？',
         switchModeMessage: '切换模式需要重新开始训练，当前已完成的轮次将全部丢弃——两种模式的 LoRA 秩与适配层不同，已训练的权重无法沿用。素材和模型名称会保留。确定切换吗？',
         switchModeConfirm: '重新以标准模式训练',
@@ -150,10 +162,24 @@ const resources = {
         tip: {
           noData: '请在“训练素材”中拖入干音文件后重新训练。',
           duration: '请录制更长的干音（建议完整演唱 2-3 遍），或把多个录音文件一起加入训练素材。',
-          snr: '请先用“执行降噪”处理干音，或在安静环境中重新录制后再训练。',
+          snr: '可先用“音频工具”的增强分离提取干净人声（该模式会做去混响），或在安静环境中重新录制后再训练。',
           similarity: '可适当提高训练轮数，或改用专业模式重新训练。',
         },
-        openDenoise: '前往降噪 →',
+        openCleanup: '前往音频工具 →',
+        // Ticket P8：把结论收敛成一条建议 + 一个可点的动作。
+        planTitle: '下一步建议',
+        plan: {
+          addMaterial: '素材时长不足是本次质量偏低的主要原因。回到训练页补充更多干音（同一首完整唱 2-3 遍即可），再训练一次。',
+          cleanup: '素材底噪或混响偏高，模型会把噪声一起学进去。先用“音频工具”的增强分离提取干净人声（该模式包含去混响），再用处理后的干声重新训练。',
+          rerecord: '素材既偏短又偏吵——补时长或降噪都只能解决一半。建议在安静环境中重新录制 2-3 遍完整演唱，再重新训练。',
+          tune: '素材本身没有问题，是模型没有收敛好。可提高训练轮数，或改用专业模式重新训练。',
+        },
+        planAction: {
+          addMaterial: '返回并补充素材',
+          cleanup: '前往音频工具处理',
+          rerecord: '返回并重新准备素材',
+          tune: '调整参数后重训',
+        },
         retrain: '重新训练',
         keep: '继续使用该模型',
         reopen: '查看质量报告',
@@ -591,6 +617,13 @@ const resources = {
         },
         durationUnknown: 'duration unknown',
         removeSuggested: 'Remove these {{count}} file(s)',
+        // Ticket P6: the route that deletes nothing.
+        merge: {
+          hint: "Don't want to delete anything? Merge these {{count}} files into one, in order. Total duration is unchanged — only the per-file memory and transfer cost goes away.",
+          action: 'Merge into one file',
+          working: 'Merging…',
+          failed: 'Merge failed: a file could not be decoded. Your selection is unchanged.',
+        },
         cpuProfessional: {
           warn: 'Device: professional mode on the CPU needs a lot of memory and time, and an ordinary laptop may not finish it. Switch to standard mode, or train on a GPU.',
         },
@@ -613,6 +646,11 @@ const resources = {
         memoryOfTotal: 'Engine is using {{used}} GB of {{total}} GB',
         memoryCritical: 'Memory is nearly full ({{used}} GB of {{total}} GB). The run may be killed by the system — close other programs.',
         memoryCriticalFree: 'Only {{available}} GB of memory is left. The run may be killed by the system — close other programs.',
+        // Ticket P7: the warning should read as instructions, not an alarm.
+        memoryStepClose: 'Close memory-hungry apps (browser, chat) — the engine keeps asking for more as it runs.',
+        memoryStepCache: "Free this app's caches: clear the engine and progress logs below. It does not affect the run.",
+        memoryStepRestart: 'If it stays tight or stops progressing, cancel and retry in standard mode, or with fewer (or merged) files.',
+        releaseCache: 'Free app caches ({{count}} log lines)',
         switchModeTitle: 'Switch to standard mode?',
         switchModeMessage: 'Switching modes restarts training from scratch: the epochs trained so far are discarded, because the two modes differ in LoRA rank and in which layers are adapted, so those weights cannot carry over. Your material and model name are kept. Switch?',
         switchModeConfirm: 'Restart in standard mode',
@@ -660,10 +698,24 @@ const resources = {
         tip: {
           noData: 'Add dry vocal files under Training Material, then train again.',
           duration: 'Record longer takes (two or three full passes of the song), or add several recordings to the training material.',
-          snr: 'Run the vocals through Denoise first, or re-record somewhere quieter, then train again.',
+          snr: "Extract a clean vocal with Audio Tools' enhanced separation (that mode includes a dereverb pass), or re-record somewhere quieter, then train again.",
           similarity: 'Raise the epoch count, or retrain in professional mode.',
         },
-        openDenoise: 'Open Denoise →',
+        openCleanup: 'Open Audio Tools →',
+        // Ticket P8: end on one recommendation with the button that starts it.
+        planTitle: 'What to do next',
+        plan: {
+          addMaterial: 'Too little material is what held this run back. Go back and add more dry vocals — two or three full passes of the same song is enough — then train again.',
+          cleanup: 'The recordings carry noise or reverb, which the model learns along with the voice. Extract a clean vocal with Audio Tools\' enhanced separation (it includes a dereverb pass), then retrain on that.',
+          rerecord: 'The material is both short and noisy — adding length or cleaning it up each fixes only half. Re-record two or three full passes somewhere quiet, then train again.',
+          tune: 'The material was fine; the model simply did not converge. Raise the epoch count, or retrain in professional mode.',
+        },
+        planAction: {
+          addMaterial: 'Back to add material',
+          cleanup: 'Open Audio Tools',
+          rerecord: 'Back to redo material',
+          tune: 'Retrain with new settings',
+        },
         retrain: 'Train again',
         keep: 'Keep this model',
         reopen: 'Quality report',

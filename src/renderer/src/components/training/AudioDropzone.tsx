@@ -54,6 +54,12 @@ const toUploads = (entries: AudioFileEntry[]): TrainingUpload[] =>
 export interface AudioDropzoneHandle {
   /** Drop every currently-selected file whose name is in `names`. */
   removeByName: (names: string[]) => void
+  /**
+   * Ticket P6: swap the whole selection for one file — what merging produces.
+   * Its waveform and duration are decoded here like any other upload, so the
+   * list shows the merged take exactly as it would a dropped one.
+   */
+  replaceAll: (file: File) => void
 }
 
 export const AudioDropzone = forwardRef<AudioDropzoneHandle, Props>(function AudioDropzone(
@@ -64,7 +70,7 @@ export const AudioDropzone = forwardRef<AudioDropzoneHandle, Props>(function Aud
   const inputRef                = useRef<HTMLInputElement>(null)
   const { t } = useTranslation()
 
-  const addFiles = useCallback(async (incoming: File[]) => {
+  const addFiles = useCallback(async (incoming: File[], opts?: { replace?: boolean }) => {
     const valid = incoming.filter(isAudioFile)
     if (!valid.length) return
 
@@ -74,7 +80,7 @@ export const AudioDropzone = forwardRef<AudioDropzoneHandle, Props>(function Aud
     }))
 
     setEntries((prev) => {
-      const next = [...prev, ...placeholders]
+      const next = opts?.replace ? placeholders : [...prev, ...placeholders]
       onFilesChange(toUploads(next))
       return next
     })
@@ -113,6 +119,9 @@ export const AudioDropzone = forwardRef<AudioDropzoneHandle, Props>(function Aud
   }
 
   useImperativeHandle(ref, () => ({
+    replaceAll(file: File): void {
+      void addFiles([file], { replace: true })
+    },
     removeByName(names: string[]): void {
       const drop = new Set(names)
       setEntries((prev) => {
@@ -122,7 +131,7 @@ export const AudioDropzone = forwardRef<AudioDropzoneHandle, Props>(function Aud
         return next
       })
     },
-  }), [onFilesChange])
+  }), [onFilesChange, addFiles])
 
   const totalDuration = entries.reduce((s, e) => s + (e.duration ?? 0), 0)
 
