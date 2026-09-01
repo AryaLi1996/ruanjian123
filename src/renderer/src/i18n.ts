@@ -61,6 +61,41 @@ const resources = {
         stepsLabel: '步数', dateLabel: '训练日期', lossShort: '损失',
         emptyLibrary: '暂无模型，快去训练一个吧！',
         deleteTitle: '删除模型', deleteConfirm: '确定要删除「{{name}}」吗？此操作无法撤销。',
+        // Ticket T2/T3：训练结果摘要与开始训练前的数据量提醒。
+        rawResult: '查看原始结果（开发者）',
+        shortDataTitle: '训练数据过短',
+        shortDataMessage: '检测到训练数据仅 {{seconds}} 秒，{{mode}}模式建议至少 {{minutes}} 分钟干音，否则模型音色可能与本人相差较大。是否继续训练？',
+        shortDataConfirm: '仍要训练',
+      },
+      // Ticket T2：训练完成后的质量报告。以前 data_quality 里的结论只是
+      // 一行灰色横幅，压在一大段 JSON 上面，用户既看不到问题，也不知道
+      // 下一步该做什么。
+      quality: {
+        title: '训练质量报告',
+        scoreLabel: '质量评分',
+        scoreValue: '{{percent}} 分（满分 100）',
+        scoreUnknown: '本次训练未提供评分。',
+        level: { good: '质量良好', fair: '质量中等', poor: '质量偏低' },
+        clean: '未发现数据问题，可以直接使用该模型。',
+        issuesTitle: '发现的问题',
+        tipsTitle: '改进建议',
+        issue: {
+          noData: '未读取到任何训练音频，本次使用的是演示数据，模型音色与您本人无关。',
+          duration: '训练数据仅 {{minutes}} 分钟（{{seconds}} 秒），建议至少 {{recommended}} 分钟。',
+          snr: '信噪比约 {{snr}} dB，低于建议的 {{required}} dB，背景噪声可能被模型学习。',
+          similarity: '模型对训练素材的还原度仅 {{percent}}%，音色可能不稳定。',
+        },
+        tip: {
+          noData: '请在“训练素材”中拖入干音文件后重新训练。',
+          duration: '请录制更长的干音（建议完整演唱 2-3 遍），或把多个录音文件一起加入训练素材。',
+          snr: '请先用“执行降噪”处理干音，或在安静环境中重新录制后再训练。',
+          similarity: '可适当提高训练轮数，或改用专业模式重新训练。',
+        },
+        openDenoise: '前往降噪 →',
+        retrain: '重新训练',
+        keep: '继续使用该模型',
+        reopen: '查看质量报告',
+        savedNote: '模型已保存，可随时在“我的模型”中重新试听或删除。',
       },
       // Ticket T3：训练前环境自检清单。
       envCheck: {
@@ -473,7 +508,41 @@ const resources = {
         etaPending: 'Estimating time remaining…',
         // Ticket T1/T3: raw engine output panel.
         engineLog: 'Engine log', engineLogCount: '{{count}} lines',
-        engineLogErrors: '{{count}} errors', engineLogEmpty: 'No engine output yet.' },
+        engineLogErrors: '{{count}} errors', engineLogEmpty: 'No engine output yet.',
+        // Tickets T2/T3: result summary, and the pre-flight data-size check.
+        rawResult: 'Raw result (developer)',
+        shortDataTitle: 'Very little training material',
+        shortDataMessage: 'Only {{seconds}} seconds of audio were found. {{mode}} mode recommends at least {{minutes}} minutes of dry vocals — with less, the model is unlikely to sound like the singer. Train anyway?',
+        shortDataConfirm: 'Train anyway' },
+      // Ticket T2: the report a finished run ends on. The findings used to be
+      // a grey banner above a raw JSON dump, so nobody read them.
+      quality: {
+        title: 'Training Quality Report',
+        scoreLabel: 'Quality score',
+        scoreValue: '{{percent}} out of 100',
+        scoreUnknown: 'This run reported no score.',
+        level: { good: 'Good quality', fair: 'Fair quality', poor: 'Low quality' },
+        clean: 'No data problems found — this model is ready to use.',
+        issuesTitle: 'What went wrong',
+        tipsTitle: 'How to improve it',
+        issue: {
+          noData: 'No training audio could be read, so demo data was used — this model has nothing to do with your voice.',
+          duration: 'Only {{minutes}} minutes ({{seconds}} s) of material; at least {{recommended}} minutes is recommended.',
+          snr: 'Signal-to-noise ratio is about {{snr}} dB, below the recommended {{required}} dB — background noise may have been learned by the model.',
+          similarity: 'The model reproduces its own training material at only {{percent}}%, so the timbre may be unstable.',
+        },
+        tip: {
+          noData: 'Add dry vocal files under Training Material, then train again.',
+          duration: 'Record longer takes (two or three full passes of the song), or add several recordings to the training material.',
+          snr: 'Run the vocals through Denoise first, or re-record somewhere quieter, then train again.',
+          similarity: 'Raise the epoch count, or retrain in professional mode.',
+        },
+        openDenoise: 'Open Denoise →',
+        retrain: 'Train again',
+        keep: 'Keep this model',
+        reopen: 'Quality report',
+        savedNote: 'The model is saved — you can audition or delete it under Your Models at any time.',
+      },
       // Ticket T3: pre-flight environment self-check.
       envCheck: {
         title: 'Environment Check',

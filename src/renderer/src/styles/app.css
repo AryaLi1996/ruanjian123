@@ -4227,11 +4227,16 @@ html, body, #root {
   line-height: 1.5;
 }
 .engine-log-line       { white-space: pre-wrap; word-break: break-word; color: var(--text-muted); }
-.engine-log-muted      { font-style: italic; }
-/* Heartbeats are pure liveness noise — dimmed so real output stands out. */
-.engine-log-heartbeat  { opacity: 0.55; }
-.engine-log-json       { color: var(--text); }
+/* Ticket T1: lines are coloured by what they mean, not by which stream they
+   came from. Red is reserved for output that describes an actual failure —
+   library warnings and the engine's interstitial {"error": ...} lines are
+   normal on a run that goes on to succeed, and painting them red is what made
+   a healthy run look like a catastrophe. */
+.engine-log-muted      { opacity: 0.55; }
+.engine-log-info       { color: var(--text); }
+.engine-log-warn       { color: var(--warning); }
 .engine-log-error      { color: var(--danger); }
+.engine-log-empty      { font-style: italic; }
 
 /* ── Mid-run engine notices (Ticket T1) ──────────────────── */
 /* A run that degraded but is still going — e.g. data loading fell back to a
@@ -4247,3 +4252,176 @@ html, body, #root {
   font-size: 12px;
   line-height: 1.5;
 }
+
+/* ── Confirmation dialog (Ticket UI-11) ──────────────────────
+   Above the floating pitch card (900) and the player bar (10), below the
+   toast layer (1400) so a completion toast still reaches the user.
+
+   Ticket T3: these rules backed ConfirmDialog from the start but were lost
+   from this file in a merge — only the two .confirm-ok modifiers below
+   survived, leaving every confirmation (the CPU warning, the delete guard,
+   and now the short-data check) rendering as unstyled inline text. */
+.confirm-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1150;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(8, 10, 16, 0.7);
+  animation: confirm-fade 0.14s ease-out;
+}
+@keyframes confirm-fade { from { opacity: 0; } to { opacity: 1; } }
+
+.confirm-card {
+  width: min(400px, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 22px 24px 18px;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border);
+  background: var(--bg-panel);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.5);
+}
+.confirm-title   { font-size: 15px; font-weight: 700; color: var(--text); }
+.confirm-message { margin: 0; font-size: 13px; color: var(--text-muted); line-height: 1.6; }
+.confirm-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 8px; }
+.confirm-cancel  { height: 34px; padding: 0 18px; font-size: 12.5px; }
+.confirm-ok {
+  height: 34px;
+  padding: 0 18px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--accent-gradient);
+  color: var(--on-accent);
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: filter 0.15s;
+}
+
+/* ── Training quality report (Ticket T2) ─────────────────────
+   The conclusion of a run, given the foreground the findings never had while
+   they were grey banners above a JSON dump. Shares the confirmation layer's
+   z-index: it is a decision, and nothing behind it is actionable until the
+   user has made it. */
+.quality-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1150;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  overflow-y: auto;
+  background: rgba(8, 10, 16, 0.7);
+  animation: confirm-fade 0.14s ease-out;
+}
+.quality-card {
+  width: min(520px, 100%);
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
+  padding: 22px 24px 18px;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border);
+  background: var(--bg-panel);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.5);
+}
+.quality-header  { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.quality-title   { font-size: 16px; font-weight: 700; color: var(--text); }
+.quality-verdict { font-size: 12px; font-weight: 700; }
+.quality-verdict.quality-good { color: var(--success); }
+.quality-verdict.quality-fair { color: var(--warning); }
+.quality-verdict.quality-poor { color: var(--danger); }
+
+.quality-score      { display: flex; align-items: center; gap: 14px; margin: 16px 0 4px; }
+.quality-stars      { font-size: 20px; letter-spacing: 2px; color: var(--warning); }
+.quality-score-body { flex: 1; }
+.quality-bar {
+  height: 8px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-hover);
+  overflow: hidden;
+}
+.quality-bar-fill { height: 100%; border-radius: var(--radius-pill); transition: width 0.4s ease; }
+.quality-bar-fill.quality-good { background: var(--success); }
+.quality-bar-fill.quality-fair { background: var(--warning); }
+.quality-bar-fill.quality-poor { background: var(--danger); }
+.quality-score-text { margin-top: 6px; font-size: 12px; color: var(--text-muted); }
+
+.quality-section-title {
+  margin-top: 18px;
+  margin-bottom: 8px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text);
+}
+.quality-issues, .quality-tips { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 8px; }
+.quality-issue, .quality-tip {
+  display: flex;
+  gap: 8px;
+  padding: 9px 11px;
+  border-radius: var(--radius);
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--text);
+}
+/* Problem and remedy are colour-coded as a pair — red states what is wrong,
+   blue states what to do about it, and they appear in the same order. */
+.quality-issue { border-left: 3px solid var(--danger);  background: color-mix(in srgb, var(--danger) 8%, transparent); }
+.quality-tip   { border-left: 3px solid var(--accent);  background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.quality-clean { margin: 16px 0 0; font-size: 13px; color: var(--success); }
+
+.quality-link {
+  margin-left: 6px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  text-decoration: underline;
+}
+.quality-engine-note {
+  margin: 14px 0 0;
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--text-muted);
+}
+.quality-actions  { display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px; }
+.quality-retrain  { height: 34px; padding: 0 18px; font-size: 12.5px; }
+.quality-keep {
+  height: 34px;
+  padding: 0 18px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--accent-gradient);
+  color: var(--on-accent);
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: filter 0.15s;
+}
+.quality-keep:hover { filter: brightness(1.08); }
+.quality-footnote   { margin: 10px 0 0; font-size: 11px; color: var(--text-muted); text-align: right; }
+
+/* ── Finished-run summary (Ticket T2) ────────────────────────
+   What is left on the page once the findings live in the report: the few
+   numbers worth a glance, and the raw result behind a disclosure for whoever
+   is actually debugging a run. */
+.tc-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 14px;
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.tc-summary-item { white-space: nowrap; }
+.tc-raw          { margin-top: 14px; }
+.tc-raw summary  { font-size: 12px; color: var(--text-muted); cursor: pointer; }
+.tc-raw .result-box { margin-top: 8px; }
