@@ -40,6 +40,11 @@ const resources = {
         cancelConfirmYes: '确定取消', cancelConfirmNo: '继续训练',
         cancelling: '正在取消…', cancelled: '训练已被用户取消。', materialHint: '拖入干净的人声录音。', standardTagline: 'LoRA rank-4 · 仅训练音色编码器', professionalTagline: 'LoRA+ rank-8 · 全层训练 · 梯度检查点', dropAudio: '拖入音频文件，或点击浏览', audioFormats: 'WAV · FLAC · MP3 · OGG · M4A', fileCount: '{{count}} 个文件', totalDuration: '共 {{duration}}', clearAll: '全部清除', removeFile: '移除文件', loadingWaveform: '正在加载波形…', waveform: '波形', play: '播放', pause: '暂停', volume: '音量', noDemo: '暂无演示音频', lossLabel: '损失：{{value}}', pro: '专业', trainingGpu: 'GPU', trainingCpu: 'CPU', trainingVram: '显存', download: '下载模型', ready: '就绪', qualityLow: '音质较低',
         applyModel: '应用模型', applied: '已应用',
+        // Ticket T1/T2：可读的启动失败提示。以前所有校验失败都复用了
+        // training.name（字段标签“模型名称 *”），报错框里只剩一个星号，
+        // 用户既不知道哪里错了，也不知道该改什么。
+        nameRequired: '请先填写模型名称，再开始训练。',
+        failed: '训练启动失败，请查看下方引擎日志了解详情。',
         // Ticket T2：设备选择与 CPU 降级提示。
         deviceMode: '运行设备', currentDevice: '当前设备：{{device}}',
         gpuGeneric: '可用', notDetected: '未检测到',
@@ -448,6 +453,11 @@ const resources = {
         cancelConfirmYes: 'Yes, cancel', cancelConfirmNo: 'Keep training',
         cancelling: 'Cancelling…', cancelled: 'Training cancelled by the user.', materialHint: 'Drop clean vocal recordings here.', standardTagline: 'LoRA rank-4 · timbre encoder only', professionalTagline: 'LoRA+ rank-8 · all layers · gradient checkpointing', dropAudio: 'Drop audio files here, or click to browse', audioFormats: 'WAV · FLAC · MP3 · OGG · M4A', fileCount: '{{count}} file(s)', totalDuration: '{{duration}} total', clearAll: 'Clear all', removeFile: 'Remove file', loadingWaveform: 'Loading waveform…', waveform: 'waveform', play: 'Play', pause: 'Pause', volume: 'Volume', noDemo: 'No demo available', lossLabel: 'Loss: {{value}}', pro: 'Pro', trainingGpu: 'GPU', trainingCpu: 'CPU', trainingVram: 'VRAM', download: 'Download Model', ready: 'Ready', qualityLow: 'Quality may be low',
         applyModel: 'Use model', applied: 'In use',
+        // Ticket T1/T2: readable start-up failures. Every validation failure
+        // used to reuse training.name (the field label "Model name *"), so the
+        // error banner showed nothing but an asterisk.
+        nameRequired: 'Enter a model name before starting training.',
+        failed: 'Training could not be started. See the engine log below for details.',
         stepsLabel: 'Steps', dateLabel: 'Trained', lossShort: 'Loss',
         emptyLibrary: 'No models yet — train one to get started!',
         deleteTitle: 'Delete model', deleteConfirm: 'Delete "{{name}}"? This cannot be undone.',
