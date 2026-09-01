@@ -74,6 +74,13 @@ class EnvironmentReport(TypedDict):
     platform: str
     python:   str
     missing:  list[str]     # pip names of missing *required* packages
+    # Ticket P1: the memory *numbers*, not just check_memory()'s prose. The
+    # UI's pre-flight sizes an upload against what is free right now (see
+    # utils/trainingPreflight.ts), and parsing that back out of an English
+    # sentence would break the moment the wording changes. None where the
+    # platform gives us no way to tell.
+    total_ram_gb:     float | None
+    available_ram_gb: float | None
 
 
 def _check(id: str, status: Status, label: str, detail: str, fix: str | None = None) -> Check:
@@ -295,6 +302,10 @@ def check_writable() -> Check:
         )
 
 
+def _round_gb(value: float | None) -> float | None:
+    return None if value is None else round(value, 2)
+
+
 def check_environment(_args=None) -> EnvironmentReport:
     """Run every probe and summarize. Never raises."""
     checks: list[Check] = [check_python()]
@@ -315,4 +326,6 @@ def check_environment(_args=None) -> EnvironmentReport:
         platform=f"{platform.system()} {platform.release()} ({platform.machine()})",
         python=platform.python_version(),
         missing=missing,
+        total_ram_gb=_round_gb(_total_ram_gb()),
+        available_ram_gb=_round_gb(available_ram_gb()),
     )

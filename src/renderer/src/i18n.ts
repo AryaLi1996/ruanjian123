@@ -34,6 +34,47 @@ const resources = {
         downloading: '正在下载…', download: '下载',
       },
       status: { running: '正在运行：{{method}}', idle: '引擎就绪', training: '训练中：{{mode}}', separating: '正在分离…', synthesizing: '正在合成（{{mode}}）…', saved: '已保存：{{path}}', applyingHighPitchProtection: '正在应用高音保护…', highPitchProtectionApplied: '已应用模型音域，高音保护起点为D#4', highPitchProtectionAppliedWithShift: '已应用模型音域，高音保护起点为D#4 | 建议{{direction}}{{count}}个调' },
+      // Ticket P1/P2：开始训练前的本地自检清单。每一项都对应一条此前只存在
+      // 于代码里、失败时毫无提示的隐性限制，详见 utils/trainingPreflight.ts。
+      preflight: {
+        title: '训练前自检',
+        summary: '以下检查在启动引擎前于本地完成，请确认后再开始训练。',
+        blockedSummary: '发现 {{count}} 项必须先修复的问题，修复后才能开始训练。',
+        blockedHint: '请先修复上面标记 ❌ 的问题，再重新开始训练。',
+        proceed: '开始训练',
+        tryAnyway: '仍然尝试',
+        switchToStandard: '切换为标准模式',
+        format: {
+          ok: '文件格式：{{count}} 个文件均为引擎可读格式。',
+          fail: '文件格式：检测到 {{count}} 个引擎无法读取的文件（{{names}}），上传后会被静默跳过。请转换为 {{exts}} 后重新上传。',
+        },
+        duplicateNames: {
+          ok: '文件名：无重名文件。',
+          fail: '文件名：检测到同名文件（{{names}}），保存时会互相覆盖，仅最后一个参与训练。请重命名后重新上传。',
+        },
+        chunkable: {
+          warn: '素材长度：有 {{count}} 个文件短于 {{seconds}} 秒，不足一个训练切片，将被引擎丢弃。',
+          fail: '素材长度：所有文件都短于 {{seconds}} 秒，无法切出任何训练数据，引擎会改用合成演示音频训练。请上传更长的干声录音。',
+        },
+        duration: {
+          ok: '总时长：{{actual}} 分钟，满足当前模式的建议时长。',
+          short: '总时长：仅 {{actual}} 分钟，当前模式建议至少 {{recommended}} 分钟，音色相似度可能偏低。',
+          none: '总时长：未上传任何素材，本次将使用合成演示数据训练。',
+          unknown: '总时长：无法解码所上传文件的时长，请确认文件未损坏。',
+        },
+        memory: {
+          ok: '内存：可用 {{available}} GB，预计需要约 {{needed}} GB。',
+          low: '内存：当前可用内存 {{available}} GB，本次训练预计需要约 {{needed}} GB。建议关闭其他程序，或减少素材数量、改用标准模式。',
+          unknown: '内存：无法读取当前可用内存，本次训练预计需要约 {{needed}} GB，请自行确认是否充足。',
+        },
+        device: {
+          gpu: '运行设备：将使用 GPU 训练。',
+          cpu: '运行设备：将使用 CPU 训练，耗时约为 GPU 的 {{min}}-{{max}} 倍。',
+        },
+        cpuProfessional: {
+          warn: '运行设备：专业模式在 CPU 上训练需要大量内存和时间，普通笔记本可能无法完成。建议切换到标准模式，或改用 GPU 训练。',
+        },
+      },
       training: {
         title: '模型训练', description: '使用干声录音微调 AI 歌手的音色。', info: '模型信息', name: '模型名称 *', namePlaceholder: '例如：我的歌手', epochs: '训练轮数', material: '训练素材', noFiles: '未上传文件，将使用演示数据。', mode: '训练模式', start: '开始本地训练', training: '训练中…', complete: '✓ 训练完成', finalizing: '正在收尾…', finalizingDesc: '训练已完成，正在生成试听音频并保存模型。', audition: '试听', trainAnother: '训练另一个模型', models: '我的模型（{{count}}）', demo: '试听', retrain: '重新训练', delete: '删除', standard: '标准', professional: '专业', gpu: 'GPU', cpu: 'CPU', vram: '显存', epoch: '第 {{current}}/{{total}} 轮', loss: '损失 {{value}}', eta: '预计剩余 {{value}}', waiting: '等待引擎…', logLabel: '训练日志', completeLog: '训练完成！',
         cancel: '取消训练', cancelConfirm: '确定要取消训练吗？此操作无法撤销。',
@@ -45,15 +86,19 @@ const resources = {
         // 用户既不知道哪里错了，也不知道该改什么。
         nameRequired: '请先填写模型名称，再开始训练。',
         failed: '训练启动失败，请查看下方引擎日志了解详情。',
+        // Ticket P3：把引擎的英文诊断翻译成可执行的建议，原文收进折叠面板。
+        error: {
+          timeout: '训练超时：引擎每轮才上报一次进度，素材较多时 CPU 处理时间超过了等待上限，运行被判定为卡死并中止。建议把训练素材控制在 15 分钟以内，或改用标准模式、改用 GPU 训练。',
+          oom: '内存不足：系统或 PyTorch 在训练途中终止了引擎进程。请关闭其他占用内存的程序、减少训练素材数量，或改用标准模式后重试。',
+          dataLoader: '数据加载失败：引擎无法读取预处理后的训练数据。请检查素材文件是否损坏（可先单独试听），必要时重新导出为 WAV 后重试。',
+          showDetail: '查看详细日志',
+        },
         // Ticket T2：设备选择与 CPU 降级提示。
         deviceMode: '运行设备', currentDevice: '当前设备：{{device}}',
         gpuGeneric: '可用', notDetected: '未检测到',
         cpuSlower: '比 GPU 慢约 {{min}}-{{max}} 倍',
         gpuUnavailableHint: '未检测到可用于训练的 GPU（CUDA / Apple MPS）。',
         noGpuNotice: '未检测到 GPU，训练将在 CPU 上进行，耗时约为 GPU 的 {{min}}-{{max}} 倍。',
-        cpuWarningTitle: '将使用 CPU 训练',
-        cpuWarningMessage: '未检测到可用的 GPU，本次{{mode}}训练将使用 CPU，预计耗时约为 GPU 的 {{min}}-{{max}} 倍（约 {{cpuTime}}）。确定继续吗？',
-        cpuWarningConfirm: '继续训练',
         etaPending: '正在估算剩余时间…',
         // Ticket T1/T3：引擎原始输出日志面板。
         engineLog: '引擎日志', engineLogCount: '{{count}} 行',
@@ -448,6 +493,47 @@ const resources = {
       common: { loading: 'Loading…', cancel: 'Cancel', retry: 'Retry', reset: 'Reset', refresh: 'Refresh', close: 'Close', confirm: 'Confirm', activate: 'Activate', deactivate: 'Deactivate', download: 'Download', error: 'Error', done: 'Done', unavailable: 'Unavailable' },
       updater: { ready: 'Update ready to install', install: 'Restart & Install', available: 'Update {{version}} available', downloading: 'Downloading…', download: 'Download' },
       status: { running: 'Running: {{method}}', idle: 'Engine ready', training: 'Training: {{mode}}', separating: 'Separating…', synthesizing: 'Synthesizing ({{mode}})…', saved: 'Saved: {{path}}', applyingHighPitchProtection: 'Applying high-pitch protection…', highPitchProtectionApplied: 'Model vocal range applied — high-pitch protection starts at D#4', highPitchProtectionAppliedWithShift: 'Model vocal range applied — high-pitch protection starts at D#4 | Recommended: shift {{direction}} by {{count}} semitone(s)' },
+      // Ticket P1/P2: the local self-check shown before a run starts. Each row
+      // is a limit that used to fail silently — see utils/trainingPreflight.ts.
+      preflight: {
+        title: 'Pre-training check',
+        summary: 'These checks run locally before the engine starts. Review them, then begin training.',
+        blockedSummary: '{{count}} problem(s) must be fixed before training can start.',
+        blockedHint: 'Fix the items marked ❌ above, then start training again.',
+        proceed: 'Start training',
+        tryAnyway: 'Try anyway',
+        switchToStandard: 'Switch to standard mode',
+        format: {
+          ok: 'File formats: all {{count}} file(s) are readable by the engine.',
+          fail: 'File formats: {{count}} file(s) the engine cannot read ({{names}}) would be skipped silently. Convert them to {{exts}} and upload again.',
+        },
+        duplicateNames: {
+          ok: 'File names: no duplicates.',
+          fail: 'File names: duplicates detected ({{names}}). They overwrite each other on save, so only the last one trains. Rename them and upload again.',
+        },
+        chunkable: {
+          warn: 'Clip length: {{count}} file(s) are shorter than {{seconds}}s — less than one training chunk — and will be discarded.',
+          fail: 'Clip length: every file is shorter than {{seconds}}s, so no training data can be produced and the engine would fall back to synthetic audio. Upload longer dry vocals.',
+        },
+        duration: {
+          ok: 'Total duration: {{actual}} min, which meets this mode\'s recommendation.',
+          short: 'Total duration: only {{actual}} min; this mode recommends at least {{recommended}} min, so timbre similarity may be poor.',
+          none: 'Total duration: no material uploaded — this run would train on synthetic demo data.',
+          unknown: 'Total duration: none of the uploaded files could be decoded. Check that they are not corrupt.',
+        },
+        memory: {
+          ok: 'Memory: {{available}} GB available, about {{needed}} GB needed.',
+          low: 'Memory: {{available}} GB available but about {{needed}} GB needed. Close other programs, use fewer files, or switch to standard mode.',
+          unknown: 'Memory: could not read available memory. This run needs roughly {{needed}} GB — check that you have it.',
+        },
+        device: {
+          gpu: 'Device: this run will use the GPU.',
+          cpu: 'Device: this run will use the CPU, roughly {{min}}-{{max}}x slower than a GPU.',
+        },
+        cpuProfessional: {
+          warn: 'Device: professional mode on the CPU needs a lot of memory and time, and an ordinary laptop may not finish it. Switch to standard mode, or train on a GPU.',
+        },
+      },
       training: { title: 'Model Training', description: 'Fine-tune the AI singer\'s timbre using dry vocal recordings.', info: 'Model Info', name: 'Model name *', namePlaceholder: 'e.g. My Singer', epochs: 'Epochs', material: 'Training Material', noFiles: 'No files uploaded; synthetic demo data will be used.', mode: 'Training Mode', start: 'Start Local Training', training: 'Training…', complete: '✓ Training Complete', finalizing: 'Finalizing…', finalizingDesc: 'Training finished. Generating the demo clip and saving the model.', audition: 'Audition', trainAnother: 'Train Another Model', models: 'Your Models ({{count}})', demo: 'Demo', retrain: 'Retrain', delete: 'Delete', standard: 'Standard', professional: 'Professional', gpu: 'GPU', cpu: 'CPU', vram: 'VRAM', epoch: 'Epoch {{current}}/{{total}}', loss: 'Loss {{value}}', eta: 'ETA {{value}}', waiting: 'Waiting for engine…', logLabel: 'Training log', completeLog: 'Training complete!',
         cancel: 'Cancel training', cancelConfirm: 'Cancel this training run? This cannot be undone.',
         cancelConfirmYes: 'Yes, cancel', cancelConfirmNo: 'Keep training',
@@ -458,6 +544,14 @@ const resources = {
         // error banner showed nothing but an asterisk.
         nameRequired: 'Enter a model name before starting training.',
         failed: 'Training could not be started. See the engine log below for details.',
+        // Ticket P3: the engine's English diagnostic, translated into what to
+        // do about it; its own words stay in the collapsible panel.
+        error: {
+          timeout: 'Training timed out: the engine reports progress only once per epoch, and on the CPU this much material stayed silent past the limit, so the run was treated as hung and stopped. Keep the material under about 15 minutes, switch to standard mode, or train on a GPU.',
+          oom: 'Out of memory: the system or PyTorch killed the engine mid-run. Close other memory-hungry apps, use fewer files, or switch to standard mode and try again.',
+          dataLoader: 'Data loading failed: the engine could not read the preprocessed training data. Check whether any source file is corrupt (try playing it), and re-export to WAV if needed.',
+          showDetail: 'Show engine details',
+        },
         stepsLabel: 'Steps', dateLabel: 'Trained', lossShort: 'Loss',
         emptyLibrary: 'No models yet — train one to get started!',
         deleteTitle: 'Delete model', deleteConfirm: 'Delete "{{name}}"? This cannot be undone.',
@@ -467,9 +561,6 @@ const resources = {
         cpuSlower: 'About {{min}}-{{max}}x slower than a GPU',
         gpuUnavailableHint: 'No training-capable GPU (CUDA / Apple MPS) was detected.',
         noGpuNotice: 'No GPU detected — training will run on this machine\'s CPU and take roughly {{min}}-{{max}}x as long.',
-        cpuWarningTitle: 'This run will use the CPU',
-        cpuWarningMessage: 'No usable GPU was detected, so this {{mode}} run will train on the CPU — expect roughly {{min}}-{{max}}x the GPU time (about {{cpuTime}}). Continue?',
-        cpuWarningConfirm: 'Continue training',
         etaPending: 'Estimating time remaining…',
         // Ticket T1/T3: raw engine output panel.
         engineLog: 'Engine log', engineLogCount: '{{count}} lines',

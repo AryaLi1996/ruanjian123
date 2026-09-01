@@ -10,8 +10,20 @@ interface AudioFileEntry {
   loading:     boolean
 }
 
+/**
+ * One uploaded file plus the duration decoded for its waveform. Ticket P1:
+ * the pre-flight needs both, and the dropzone has already paid for the
+ * decode — re-deriving it at start time would decode every file a second
+ * time just to answer "is this long enough?".
+ */
+export interface TrainingUpload {
+  file:     File
+  /** Seconds, or null while still decoding / when the browser could not decode it. */
+  duration: number | null
+}
+
 interface Props {
-  onFilesChange: (files: File[]) => void
+  onFilesChange: (files: TrainingUpload[]) => void
 }
 
 const ACCEPT = new Set(['.wav', '.flac', '.mp3', '.ogg', '.m4a'])
@@ -20,6 +32,9 @@ function isAudioFile(f: File): boolean {
   const ext = '.' + f.name.split('.').pop()!.toLowerCase()
   return ACCEPT.has(ext) || f.type.startsWith('audio/')
 }
+
+const toUploads = (entries: AudioFileEntry[]): TrainingUpload[] =>
+  entries.map((e) => ({ file: e.file, duration: e.duration }))
 
 export function AudioDropzone({ onFilesChange }: Props): JSX.Element {
   const [entries, setEntries]   = useState<AudioFileEntry[]>([])
@@ -38,7 +53,7 @@ export function AudioDropzone({ onFilesChange }: Props): JSX.Element {
 
     setEntries((prev) => {
       const next = [...prev, ...placeholders]
-      onFilesChange(next.map((e) => e.file))
+      onFilesChange(toUploads(next))
       return next
     })
 
@@ -48,9 +63,17 @@ export function AudioDropzone({ onFilesChange }: Props): JSX.Element {
     // waveform/duration to this entry.
     for (const placeholder of placeholders) {
       const info = await getAudioInfo(placeholder.file)
-      setEntries((prev) => prev.map((e) =>
-        e.id === placeholder.id ? { ...e, ...info, loading: false } : e
-      ))
+      setEntries((prev) => {
+        const next = prev.map((e) =>
+          e.id === placeholder.id
+            ? { ...e, ...info, duration: info.duration > 0 ? info.duration : null, loading: false }
+            : e
+        )
+        // Republish as each duration lands: the pre-flight's duration and
+        // chunk checks are only as good as what has finished decoding.
+        onFilesChange(toUploads(next))
+        return next
+      })
     }
   }, [onFilesChange])
 
@@ -62,7 +85,7 @@ export function AudioDropzone({ onFilesChange }: Props): JSX.Element {
   function handleRemove(id: string): void {
     setEntries((prev) => {
       const next = prev.filter((e) => e.id !== id)
-      onFilesChange(next.map((e) => e.file))
+      onFilesChange(toUploads(next))
       return next
     })
   }

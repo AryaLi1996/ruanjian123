@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import {
+  DEFAULT_STALL_TIMEOUT_MS, MAX_STALL_TIMEOUT_MS, MIN_STALL_TIMEOUT_MS,
   DEFAULT_STARTUP_TIMEOUT_MS, MAX_STARTUP_TIMEOUT_MS, MIN_STARTUP_TIMEOUT_MS,
   classifyEngineLine, describeSpawnFailure, describeStartupTimeout,
   parseEngineJsonLine, parseEngineStdout,
-  resolveCommandOnPath, resolveStartupTimeoutMs, shouldRetryStartup, stripDiagnostics,
+  resolveCommandOnPath, resolveStallTimeoutMs, resolveStartupTimeoutMs, shouldRetryStartup,
+  stripDiagnostics, tailLines,
 } from './engine-preflight'
 
 describe('resolveStartupTimeoutMs() — Ticket T1', () => {
@@ -212,5 +214,38 @@ describe('parseEngineStdout() — Ticket T2', () => {
 
   it('handles empty stdout', () => {
     expect(parseEngineStdout('')).toEqual({ result: undefined, textLines: [] })
+  })
+})
+
+describe('resolveStallTimeoutMs() — Ticket P2', () => {
+  it('defaults to the 5-minute budget when the renderer asks for nothing', () => {
+    expect(DEFAULT_STALL_TIMEOUT_MS).toBe(5 * 60_000)
+    expect(resolveStallTimeoutMs(undefined)).toBe(DEFAULT_STALL_TIMEOUT_MS)
+    expect(resolveStallTimeoutMs(null)).toBe(DEFAULT_STALL_TIMEOUT_MS)
+    expect(resolveStallTimeoutMs('later')).toBe(DEFAULT_STALL_TIMEOUT_MS)
+  })
+
+  it('honours the raised budget a professional CPU run asks for', () => {
+    expect(resolveStallTimeoutMs(30 * 60_000)).toBe(30 * 60_000)
+  })
+
+  it('clamps a renderer-supplied value at both ends — it crosses the IPC boundary', () => {
+    expect(resolveStallTimeoutMs(1)).toBe(MIN_STALL_TIMEOUT_MS)
+    expect(resolveStallTimeoutMs(24 * 60 * 60_000)).toBe(MAX_STALL_TIMEOUT_MS)
+    expect(resolveStallTimeoutMs(-5)).toBe(DEFAULT_STALL_TIMEOUT_MS)
+  })
+})
+
+describe('tailLines() — Ticket P3', () => {
+  it('keeps the last lines, which is where the failure is', () => {
+    const text = Array.from({ length: 80 }, (_, i) => `line ${i}`).join('\n')
+    const tail = tailLines(text).split('\n')
+    expect(tail).toHaveLength(50)
+    expect(tail.at(-1)).toBe('line 79')
+  })
+
+  it('drops blank lines and leaves short output untouched', () => {
+    expect(tailLines('a\n\n\nb')).toBe('a\nb')
+    expect(tailLines('')).toBe('')
   })
 })

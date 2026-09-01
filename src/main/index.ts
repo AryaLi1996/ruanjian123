@@ -4,7 +4,8 @@ import { existsSync, renameSync } from 'fs'
 import { promises as fs } from 'fs'
 import {
   callPythonEngine, callPythonEngineStreaming, cancelPythonEngineStreaming,
-  getEngineStartupTimeoutMs, onEngineLog, preflightEngine, setEngineStartupTimeoutMs,
+  DEFAULT_STALL_TIMEOUT_MS, getEngineStartupTimeoutMs, onEngineLog, preflightEngine,
+  resolveStallTimeoutMs, setEngineStartupTimeoutMs,
   type EngineLogEntry,
 } from './python-bridge'
 import { encryptModelFile, decryptModelFile } from './model-crypto'
@@ -507,9 +508,20 @@ ipcMain.handle('engine:call', (_event, method: string, args: unknown[]) =>
 )
 
 // Streaming handler: emits engine:progress events for each JSON line from Python
-ipcMain.handle('engine:stream', (event, method: string, args: unknown[]) =>
-  callPythonEngineStreaming(method, args, (data) =>
-    event.sender.send('engine:progress', data)
+// Ticket P2: `options.stallTimeoutMs` lets the Training view raise the
+// silence budget for the one case that legitimately exceeds it — a
+// professional-mode run on the CPU, where a single epoch can outlast the
+// 5-minute default. Clamped here rather than trusted: it arrives from the
+// renderer.
+ipcMain.handle('engine:stream', (
+  event, method: string, args: unknown[], options?: { stallTimeoutMs?: number },
+) =>
+  callPythonEngineStreaming(
+    method, args,
+    (data) => event.sender.send('engine:progress', data),
+    options?.stallTimeoutMs == null
+      ? DEFAULT_STALL_TIMEOUT_MS
+      : resolveStallTimeoutMs(options.stallTimeoutMs),
   )
 )
 
