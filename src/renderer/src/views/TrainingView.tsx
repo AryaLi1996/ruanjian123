@@ -17,6 +17,7 @@ import {
   CPU_SLOWDOWN_MAX, CPU_SLOWDOWN_MIN, describeDevice, engineDeviceFor,
   needsCpuWarning, resolveDeviceMode, summarizeReport, type DeviceMode,
 } from '../utils/environmentCheck'
+import { describeError } from '../utils/errorMessage'
 
 type Phase = 'idle' | 'training' | 'finalizing' | 'done'
 
@@ -134,6 +135,12 @@ export function TrainingView(): JSX.Element {
   const [result,      setResult]      = useState<TrainingResult | null>(null)
   const [demoUrl,     setDemoUrl]     = useState<string | null>(null)
   const [error,       setError]       = useState<string | null>(null)
+  // Ticket T1/T2: the model-name check is a field-level problem, so it is
+  // reported on the field (and focused) instead of only in the page-wide
+  // banner sitting a screen further down, where a failed click read as the
+  // button doing nothing at all.
+  const [nameError,   setNameError]   = useState<string | null>(null)
+  const nameInputRef = useRef<HTMLInputElement>(null)
 
   // ── model list state (player overlay) ────────────────────
   const [playingModelId, setPlayingModelId] = useState<string | null>(null)
@@ -209,7 +216,19 @@ export function TrainingView(): JSX.Element {
    * (Ticket T2). The run itself is in runTraining below.
    */
   function handleTrain(): void {
-    if (!modelName.trim()) { setError(t('training.name')); return }
+    setError(null)
+    setNameError(null)
+    if (!modelName.trim()) {
+      // Ticket T1: this used to set the *label* ('模型名称 *') as the error and
+      // stop there. The click looked like it did nothing — the banner is at the
+      // bottom of a long form, and what it showed was an asterisk, not a
+      // reason. Now the message says what to do, and the field that needs
+      // fixing is scrolled to and focused so the click has a visible effect.
+      setNameError(t('training.nameRequired'))
+      nameInputRef.current?.focus()
+      nameInputRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      return
+    }
     if (!envSummary.canTrain) { setError(t('envCheck.blocked')); return }
     if (needsCpuWarning(deviceMode, device)) { setConfirmingCpu(true); return }
     void runTraining()
@@ -217,6 +236,7 @@ export function TrainingView(): JSX.Element {
 
   async function runTraining(): Promise<void> {
     setError(null)
+    setNameError(null)
     setLogs([])
     setProgress(null)
     setNotices([])
@@ -307,13 +327,16 @@ export function TrainingView(): JSX.Element {
         setLogs((prev) => [...prev, t('training.cancelled')])
         return
       }
-      setError(String(err))
+      // Ticket T2: surface what the engine actually said (disk full, dataset
+      // unreadable, missing Python) rather than Electron's IPC wrapper around it.
+      const message = describeError(err, t('training.failed'))
+      setError(message)
       setPhase('idle')
       notify({
         category: 'taskFailure',
         titleKey: 'notification.training.failed.title',
         messageKey: 'notification.training.failed.message',
-        messageParams: { message: String(err) },
+        messageParams: { message },
         action: { type: 'view', view: 'training' },
       })
     } finally {
@@ -349,7 +372,7 @@ export function TrainingView(): JSX.Element {
       // the in-flight stream reject, and unwinding it there keeps one exit
       // path for the run instead of two racing to reset the same state.
     } catch (err) {
-      setError(String(err))
+      setError(describeError(err, t('training.failed')))
     } finally {
       setCancelling(false)
     }
@@ -402,6 +425,7 @@ export function TrainingView(): JSX.Element {
     setResult(null)
     setDemoUrl(null)
     setError(null)
+    setNameError(null)
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
@@ -419,6 +443,7 @@ export function TrainingView(): JSX.Element {
     setResult(null)
     setDemoUrl(null)
     setError(null)
+    setNameError(null)
   }
 
   return (
@@ -448,14 +473,31 @@ export function TrainingView(): JSX.Element {
               {/* Name + epochs */}
               <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 10 }}>
                 <div className="field" style={{ marginBottom: 0 }}>
-                  <label>{t('training.name')}</label>
+                  <label htmlFor="training-model-name">{t('training.name')}</label>
                   <input
-                    className="input"
+                    id="training-model-name"
+                    ref={nameInputRef}
+                    className={`input${nameError ? ' invalid' : ''}`}
                     placeholder={t('training.namePlaceholder')}
                     value={modelName}
-                    onChange={(e) => setModelName(e.target.value)}
+                    // Ticket T3: editing the name is the fix for this error, so
+                    // the red field and the stale start-up banner clear as soon
+                    // as the user types — otherwise a corrected name still looks
+                    // rejected.
+                    onChange={(e) => {
+                      setModelName(e.target.value)
+                      if (nameError) setNameError(null)
+                      if (error) setError(null)
+                    }}
+                    aria-invalid={nameError ? true : undefined}
+                    aria-describedby={nameError ? 'training-model-name-error' : undefined}
                     maxLength={50}
                   />
+                  {nameError && (
+                    <p id="training-model-name-error" className="field-error" role="alert">
+                      {nameError}
+                    </p>
+                  )}
                 </div>
                 <div className="field" style={{ marginBottom: 0 }}>
                   <label>{t('training.epochs')}</label>
@@ -507,7 +549,7 @@ export function TrainingView(): JSX.Element {
             <EngineLogPanel entries={engineLogs} />
           </div>
 
-          {error && <div className="error-banner">{error}</div>}
+          {error && <div className="error-banner" role="alert">{error}</div>}
 
           <button
             className="btn btn-primary"
