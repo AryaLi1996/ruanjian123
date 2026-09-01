@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   DEFAULT_STARTUP_TIMEOUT_MS, MAX_STARTUP_TIMEOUT_MS, MIN_STARTUP_TIMEOUT_MS,
   classifyEngineLine, describeSpawnFailure, describeStartupTimeout,
+  parseEngineJsonLine, parseEngineStdout,
   resolveCommandOnPath, resolveStartupTimeoutMs, shouldRetryStartup, stripDiagnostics,
 } from './engine-preflight'
 
@@ -147,5 +148,69 @@ describe('resolveCommandOnPath() — Ticket T1 pre-flight', () => {
     expect(resolveCommandOnPath('python3', {
       pathEnv: undefined, platform: 'linux', exists: () => true,
     })).toBeNull()
+  })
+})
+
+describe('parseEngineJsonLine() — Ticket T2', () => {
+  it('parses a JSON progress message', () => {
+    expect(parseEngineJsonLine('{"status":"training","epoch":3}'))
+      .toEqual({ status: 'training', epoch: 3 })
+  })
+
+  it('tolerates surrounding whitespace and \r from Windows pipes', () => {
+    expect(parseEngineJsonLine('  {"a":1}\r')).toEqual({ a: 1 })
+  })
+
+  it('returns undefined for the plain text a Python run mixes into stdout', () => {
+    for (const line of [
+      'UserWarning: lr_scheduler.step() was called before optimizer.step()',
+      'Traceback (most recent call last):',
+      '  File "trainer.py", line 640, in train',
+      'RuntimeError: DataLoader worker (pid(s) 1984) exited unexpectedly',
+      '',
+      '{"unterminated": ',
+    ]) {
+      expect(parseEngineJsonLine(line)).toBeUndefined()
+    }
+  })
+
+  it('rejects bare JSON scalars, which are text a library happened to print', () => {
+    // `42`/`null`/`"done"` all parse, but handing one to the UI as a progress
+    // update is exactly the confusion this guard exists to prevent.
+    expect(parseEngineJsonLine('42')).toBeUndefined()
+    expect(parseEngineJsonLine('null')).toBeUndefined()
+    expect(parseEngineJsonLine('"done"')).toBeUndefined()
+  })
+})
+
+describe('parseEngineStdout() — Ticket T2', () => {
+  it('returns the last JSON message and keeps the noise separate', () => {
+    const { result, textLines } = parseEngineStdout([
+      'Some library banner',
+      '{"status":"training","epoch":1}',
+      '{"status":"done","output_path":"/tmp/m.onnx"}',
+      '',
+    ].join('\n'))
+    expect(result).toEqual({ status: 'done', output_path: '/tmp/m.onnx' })
+    expect(textLines).toEqual(['Some library banner'])
+  })
+
+  it('still finds the result when a warning is printed after it', () => {
+    // The regression behind "invalid JSON payload": the old code parsed the
+    // last *line*, so anything printed on the way out failed the whole call.
+    const { result, textLines } = parseEngineStdout(
+      '{"status":"done"}\nsys:1: ResourceWarning: unclosed file\n')
+    expect(result).toEqual({ status: 'done' })
+    expect(textLines).toEqual(['sys:1: ResourceWarning: unclosed file'])
+  })
+
+  it('reports no result when stdout held no JSON at all', () => {
+    const { result, textLines } = parseEngineStdout('Killed\n')
+    expect(result).toBeUndefined()
+    expect(textLines).toEqual(['Killed'])
+  })
+
+  it('handles empty stdout', () => {
+    expect(parseEngineStdout('')).toEqual({ result: undefined, textLines: [] })
   })
 })

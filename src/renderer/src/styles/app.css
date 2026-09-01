@@ -4218,3 +4218,18 @@ html, body, #root {
 .engine-log-heartbeat  { opacity: 0.55; }
 .engine-log-json       { color: var(--text); }
 .engine-log-error      { color: var(--danger); }
+
+/* ── Mid-run engine notices (Ticket T1) ──────────────────── */
+/* A run that degraded but is still going — e.g. data loading fell back to a
+   single process. Warning-coloured, not error-coloured: training continues. */
+.training-notices { display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; }
+.training-notice {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: var(--radius);
+  border-left: 3px solid var(--warning);
+  background: var(--bg-hover);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.5;
+}

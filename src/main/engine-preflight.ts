@@ -64,6 +64,60 @@ export function classifyEngineLine(line: string): EngineLineKind {
 }
 
 /**
+ * Parse one stdout line as an engine JSON message, or return undefined.
+ *
+ * Ticket T2: stdout carries the JSON protocol, but a Python process shares
+ * that stream with anything a library decides to print — a warning, a
+ * progress bar, a stray `print()` in a dependency. Feeding those to
+ * JSON.parse is what produced the flood of "invalid JSON payload" errors, so
+ * a line is only treated as a message when it actually looks like one:
+ *
+ *  * it must parse, and
+ *  * it must be an object or array. Without that check a bare `42` or a
+ *    `null` printed by a library parses fine and would be handed to the UI
+ *    as a progress update.
+ *
+ * Everything else is plain text, and belongs in the log panel verbatim.
+ */
+export function parseEngineJsonLine(line: string): unknown | undefined {
+  const trimmed = line.trim()
+  if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) return undefined
+  try {
+    const value: unknown = JSON.parse(trimmed)
+    return typeof value === 'object' && value !== null ? value : undefined
+  } catch {
+    return undefined
+  }
+}
+
+export interface EngineStdout {
+  /** The last JSON message on stdout — the engine's result — if there was one. */
+  result: unknown | undefined
+  /** Non-JSON lines, in order: warnings and stray prints worth showing the user. */
+  textLines: string[]
+}
+
+/**
+ * Split a completed run's stdout into its JSON result and its plain-text noise.
+ *
+ * The result is the *last* JSON message rather than the last line, so a
+ * warning printed after the result (an atexit handler, a `__del__` complaining
+ * on interpreter shutdown) no longer turns a successful call into a parse
+ * failure.
+ */
+export function parseEngineStdout(stdout: string): EngineStdout {
+  let result: unknown | undefined
+  const textLines: string[] = []
+  for (const line of stdout.split('\n')) {
+    if (!line.trim()) continue
+    const parsed = parseEngineJsonLine(line)
+    if (parsed === undefined) textLines.push(line.trimEnd())
+    else result = parsed
+  }
+  return { result, textLines }
+}
+
+/**
  * Strip the engine's own verbose diagnostics out of captured stderr, leaving
  * whatever a real failure printed. Verbose mode is on by default for
  * streaming runs, so without this every error message would be buried under

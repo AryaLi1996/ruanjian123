@@ -6,6 +6,7 @@ import log from 'electron-log'
 import {
   DEFAULT_STARTUP_TIMEOUT_MS, STARTUP_HEARTBEAT_GRACE_FACTOR,
   classifyEngineLine, describeMissingInterpreter, describeSpawnFailure, describeStartupTimeout,
+  parseEngineJsonLine, parseEngineStdout,
   resolveCommandOnPath, resolveStartupTimeoutMs, shouldRetryStartup, stripDiagnostics,
 } from './engine-preflight'
 
@@ -321,14 +322,24 @@ export function callPythonEngine(
         reject(new Error(describeExitError(code, target.executable, stderr)))
         return
       }
-      // Use the last non-empty line (handles engines that emit progress before result)
-      const lines = stdout.trim().split('\n').filter((l) => l.trim())
-      const last  = lines[lines.length - 1] ?? '{}'
-      try {
-        resolve(JSON.parse(last))
-      } catch {
-        reject(new Error(`Invalid JSON from Python engine: ${last}`))
+      // Ticket T2: take the last JSON *message* on stdout, not the last line.
+      // The engine shares stdout with whatever its dependencies print, so the
+      // final line is regularly a warning rather than the result — parsing it
+      // blindly is what turned a successful run into "invalid JSON payload".
+      const { result, textLines } = parseEngineStdout(stdout)
+      // Plain-text stdout used to be discarded here; surface it in the log
+      // panel, where it is often the only explanation of what went wrong.
+      for (const line of textLines) {
+        emitLog({ method, stream: 'stdout', kind: 'diagnostic', line, at: Date.now() })
       }
+      if (result === undefined) {
+        const tail = textLines.slice(-3).join(' | ') || '(no output)'
+        reject(new Error(
+          `Python engine produced no JSON result${textLines.length ? `; last output: ${tail}` : ''}`,
+        ))
+        return
+      }
+      resolve(result)
     })
 
     proc.on('error', (error) => {
@@ -499,17 +510,18 @@ export function callPythonEngineStreaming(
       partial = lines.pop() ?? ''
       for (const line of lines) {
         if (!line.trim()) continue
-        try {
-          const data = JSON.parse(line)
-          lastData = data
-          onData(data)
-          emitLog({ method, stream: 'stdout', kind: 'json', line: line.trimEnd(), at: Date.now() })
-        } catch {
-          // Not JSON — a print() from a library, or a warning. Previously
-          // dropped on the floor; now surfaced in the log panel, where it is
-          // often the only clue about where a run got stuck (Ticket T3).
+        const data = parseEngineJsonLine(line)
+        if (data === undefined) {
+          // Not a JSON message — a print() from a library, a warning, a
+          // traceback frame. It is shown as plain text rather than parsed
+          // (Ticket T2/T3): these lines are often the only clue about where a
+          // run got stuck, and they must never be mistaken for progress.
           emitLog({ method, stream: 'stdout', kind: 'diagnostic', line: line.trimEnd(), at: Date.now() })
+          continue
         }
+        lastData = data
+        onData(data)
+        emitLog({ method, stream: 'stdout', kind: 'json', line: line.trimEnd(), at: Date.now() })
       }
     })
 
@@ -535,8 +547,12 @@ export function callPythonEngineStreaming(
         reject(new Error(ENGINE_CANCELLED))
         return
       }
+      // A final line with no trailing newline — the engine's result when the
+      // process exits immediately after printing it.
       if (partial.trim()) {
-        try { const d = JSON.parse(partial); lastData = d; onData(d) } catch { /* ignore */ }
+        const d = parseEngineJsonLine(partial)
+        if (d !== undefined) { lastData = d; onData(d) }
+        else emitLog({ method, stream: 'stdout', kind: 'diagnostic', line: partial.trimEnd(), at: Date.now() })
       }
       if (code !== 0) {
         reject(new Error(describeExitError(code, target.executable, stderr)))
