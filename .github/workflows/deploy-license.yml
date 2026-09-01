@@ -2,47 +2,71 @@ name: Deploy License Backend
 
 # Automates what scripts/deploy-license.sh (see DEV_GUIDE.md §2.7) previously
 # only ran by hand — the Ticket 42 trial-duration fix's own rollout was
-# blocked on exactly that manual step. Runs the handler.py unit tests as a
-# pre-deploy gate, then sam build/deploy via the same script, authenticating
-# to AWS with short-lived OIDC credentials — no long-lived access keys
-# stored in GitHub.
+# blocked on exactly that manual step. Authenticates to AWS with short-lived
+# OIDC credentials; no long-lived access keys are stored in GitHub.
+#
+# Three jobs, each with strictly less privilege than the one after it:
+#
+#   test   no AWS credentials at all — runs handler.py's unit suite. A red
+#          test here stops the run before anything reaches AWS.
+#   plan   assumes AWS_PLAN_ROLE_ARN, whose IAM policy has no
+#          cloudformation:ExecuteChangeSet, no DeleteStack and no DynamoDB
+#          data-plane access. Runs scripts/deploy-license.sh with
+#          PLAN_ONLY=true, which creates and prints a CloudFormation
+#          change-set without executing it. This job cannot change
+#          production even if it is compromised.
+#   apply  gated on the `production` GitHub Environment. Assumes
+#          AWS_DEPLOY_ROLE_ARN and actually executes the deployment. Add
+#          required reviewers to that environment and this is where a human
+#          reads the change-set `plan` printed and decides.
+#
+# The split is the point: the destructive credential is only ever handed to
+# a job that a human released, and what that human approves was printed, in
+# full, by a job that could not have applied it.
 #
 # One-time AWS + GitHub setup is required before this can succeed — see
 # serverless/verify-license/CI_DEPLOY_SETUP.md. In short, this needs:
-#   - An IAM OIDC role in AWS account 641628981129 (scripts/deploy-license.sh's
-#     EXPECTED_ACCOUNT guard still applies here — the role must live in that
-#     account) that this workflow can assume.
-#   - Repository secrets:
-#       AWS_DEPLOY_ROLE_ARN     required — the role above, ARN form
-#       LICENSE_SIGNING_SECRET  required — scripts/deploy-license.sh refuses
-#                               to run without it
+#   - Two IAM OIDC roles in AWS account 641628981129
+#     (scripts/deploy-license.sh's EXPECTED_ACCOUNT guard still applies here
+#     — both roles must live in that account), with the trust policies and
+#     permission policies that document spells out.
+#   - Two GitHub Environments, `license-plan` and `production`, each holding
+#     the secrets its job needs as **environment** secrets:
+#       AWS_PLAN_ROLE_ARN       (license-plan) required
+#       AWS_DEPLOY_ROLE_ARN     (production)   required
+#       LICENSE_SIGNING_SECRET  (both)         required — scripts/deploy-license.sh
+#                               refuses to run without it, and the template's
+#                               LicenseSigningSecret parameter is NoEcho, so a
+#                               plan can't read the deployed value back and
+#                               must pass the real one to produce a change-set
+#                               that isn't pure noise
 #       STRIPE_API_KEY, STRIPE_WEBHOOK_SECRET, LEMON_API_KEY,
-#       SES_SENDER_EMAIL       optional — leave unset to omit that
+#       SES_SENDER_EMAIL       (both) optional — leave unset to omit that
 #                               parameter override entirely (not "set to
 #                               empty"), which scripts/deploy-license.sh
 #                               handles correctly
+#     Environment secrets rather than repository secrets so that a new or
+#     modified workflow elsewhere in this repo cannot read them: only a job
+#     naming that environment can, and `production` additionally requires a
+#     reviewer to release the run.
 #
 # Until those are configured, this workflow runs and fails cleanly at the
 # credentials/secret check rather than silently doing nothing — deliberate,
 # so a missing secret shows up as a red X in the Actions tab instead of a
 # deploy nobody notices never happened.
 #
-# Deploys automatically on every push to main that touches the license
-# backend — there's no manual approval step baked in.
-#
-# Deliberately does NOT set `environment: production` (or any `environment:`)
-# on the job below, even as an inert placeholder for a future manual-approval
-# gate: naming a GitHub Environment on a job changes the OIDC `sub` claim
-# GitHub issues from `repo:OWNER/REPO:ref:refs/heads/BRANCH` to
+# ── About `environment:` and the OIDC `sub` claim — READ BEFORE EDITING ─────
+# Naming a GitHub Environment on a job changes the OIDC `sub` claim GitHub
+# issues from `repo:OWNER/REPO:ref:refs/heads/BRANCH` to
 # `repo:OWNER/REPO:environment:ENV_NAME` — *even with zero protection rules
-# configured on that environment* — which breaks IAM role trust policies
-# written for the `ref:` form. That's exactly what happened here: this
-# workflow shipped with `environment: production` as a "no-op until you add
-# reviewers" convenience, and it broke every OIDC role-assumption attempt
-# until removed. If you want that manual-approval gate later, add
-# `environment: production` back *and* add a matching
-# `repo:OWNER/REPO:environment:production` entry to the trust policy's `sub`
-# condition (see CI_DEPLOY_SETUP.md) — don't assume it's a no-op.
+# configured on that environment*. This workflow originally shipped with
+# `environment: production` as a "no-op until you add reviewers"
+# convenience and it broke every OIDC role-assumption attempt until it was
+# removed. Both jobs below now name an environment deliberately, so both
+# trust policies must be written for the `environment:` form (they are, in
+# CI_DEPLOY_SETUP.md). If you rename an environment here, update that
+# role's trust policy in the same change — and land the IAM edit *first*,
+# or the next run fails at assume-role.
 
 on:
   push:
@@ -51,24 +75,39 @@ on:
       - 'serverless/verify-license/**'
       - 'scripts/deploy-license.sh'
       - '.github/workflows/deploy-license.yml'
+  # Manual re-deploy from the Actions tab (or `gh workflow run
+  # deploy-license.yml`). The push trigger above only fires when the
+  # backend's own files change, so there was otherwise no way to re-run a
+  # deploy after rotating a secret, recovering a rolled-back stack, or
+  # landing a client-only change that still needs the current stack
+  # re-applied. This widens who can *start* a run, not what a run can do:
+  # the `production` reviewers still gate the only job that can change
+  # anything, and both trust policies pin the branch (see CI_DEPLOY_SETUP.md),
+  # so a dispatch from a non-main ref fails at assume-role.
+  workflow_dispatch:
 
 # A second push landing mid-deploy queues behind the first rather than
 # cancelling it — an interrupted `sam deploy` can leave the CloudFormation
 # stack in UPDATE_ROLLBACK_FAILED, which needs manual intervention to clear.
+# Note this now also holds the queue while `apply` waits for its reviewer.
 concurrency:
   group: deploy-license
   cancel-in-progress: false
 
+# Workflow-level default. `test` narrows it further; the two AWS jobs need
+# id-token: write for aws-actions/configure-aws-credentials's OIDC flow.
 permissions:
   contents: read
-  id-token: write # required by aws-actions/configure-aws-credentials's OIDC flow
 
 jobs:
-  deploy:
-    name: Test & Deploy License Backend
+  test:
+    name: Unit tests (pre-deploy gate)
     runs-on: ubuntu-latest
-    timeout-minutes: 20
-
+    timeout-minutes: 10
+    # No id-token here: this job never talks to AWS, so it is not given the
+    # ability to request an OIDC token at all.
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
 
@@ -77,14 +116,69 @@ jobs:
         with:
           python-version: "3.11"
 
-      # Fails the whole job before anything touches AWS if the trial-duration
-      # cap logic (or anything else handler.py's suite covers) is broken —
+      # Fails the run before anything touches AWS if the trial-duration cap
+      # logic (or anything else handler.py's suite covers) is broken —
       # see serverless/verify-license/test_handler.py.
-      - name: Run handler.py unit tests (pre-deploy gate)
+      - name: Run handler.py unit tests
         working-directory: serverless/verify-license
         run: python3 -m unittest test_handler -v
 
-      - name: Configure AWS credentials (OIDC)
+  plan:
+    name: Plan (change-set preview, cannot apply)
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # Scopes the plan role ARN and signing secret to this job. Give this
+    # environment NO protection rules — it is not an approval gate, it is a
+    # secret boundary, and a reviewer requirement here would just mean
+    # approving twice.
+    environment: license-plan
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC, plan role)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_PLAN_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: Set up AWS SAM CLI
+        uses: aws-actions/setup-sam@v2
+
+      # PLAN_ONLY=true: builds, uploads artifacts, creates and prints a
+      # change-set, then stops. Skips the destructive stale-stack cleanup the
+      # apply job does. Passing a secret through as an empty env var is fine —
+      # the script only adds a parameter override when the value is non-empty.
+      - name: Plan (sam build + change-set, no execute)
+        env:
+          PLAN_ONLY: "true"
+          AWS_REGION: us-east-1
+          LICENSE_SIGNING_SECRET: ${{ secrets.LICENSE_SIGNING_SECRET }}
+          STRIPE_API_KEY: ${{ secrets.STRIPE_API_KEY }}
+          STRIPE_WEBHOOK_SECRET: ${{ secrets.STRIPE_WEBHOOK_SECRET }}
+          LEMON_API_KEY: ${{ secrets.LEMON_API_KEY }}
+          SES_SENDER_EMAIL: ${{ secrets.SES_SENDER_EMAIL }}
+        run: scripts/deploy-license.sh
+
+  apply:
+    name: Apply (requires approval)
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # The approval gate. Configure required reviewers on this environment in
+    # Settings → Environments → production; until someone releases the run,
+    # AWS_DEPLOY_ROLE_ARN is never handed out and nothing is applied.
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC, deploy role)
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
@@ -93,13 +187,14 @@ jobs:
       - name: Set up AWS SAM CLI
         uses: aws-actions/setup-sam@v2
 
-      # scripts/deploy-license.sh already: verifies the assumed identity's
-      # AWS account matches EXPECTED_ACCOUNT, cleans up an unusable
+      # scripts/deploy-license.sh: verifies the assumed identity's AWS account
+      # matches EXPECTED_ACCOUNT, cleans up an unusable
       # REVIEW_IN_PROGRESS/ROLLBACK_COMPLETE/CREATE_FAILED stack, runs
-      # `sam build` + `sam deploy --parameter-overrides ...`, and prints the
-      # stack outputs (including the Function URL) on success. Passing a
-      # secret through as an empty env var is fine — the script only adds a
-      # parameter override when the value is actually non-empty.
+      # `sam build` + `sam deploy`, and prints the stack outputs (including
+      # the Function URL) on success. It recomputes its own change-set rather
+      # than executing the one `plan` created — same commit, same parameters,
+      # so the same diff, and it keeps this job working even if the plan's
+      # change-set was pruned while the run waited for approval.
       - name: Deploy (sam build + sam deploy)
         env:
           AWS_REGION: us-east-1

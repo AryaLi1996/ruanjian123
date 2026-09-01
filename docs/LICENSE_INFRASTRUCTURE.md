@@ -471,15 +471,29 @@ Function URL 是 `AuthType: NONE`，即完全公开，所有输入都是攻击�
 
 **触发**：push 到 `main` 且改动
 `serverless/verify-license/**`、`scripts/deploy-license.sh`、
-或该 workflow 自身。
+或该 workflow 自身；也可从 Actions 页手动 `workflow_dispatch`。
 
-**流程**（`.github/workflows/deploy-license.yml`）：
-1. checkout + Python 3.11
-2. **预部署闸门**：`python3 -m unittest test_handler -v`（失败即中止，不碰 AWS）
-3. `aws-actions/configure-aws-credentials@v4` 走 **GitHub OIDC**
-   （无长期 AK/SK 存在 GitHub）
-4. `aws-actions/setup-sam@v2`
-5. `scripts/deploy-license.sh`
+**流程**（`.github/workflows/deploy-license.yml`）——三个 job，权限逐级放大：
+
+| Job | AWS 角色 | 能改生产吗 | 闸门 |
+|---|---|---|---|
+| `test` | 无（连 `id-token` 权限都不给） | 否 | — |
+| `plan` | `AWS_PLAN_ROLE_ARN`：无 `ExecuteChangeSet` / `DeleteStack` / DynamoDB 数据面 | **否** | — |
+| `apply` | `AWS_DEPLOY_ROLE_ARN` | 是 | `production` environment 的人工审批 |
+
+1. `test`：`python3 -m unittest test_handler -v`（失败即中止，不碰 AWS）
+2. `plan`：OIDC 取 plan 角色 → `PLAN_ONLY=true scripts/deploy-license.sh`，
+   只创建并打印 change-set，**不执行**
+3. `apply`：等人工审批放行 → OIDC 取 deploy 角色 → `scripts/deploy-license.sh`
+
+审批者读的是 `plan` 打印出来的真实资源 diff，而 `plan` 这个 job
+在 IAM 层面就没有能力把它应用上去。
+
+**密钥作用域**：`LICENSE_SIGNING_SECRET` 等已从 repository secrets 降为
+**environment secrets**（`license-plan` / `production`），仓库里其他
+workflow 读不到。两个 environment 都要把 Deployment branches 限定为
+`main`——改用 `environment:` 形式的 OIDC claim 后，`sub` 里不再含分支，
+分支限制只能由 GitHub 侧提供。
 
 **`scripts/deploy-license.sh` 做的事**：
 - 校验 `LICENSE_SIGNING_SECRET` 存在（支持 `_FILE` 变体和交互式输入）
@@ -487,6 +501,8 @@ Function URL 是 `AuthType: NONE`，即完全公开，所有输入都是攻击�
 - 若 stack 处于 `REVIEW_IN_PROGRESS` / `ROLLBACK_COMPLETE` / `CREATE_FAILED`
   这类不可更新状态，先删除再重建
 - `sam build` → `sam deploy --resolve-s3 --capabilities CAPABILITY_NAMED_IAM`
+- `PLAN_ONLY=true` 时改用 `--no-execute-changeset`，并跳过上面那步删 stack
+  的清理逻辑与结尾的 stack outputs——预览不该有副作用
 - **只为非空的可选 secret 追加 `--parameter-overrides`** ——
   `sam deploy` 的简写语法会直接拒绝 `StripeApiKey=` 这种显式空值
 - 失败时打印最近 20 条 CloudFormation 事件；成功时打印 stack outputs（含 Function URL）

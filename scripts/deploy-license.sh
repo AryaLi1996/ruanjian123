@@ -7,6 +7,19 @@ STACK_NAME="${STACK_NAME:-ruanjian-license}"
 AWS_REGION="${AWS_REGION:-us-east-1}"
 EXPECTED_ACCOUNT="641628981129"
 
+# PLAN_ONLY=true turns this into a read-only preview: it builds and uploads
+# the artifacts, creates a CloudFormation change-set and prints it, but never
+# executes it and never deletes anything. That's what the deploy workflow's
+# `plan` job runs, behind an IAM role that lacks ExecuteChangeSet entirely —
+# so a reviewer sees the exact resource diff *before* approving the `apply`
+# job that performs it (see .github/workflows/deploy-license.yml and
+# serverless/verify-license/CI_DEPLOY_SETUP.md).
+#
+# The un-executed change-sets this leaves behind are inert: they hold no
+# resources, cost nothing, and are superseded by the next one. CloudFormation
+# caps them at 3600 per stack, so prune them occasionally if this runs a lot.
+PLAN_ONLY="${PLAN_ONLY:-false}"
+
 if [[ -z "${LICENSE_SIGNING_SECRET:-}" && -n "${LICENSE_SIGNING_SECRET_FILE:-}" ]]; then
   LICENSE_SIGNING_SECRET="$(<"$LICENSE_SIGNING_SECRET_FILE")"
 fi
@@ -35,6 +48,12 @@ fi
 
 # REVIEW_IN_PROGRESS and ROLLBACK_COMPLETE stacks cannot be updated.
 # They contain no usable deployment outputs, so remove them before retrying.
+# Skipped entirely in plan mode: deleting a stack is the single most
+# destructive thing this script does, and a preview must not do it — the
+# plan role has no DeleteStack permission either way, so attempting it there
+# would just fail the preview with an access-denied instead of the accurate
+# "this stack can't be updated" message the apply job will produce.
+if [[ "$PLAN_ONLY" != "true" ]]; then
 stack_status="$(aws cloudformation describe-stacks \
   --stack-name "$STACK_NAME" \
   --region "$AWS_REGION" \
@@ -44,6 +63,7 @@ if [[ "$stack_status" == "REVIEW_IN_PROGRESS" || "$stack_status" == "ROLLBACK_CO
   echo "Cleaning up unusable $STACK_NAME stack in status $stack_status..."
   aws cloudformation delete-stack --stack-name "$STACK_NAME" --region "$AWS_REGION"
   aws cloudformation wait stack-delete-complete --stack-name "$STACK_NAME" --region "$AWS_REGION"
+fi
 fi
 
 cd "$TEMPLATE_DIR"
@@ -66,13 +86,23 @@ overrides=(
 [[ -n "${LEMON_API_KEY:-}" ]]         && overrides+=("LemonApiKey=$LEMON_API_KEY")
 [[ -n "${SES_SENDER_EMAIL:-}" ]]      && overrides+=("SesSenderEmail=$SES_SENDER_EMAIL")
 
+# --no-execute-changeset makes `sam deploy` stop after creating and printing
+# the change-set; --no-confirm-changeset skips the interactive prompt and
+# executes it. Exactly one of the two applies.
+if [[ "$PLAN_ONLY" == "true" ]]; then
+  echo "PLAN_ONLY=true — creating a change-set for review; nothing will be applied."
+  execute_flag=(--no-execute-changeset)
+else
+  execute_flag=(--no-confirm-changeset)
+fi
+
 if ! sam deploy \
   --template-file .aws-sam/build/template.yaml \
   --stack-name "$STACK_NAME" \
   --region "$AWS_REGION" \
   --resolve-s3 \
   --capabilities CAPABILITY_NAMED_IAM \
-  --no-confirm-changeset \
+  "${execute_flag[@]}" \
   --parameter-overrides "${overrides[@]}"; then
   echo "Deployment failed. Recent CloudFormation events:" >&2
   aws cloudformation describe-stack-events \
@@ -82,6 +112,13 @@ if ! sam deploy \
     --query 'StackEvents[].{LogicalId:LogicalResourceId,Status:ResourceStatus,Reason:ResourceStatusReason}' \
     --output table >&2 || true
   exit 1
+fi
+
+# Nothing was applied in plan mode, so the stack outputs would describe the
+# *current* deployment, not the previewed one — misleading in a review log.
+if [[ "$PLAN_ONLY" == "true" ]]; then
+  echo "Change-set created above. Approve the 'apply' job to execute it."
+  exit 0
 fi
 
 sam list stack-outputs --stack-name "$STACK_NAME" --region "$AWS_REGION"
