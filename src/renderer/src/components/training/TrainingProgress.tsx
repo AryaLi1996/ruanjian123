@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { formatDuration } from '../../utils/audio'
 import { estimateRemainingSec } from '../../utils/environmentCheck'
+import { assessMemory, assessPace } from '../../utils/trainingProgressAdvice'
 
 export interface ProgressData {
   status:       'training' | 'done'
@@ -15,6 +16,11 @@ export interface ProgressData {
   device?:       string
   output_path?: string
   model_bytes?: number
+  // Ticket P5: memory the engine reports with each epoch. Absent on older
+  // engine builds and on platforms that can't read a figure.
+  rss_gb?:       number | null
+  available_gb?: number | null
+  total_gb?:     number | null
 }
 
 interface Props {
@@ -30,6 +36,12 @@ interface Props {
   /** Ticket UI-10: kills the run. Omitted where cancellation isn't offered. */
   onCancel?:  () => void
   cancelling?: boolean
+  /**
+   * Ticket P5: restart this run in standard mode. Offered only for a
+   * professional run whose own ETA has turned out long — the cheaper mode is
+   * the lever the user still has, and they can only pull it from here.
+   */
+  onSwitchToStandard?: () => void
 }
 
 /**
@@ -39,7 +51,7 @@ interface Props {
  * tail, and a destructive cancel behind a confirm step.
  */
 export function TrainingProgress({
-  progress, logs, mode, deviceLabel, onCancel, cancelling,
+  progress, logs, mode, deviceLabel, onCancel, cancelling, onSwitchToStandard,
 }: Props): JSX.Element {
   const { t } = useTranslation()
   const logRef = useRef<HTMLDivElement>(null)
@@ -73,6 +85,9 @@ export function TrainingProgress({
   const eta     = done ? null : estimateRemainingSec(pct, elapsed)
   const loss    = progress?.loss ?? progress?.best_loss
   const device  = progress?.device ? progress.device.toUpperCase() : deviceLabel
+  // Ticket P5: how the wait and the machine are holding up.
+  const pace    = done ? 'ok' : assessPace(eta)
+  const memory  = assessMemory(progress)
 
   return (
     <div className="tc-console">
@@ -93,6 +108,18 @@ export function TrainingProgress({
                 <span>{t('training.epoch', { current: progress.epoch, total: progress.total_epochs })}</span>
               )}
               {loss != null && <span>{t('training.loss', { value: loss.toFixed(5) })}</span>}
+              {memory.rssGb != null && (
+                <span
+                  className={`tc-mem${memory.critical ? ' critical' : ''}`}
+                  title={memory.totalGb != null
+                    ? t('training.memoryOfTotal', {
+                        used: memory.rssGb.toFixed(1), total: memory.totalGb.toFixed(1),
+                      })
+                    : undefined}
+                >
+                  {t('training.memoryUsed', { used: memory.rssGb.toFixed(1) })}
+                </span>
+              )}
               {eta != null
                 ? <span className="tc-eta">{t('training.eta', { value: formatDuration(eta) })}</span>
                 : !done && <span className="tc-eta tc-eta-pending">{t('training.etaPending')}</span>}
@@ -100,6 +127,37 @@ export function TrainingProgress({
           )}
         </div>
       </div>
+
+      {/* Ticket P5: what the numbers above mean for the person waiting.
+          Both notices are advisory — nothing here stops or changes the run. */}
+      {!done && pace !== 'ok' && (
+        <div className="tc-advice" role="status">
+          <span>
+            {pace === 'verySlow'
+              ? t('training.paceVerySlow', { value: formatDuration(eta ?? 0) })
+              : t('training.paceSlow')}
+          </span>
+          {pace === 'verySlow' && onSwitchToStandard && (
+            <button type="button" className="btn btn-ghost tc-advice-btn" onClick={onSwitchToStandard}>
+              {t('training.switchToStandardRun')}
+            </button>
+          )}
+        </div>
+      )}
+
+      {!done && memory.critical && (
+        <div className="tc-advice danger" role="alert">
+          <span>
+            {memory.rssGb != null && memory.totalGb != null
+              ? t('training.memoryCritical', {
+                  used: memory.rssGb.toFixed(1), total: memory.totalGb.toFixed(1),
+                })
+              : t('training.memoryCriticalFree', {
+                  available: (memory.availableGb ?? 0).toFixed(1),
+                })}
+          </span>
+        </div>
+      )}
 
       {/* Progress bar — turns green on completion (Ticket UI-10 §5) */}
       <div

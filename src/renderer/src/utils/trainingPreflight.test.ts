@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
   checkTrainingInputs, estimateTrainingMemoryGb, isEngineReadable,
-  MIN_CHUNK_SEC, type PreflightInput, type TrainingFileInfo,
+  LONG_TOTAL_SEC, MANY_FILES_COUNT, MIN_CHUNK_SEC, suggestRemovals,
+  type PreflightInput, type TrainingFileInfo,
 } from './trainingPreflight'
 
 const MB = 1024 * 1024
@@ -145,5 +146,88 @@ describe('checkTrainingInputs', () => {
     const order = result.items.map((i) => i.severity)
     expect(order).toEqual([...order].sort((a, b) =>
       ({ blocker: 0, warning: 1, ok: 2 })[a] - ({ blocker: 0, warning: 1, ok: 2 })[b]))
+  })
+})
+
+/** The row with this id, or undefined when it isn't shown. */
+function row(result: ReturnType<typeof checkTrainingInputs>, id: string) {
+  return result.items.find((i) => i.id === id)
+}
+
+describe('suggestRemovals — Ticket P4', () => {
+  it('removes the longest files first, and only as many as it takes', () => {
+    const files = [file('short.wav', 60), file('long.wav', 600), file('mid.wav', 300)]
+    expect(suggestRemovals(files, 400).map((f) => f.name)).toEqual(['long.wav'])
+  })
+
+  it('keeps going while the total is still over the target', () => {
+    const files = [file('a.wav', 600), file('b.wav', 600), file('c.wav', 60)]
+    expect(suggestRemovals(files, 300).map((f) => f.name)).toEqual(['a.wav', 'b.wav'])
+  })
+
+  it('never suggests emptying the dropzone', () => {
+    const files = [file('a.wav', 600), file('b.wav', 600)]
+    expect(suggestRemovals(files, 1).map((f) => f.name)).toEqual(['a.wav'])
+    expect(suggestRemovals([file('only.wav', 9999)], 1)).toEqual([])
+  })
+
+  it('suggests nothing when the material is already under the target', () => {
+    expect(suggestRemovals([file('a.wav', 100)], 300)).toEqual([])
+  })
+
+  it('ignores files whose duration was never decoded', () => {
+    expect(suggestRemovals([file('a.wav', null), file('b.wav', 600)], 60).map((f) => f.name))
+      .toEqual([])   // only one measured file left; never empties the list
+  })
+})
+
+describe('checkTrainingInputs — actionable suggestions (Ticket P4)', () => {
+  it('names the long files to remove, and offers them for removal', () => {
+    const files = [file('a.wav', 900), file('b.wav', 800), file('c.wav', 120)]
+    const result = checkTrainingInputs(input({ files, deviceMode: 'cpu', device: null }))
+    const long = row(result, 'longMaterial')
+    expect(long?.severity).toBe('warning')
+    // 1820s total against the CPU's 1200s bar: dropping the longest clears it.
+    expect(long?.removable).toEqual(['a.wav'])
+    expect(long?.files?.map((f) => f.name)).toEqual(['a.wav'])
+    expect(result.canProceed).toBe(true)   // advice, never a cap
+  })
+
+  it('holds a GPU run to a far higher bar before suggesting a trim', () => {
+    const files = [file('a.wav', 900), file('b.wav', 800)]
+    expect(row(checkTrainingInputs(input({ files })), 'longMaterial')).toBeUndefined()
+    expect(LONG_TOTAL_SEC.gpu).toBeGreaterThan(LONG_TOTAL_SEC.cpu)
+  })
+
+  it('offers to remove the sub-chunk clips it warns about', () => {
+    const result = checkTrainingInputs(input({ files: [file('a.wav', 600), file('tiny.wav', 1)] }))
+    expect(row(result, 'chunkable')?.removable).toEqual(['tiny.wav'])
+    expect(row(result, 'chunkable')?.files?.[0].duration).toBe(1)
+  })
+
+  it('does not offer removal when removing everything is the only way out', () => {
+    const result = checkTrainingInputs(input({ files: [file('a.wav', 1), file('b.wav', 2)] }))
+    expect(row(result, 'chunkable')?.severity).toBe('blocker')
+    expect(row(result, 'chunkable')?.removable).toBeUndefined()
+    expect(row(result, 'chunkable')?.files).toHaveLength(2)
+  })
+
+  it('offers to remove unreadable files, which never trained anyway', () => {
+    const result = checkTrainingInputs(input({ files: [file('a.wav', 600), file('b.m4a', 600)] }))
+    expect(row(result, 'format')?.removable).toEqual(['b.m4a'])
+  })
+
+  it('advises on too many files for the memory available, without a remove button', () => {
+    const files = Array.from({ length: MANY_FILES_COUNT + 2 }, (_, i) => file(`t${i}.wav`, 120))
+    const result = checkTrainingInputs(input({ files, availableRamGb: 8 }))
+    const count = row(result, 'fileCount')
+    expect(count?.severity).toBe('warning')
+    // Merging takes is a judgement about the material, not a deletion.
+    expect(count?.removable).toBeUndefined()
+  })
+
+  it('stays quiet about file count on a machine with memory to spare', () => {
+    const files = Array.from({ length: MANY_FILES_COUNT + 2 }, (_, i) => file(`t${i}.wav`, 120))
+    expect(row(checkTrainingInputs(input({ files, availableRamGb: 32 })), 'fileCount')).toBeUndefined()
   })
 })

@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from 'react'
+import { useState, useRef, useCallback, forwardRef, useImperativeHandle } from 'react'
 import { useTranslation } from 'react-i18next'
 import { getAudioInfo, formatDuration } from '../../utils/audio'
 
@@ -43,7 +43,22 @@ function isAudioFile(f: File): boolean {
 const toUploads = (entries: AudioFileEntry[]): TrainingUpload[] =>
   entries.map((e) => ({ file: e.file, duration: e.duration }))
 
-export function AudioDropzone({ onFilesChange }: Props): JSX.Element {
+/**
+ * Ticket P4: what the pre-flight's "remove these files" button drives.
+ *
+ * Exposed imperatively rather than by lifting the whole list into the view:
+ * the per-file waveform and decode state belong to this component, and
+ * hoisting them so an overlay can delete two rows would trade a four-line
+ * handle for a much larger refactor of the thing that already works.
+ */
+export interface AudioDropzoneHandle {
+  /** Drop every currently-selected file whose name is in `names`. */
+  removeByName: (names: string[]) => void
+}
+
+export const AudioDropzone = forwardRef<AudioDropzoneHandle, Props>(function AudioDropzone(
+  { onFilesChange }: Props, ref,
+): JSX.Element {
   const [entries, setEntries]   = useState<AudioFileEntry[]>([])
   const [dragging, setDragging] = useState(false)
   const inputRef                = useRef<HTMLInputElement>(null)
@@ -96,6 +111,18 @@ export function AudioDropzone({ onFilesChange }: Props): JSX.Element {
       return next
     })
   }
+
+  useImperativeHandle(ref, () => ({
+    removeByName(names: string[]): void {
+      const drop = new Set(names)
+      setEntries((prev) => {
+        const next = prev.filter((e) => !drop.has(e.file.name))
+        if (next.length === prev.length) return prev
+        onFilesChange(toUploads(next))
+        return next
+      })
+    },
+  }), [onFilesChange])
 
   const totalDuration = entries.reduce((s, e) => s + (e.duration ?? 0), 0)
 
@@ -169,4 +196,4 @@ export function AudioDropzone({ onFilesChange }: Props): JSX.Element {
       )}
     </div>
   )
-}
+})
