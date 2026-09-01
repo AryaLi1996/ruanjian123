@@ -1,11 +1,18 @@
 import { useEffect, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
+import { formatDuration } from '../../utils/audio'
 import type { PreflightResult, PreflightSeverity } from '../../utils/trainingPreflight'
 
 interface Props {
   result: PreflightResult
   /** Ticket P2: offered only for a professional-mode run that will land on the CPU. */
   onSwitchToStandard?: () => void
+  /**
+   * Ticket P4: drop these files from the selection and re-run the check.
+   * Given the names a row names as removable, so "shorten your material"
+   * becomes one click on the exact files the row is about.
+   */
+  onRemoveFiles?: (names: string[]) => void
   onConfirm: () => void
   onCancel:  () => void
 }
@@ -23,7 +30,7 @@ const ICONS: Record<PreflightSeverity, string> = { blocker: '❌', warning: '⚠
  * failed run look like a button that does nothing.
  */
 export function TrainingPreflightDialog({
-  result, onSwitchToStandard, onConfirm, onCancel,
+  result, onSwitchToStandard, onRemoveFiles, onConfirm, onCancel,
 }: Props): JSX.Element {
   const { t } = useTranslation()
   const cancelRef = useRef<HTMLButtonElement>(null)
@@ -60,7 +67,34 @@ export function TrainingPreflightDialog({
           {result.items.map((item) => (
             <li key={item.id} className={`preflight-item ${item.severity}`}>
               <span className="preflight-icon" aria-hidden="true">{ICONS[item.severity]}</span>
-              <span className="preflight-text">{t(item.messageKey, item.params)}</span>
+              <div className="preflight-body">
+                <span className="preflight-text">{t(item.messageKey, item.params)}</span>
+
+                {/* Ticket P4: which files this row is about, measured. A
+                    warning the user can't act on is just a delay. */}
+                {item.files && item.files.length > 0 && (
+                  <ul className="preflight-files">
+                    {item.files.map((f) => (
+                      <li key={f.name}>
+                        <span className="preflight-file-name">{f.name}</span>
+                        <span className="preflight-file-dur">
+                          {f.duration != null ? formatDuration(f.duration) : t('preflight.durationUnknown')}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+
+                {item.removable && item.removable.length > 0 && onRemoveFiles && (
+                  <button
+                    type="button"
+                    className="btn btn-ghost preflight-remove-btn"
+                    onClick={() => onRemoveFiles(item.removable as string[])}
+                  >
+                    {t('preflight.removeSuggested', { count: item.removable.length })}
+                  </button>
+                )}
+              </div>
             </li>
           ))}
         </ul>

@@ -71,6 +71,15 @@ const resources = {
           gpu: '运行设备：将使用 GPU 训练。',
           cpu: '运行设备：将使用 CPU 训练，耗时约为 GPU 的 {{min}}-{{max}} 倍。',
         },
+        // Ticket P4：把「建议缩短素材」变成「删这几个文件」。
+        longMaterial: {
+          warn: '素材总时长：共 {{actual}} 分钟，当前设备建议控制在 {{limit}} 分钟以内，否则单轮耗时过长、容易被判定为卡死。建议移除以下 {{count}} 个较长文件：',
+        },
+        fileCount: {
+          warn: '文件数量：共 {{count}} 个文件，而当前可用内存仅 {{available}} GB。上传时所有文件会一次性读入内存，建议先合并部分文件，或减少到 {{suggested}} 个以内。',
+        },
+        durationUnknown: '时长未知',
+        removeSuggested: '一键移除这 {{count}} 个文件',
         cpuProfessional: {
           warn: '运行设备：专业模式在 CPU 上训练需要大量内存和时间，普通笔记本可能无法完成。建议切换到标准模式，或改用 GPU 训练。',
         },
@@ -86,6 +95,17 @@ const resources = {
         // 用户既不知道哪里错了，也不知道该改什么。
         nameRequired: '请先填写模型名称，再开始训练。',
         failed: '训练启动失败，请查看下方引擎日志了解详情。',
+        // Ticket P5：训练途中的节奏与内存提示。
+        paceSlow: '当前训练较慢，预计还需 10 分钟以上。可以继续等待，也可以取消后改用标准模式或 GPU。',
+        paceVerySlow: '预计还需 {{value}}，耗时明显偏长。切换为标准模式通常可缩短到 5 分钟以内。',
+        switchToStandardRun: '切换为标准模式',
+        memoryUsed: '内存 {{used}} GB',
+        memoryOfTotal: '引擎已占用 {{used}} GB / 共 {{total}} GB',
+        memoryCritical: '内存使用过高（已用 {{used}} GB / 总计 {{total}} GB），训练可能被系统中断，建议关闭其他程序。',
+        memoryCriticalFree: '系统可用内存仅剩 {{available}} GB，训练可能被系统中断，建议关闭其他程序。',
+        switchModeTitle: '切换为标准模式？',
+        switchModeMessage: '切换模式需要重新开始训练，当前已完成的轮次将全部丢弃——两种模式的 LoRA 秩与适配层不同，已训练的权重无法沿用。素材和模型名称会保留。确定切换吗？',
+        switchModeConfirm: '重新以标准模式训练',
         // Ticket P3：把引擎的英文诊断翻译成可执行的建议，原文收进折叠面板。
         error: {
           timeout: '训练超时：引擎每轮才上报一次进度，素材较多时 CPU 处理时间超过了等待上限，运行被判定为卡死并中止。建议把训练素材控制在 15 分钟以内，或改用标准模式、改用 GPU 训练。',
@@ -562,6 +582,15 @@ const resources = {
           gpu: 'Device: this run will use the GPU.',
           cpu: 'Device: this run will use the CPU, roughly {{min}}-{{max}}x slower than a GPU.',
         },
+        // Ticket P4: turn "shorten your material" into "remove these files".
+        longMaterial: {
+          warn: 'Total duration: {{actual}} min. This device does best under {{limit}} min — beyond it an epoch takes long enough to be mistaken for a hang. Consider removing these {{count}} longest file(s):',
+        },
+        fileCount: {
+          warn: 'File count: {{count}} files with only {{available}} GB free. Every file is read into memory at once on upload — merge some takes, or cut down to {{suggested}} or fewer.',
+        },
+        durationUnknown: 'duration unknown',
+        removeSuggested: 'Remove these {{count}} file(s)',
         cpuProfessional: {
           warn: 'Device: professional mode on the CPU needs a lot of memory and time, and an ordinary laptop may not finish it. Switch to standard mode, or train on a GPU.',
         },
@@ -576,6 +605,17 @@ const resources = {
         // error banner showed nothing but an asterisk.
         nameRequired: 'Enter a model name before starting training.',
         failed: 'Training could not be started. See the engine log below for details.',
+        // Ticket P5: pace and memory while a run is in flight.
+        paceSlow: 'This run is slow — over 10 minutes left. You can wait, or cancel and switch to standard mode or a GPU.',
+        paceVerySlow: 'About {{value}} left, which is unusually long. Standard mode typically finishes in under 5 minutes.',
+        switchToStandardRun: 'Switch to standard mode',
+        memoryUsed: 'Memory {{used}} GB',
+        memoryOfTotal: 'Engine is using {{used}} GB of {{total}} GB',
+        memoryCritical: 'Memory is nearly full ({{used}} GB of {{total}} GB). The run may be killed by the system — close other programs.',
+        memoryCriticalFree: 'Only {{available}} GB of memory is left. The run may be killed by the system — close other programs.',
+        switchModeTitle: 'Switch to standard mode?',
+        switchModeMessage: 'Switching modes restarts training from scratch: the epochs trained so far are discarded, because the two modes differ in LoRA rank and in which layers are adapted, so those weights cannot carry over. Your material and model name are kept. Switch?',
+        switchModeConfirm: 'Restart in standard mode',
         // Ticket P3: the engine's English diagnostic, translated into what to
         // do about it; its own words stay in the collapsible panel.
         error: {

@@ -3,7 +3,9 @@ import { useTranslation } from 'react-i18next'
 import { useAppStore, type TrainedModel } from '../store/useAppStore'
 import { notify, useNotificationStore } from '../store/useNotificationStore'
 import { playCompletionChime } from '../utils/sound'
-import { AudioDropzone, type TrainingUpload } from '../components/training/AudioDropzone'
+import {
+  AudioDropzone, type AudioDropzoneHandle, type TrainingUpload,
+} from '../components/training/AudioDropzone'
 import { ModeSelector, type TrainingMode } from '../components/training/ModeSelector'
 import { TrainingProgress, type ProgressData } from '../components/training/TrainingProgress'
 import { AudioPlayer } from '../components/training/AudioPlayer'
@@ -157,6 +159,18 @@ export function TrainingView(): JSX.Element {
   // button doing nothing at all.
   const [nameError,   setNameError]   = useState<string | null>(null)
   const nameInputRef = useRef<HTMLInputElement>(null)
+  // Ticket P4: lets the pre-flight's "remove these files" button act on the
+  // dropzone's selection without hoisting its per-file decode state up here.
+  const dropzoneRef  = useRef<AudioDropzoneHandle>(null)
+  // Ticket P5: set while a professional run is being stopped so it can be
+  // restarted in standard mode. The cancel and the restart can't be one call
+  // — the kill has to unwind through runTraining's ENGINE_CANCELLED branch
+  // before a second run may start, or two engine processes would overlap.
+  const restartAsStandardRef = useRef(false)
+  // Ticket P5: asked before that restart, because it throws away the epochs
+  // already trained — the two modes differ in LoRA rank and in which layers
+  // are adapted, so there are no weights to carry across.
+  const [confirmingModeSwitch, setConfirmingModeSwitch] = useState(false)
   // Ticket T3: measured by the dropzone as each file decodes; a lower bound,
   // since a file whose duration can't be read contributes nothing.
   // Ticket T1: the reason from a `{"status":"failed"}` on the progress
@@ -252,9 +266,11 @@ export function TrainingView(): JSX.Element {
    * Everything the pre-flight needs to know about the current form, in the
    * shape checkTrainingInputs() takes.
    */
-  function runPreflight(forMode: TrainingMode = mode): PreflightResult {
+  function runPreflight(
+    forMode: TrainingMode = mode, files: TrainingUpload[] = audioFiles,
+  ): PreflightResult {
     return checkTrainingInputs({
-      files: audioFiles.map((u) => ({
+      files: files.map((u) => ({
         name: u.file.name, sizeBytes: u.file.size, duration: u.duration,
       })),
       mode: forMode,
@@ -294,7 +310,12 @@ export function TrainingView(): JSX.Element {
     setPreflight(runPreflight())
   }
 
-  async function runTraining(): Promise<void> {
+  /**
+   * @param runMode Mode to run in. Passed explicitly rather than read from
+   * state so the mid-run switch (Ticket P5) can restart in standard mode
+   * without waiting for a re-render to make `mode` current.
+   */
+  async function runTraining(runMode: TrainingMode = mode): Promise<void> {
     setError(null)
     setErrorDetail(null)
     setNameError(null)
@@ -307,7 +328,7 @@ export function TrainingView(): JSX.Element {
     streamFailureRef.current = null
     setPhase('training')
     setEngineBusy(true)
-    setEngineStatus(t('status.training', { mode: t(`training.${mode}`) }))
+    setEngineStatus(t('status.training', { mode: t(`training.${runMode}`) }))
 
     // Generated up front (not after training) and passed through as model_id
     // so the engine writes this run's weights to a file of its own — without
@@ -336,12 +357,12 @@ export function TrainingView(): JSX.Element {
 
       const engineDevice = engineDeviceFor(deviceMode, device)
       const raw = await window.engine.stream('train_model', {
-        mode, epochs, batch: 16, model_id: id,
+        mode: runMode, epochs, batch: 16, model_id: id,
         // Ticket T2: the device is decided here, not re-detected in the
         // engine, so what the progress panel shows is what the run uses.
         device: engineDevice,
         ...(dataDir ? { data_dir: dataDir } : {}),
-      }, mode === 'professional' && engineDevice === 'cpu'
+      }, runMode === 'professional' && engineDevice === 'cpu'
         ? { stallTimeoutMs: CPU_PROFESSIONAL_STALL_TIMEOUT_MS }
         : undefined,
       )
@@ -371,7 +392,7 @@ export function TrainingView(): JSX.Element {
         id,
         name:          modelName.trim() || `Model ${id.slice(0, 6)}`,
         coverDataUrl:  coverUrl,
-        mode,
+        mode:          runMode,
         trainedAt:     Date.now(),
         onnxPath:      res.output_path,
         demoAudioUrl:  demo?.url ?? null,
@@ -410,6 +431,14 @@ export function TrainingView(): JSX.Element {
       if (String(err).includes('ENGINE_CANCELLED')) {
         setPhase('idle')
         setLogs((prev) => [...prev, t('training.cancelled')])
+        // Ticket P5: the stop was the first half of "switch to standard mode".
+        // Restart here, where the killed run has finished unwinding.
+        if (restartAsStandardRef.current) {
+          restartAsStandardRef.current = false
+          setMode('standard')
+          setEngineBusy(false)
+          void runTraining('standard')
+        }
         return
       }
       // Ticket T2: surface what the engine actually said (disk full, dataset
@@ -454,6 +483,29 @@ export function TrainingView(): JSX.Element {
       }
     }
     setPlayingModelId(m.id)
+  }
+
+  /**
+   * Ticket P5: stop a slow professional run and start it again in standard
+   * mode.
+   *
+   * The epochs already trained are lost, and there is no way around that:
+   * standard and professional differ in LoRA rank and in which layers carry
+   * adapters, so the weights in flight have no meaning in the other mode.
+   * The confirmation says so rather than implying the progress carries over.
+   */
+  async function handleSwitchToStandardRun(): Promise<void> {
+    setConfirmingModeSwitch(false)
+    restartAsStandardRef.current = true
+    try {
+      const killed = await window.engine.cancelStream()
+      // Nothing was running (it finished between the click and this call), so
+      // no ENGINE_CANCELLED is coming to pick the restart up.
+      if (!killed) restartAsStandardRef.current = false
+    } catch (err) {
+      restartAsStandardRef.current = false
+      setError(describeError(err, t('training.failed')))
+    }
   }
 
   async function handleCancelTraining(): Promise<void> {
@@ -618,7 +670,7 @@ export function TrainingView(): JSX.Element {
 
           <div className="card">
             <div className="card-title">{t('training.material')}</div>
-            <AudioDropzone onFilesChange={setAudioFiles} />
+            <AudioDropzone ref={dropzoneRef} onFilesChange={setAudioFiles} />
             {audioFiles.length === 0 && (
               <p style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 8 }}>
                 {t('training.noFiles')}
@@ -703,6 +755,11 @@ export function TrainingView(): JSX.Element {
               : describeDevice(engineDeviceFor(deviceMode, device) === 'cpu' ? null : device)}
             onCancel={() => void handleCancelTraining()}
             cancelling={cancelling}
+            // Ticket P5: only professional runs have a cheaper mode to fall
+            // back to; offering it on a standard run would lead nowhere.
+            onSwitchToStandard={mode === 'professional'
+              ? () => setConfirmingModeSwitch(true)
+              : undefined}
           />
           <EngineLogPanel entries={engineLogs} defaultOpen />
         </div>
@@ -821,8 +878,29 @@ export function TrainingView(): JSX.Element {
           onSwitchToStandard={preflight.cpuProfessional
             ? () => { setMode('standard'); setPreflight(runPreflight('standard')) }
             : undefined}
+          onRemoveFiles={(names) => {
+            const drop      = new Set(names)
+            const remaining = audioFiles.filter((u) => !drop.has(u.file.name))
+            dropzoneRef.current?.removeByName(names)
+            setAudioFiles(remaining)
+            // Re-checked against the list that will remain rather than the
+            // state that hasn't re-rendered yet, so the checklist updates in
+            // the same click that removed the files.
+            setPreflight(runPreflight(mode, remaining))
+          }}
           onConfirm={() => { setPreflight(null); void runTraining() }}
           onCancel={() => setPreflight(null)}
+        />
+      )}
+
+      {/* Ticket P5: switching mode mid-run restarts it — say so plainly. */}
+      {confirmingModeSwitch && (
+        <ConfirmDialog
+          title={t('training.switchModeTitle')}
+          message={t('training.switchModeMessage')}
+          confirmLabel={t('training.switchModeConfirm')}
+          onConfirm={() => void handleSwitchToStandardRun()}
+          onCancel={() => setConfirmingModeSwitch(false)}
         />
       )}
 

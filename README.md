@@ -745,7 +745,22 @@ as a checklist on the 开始本地训练 button.
 | Memory: `upload × 1.5 + 2 GB` | Renderer reads every file into an ArrayBuffer and sends them in one IPC message | Renderer OOM before the engine ever starts |
 
 There is deliberately **no** cap on file count or total duration; the checks
-above warn and explain rather than refuse.
+above warn and explain rather than refuse. Where a warning has a mechanical
+fix, the checklist names the exact files and offers to remove them (Ticket
+P4): the longest takes when the material outruns the device's comfortable
+range (20 min on CPU, 60 min on GPU), the sub-chunk clips that would be
+dropped anyway, and files the engine cannot read. Suggestions never empty the
+selection, and "merge these takes" — which needs judgement about the material
+— is stated, not automated.
+
+While a run is in flight the console reports its own pace and the engine's
+memory (Ticket P5): over 10 minutes remaining is called out, over 20 offers to
+restart in standard mode, and `engine/trainer.py` attaches `rss_gb` /
+`available_gb` / `total_gb` to every epoch so an impending OOM kill is visible
+before it happens rather than arriving as a dead process. Those figures use
+stdlib probes (`/proc/self/status`, `resource`, `psapi`) rather than psutil,
+which is deliberately not a dependency — see `_total_ram_gb()`'s note in
+`engine/env_check.py`.
 
 **Note**: Timing with stub models is near-instantaneous. Production models will be larger and slower. Benchmarks should be re-run with real trained ONNX models before shipping.
 

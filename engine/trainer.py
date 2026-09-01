@@ -534,6 +534,27 @@ def _available_ram_gb() -> float | None:
         return None
 
 
+def _memory_sample() -> dict[str, float | None]:
+    """Ticket P5: memory figures to attach to each epoch's progress line.
+
+    The UI cannot otherwise tell a run that is about to be OOM-killed from one
+    that is merely slow — both look like a progress bar that hasn't moved. All
+    three are None-safe: on a platform where a figure can't be read the UI
+    withholds the warning rather than inventing one.
+    """
+    try:
+        from env_check import process_rss_gb, total_ram_gb  # noqa: PLC0415
+        rss, total = process_rss_gb(), total_ram_gb()
+    except Exception:
+        rss, total = None, None
+    available = _available_ram_gb()
+    return {
+        "rss_gb":       None if rss is None else round(rss, 2),
+        "available_gb": None if available is None else round(available, 2),
+        "total_gb":     None if total is None else round(total, 2),
+    }
+
+
 def _is_worker_crash(exc: BaseException) -> bool:
     """True when `exc` is PyTorch reporting a dead DataLoader worker process.
 
@@ -818,6 +839,9 @@ def train(
             "percent":      round(epoch / epochs * 100, 1),
             "status":       "training",
             "device":       device,
+            # Ticket P5: memory alongside progress, so the UI can warn before
+            # the OOM killer arrives instead of reporting a dead process after.
+            **_memory_sample(),
         }
         _emit(prog, progress_path)
         epoch += 1

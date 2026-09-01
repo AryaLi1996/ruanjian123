@@ -249,6 +249,75 @@ def available_ram_gb() -> float | None:
     return None
 
 
+def process_rss_gb() -> float | None:
+    """Resident memory of *this* process in GB, or None where we can't tell.
+
+    Ticket P5 asked for psutil's `Process().memory_info().rss`; psutil is
+    deliberately not a dependency here (see :func:`_total_ram_gb`) — an
+    optional import that exists only on a developer's machine makes the
+    packaged PyInstaller bundle behave differently from a dev checkout, which
+    is the one thing the engine's memory reporting must not do. These are the
+    stdlib equivalents.
+
+    macOS reports *peak* RSS (ru_maxrss) rather than current: there is no
+    stdlib reader for live RSS there, and peak is the honest conservative
+    answer for a warning about running out.
+    """
+    try:
+        status = Path("/proc/self/status")
+        if status.exists():
+            for line in status.read_text().splitlines():
+                if line.startswith("VmRSS:"):
+                    return int(line.split()[1]) / (1024 ** 2)   # kB → GB
+    except Exception:
+        pass
+
+    if sys.platform == "darwin":
+        try:
+            import resource  # noqa: PLC0415
+            # Darwin reports ru_maxrss in bytes; Linux (handled above) in kB.
+            return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / (1024 ** 3)
+        except Exception:
+            return None
+
+    if sys.platform == "win32":
+        try:
+            import ctypes  # noqa: PLC0415
+            from ctypes import wintypes  # noqa: PLC0415
+
+            class _PROCESS_MEMORY_COUNTERS(ctypes.Structure):
+                _fields_ = [
+                    ("cb", wintypes.DWORD),
+                    ("PageFaultCount", wintypes.DWORD),
+                    ("PeakWorkingSetSize", ctypes.c_size_t),
+                    ("WorkingSetSize", ctypes.c_size_t),
+                    ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
+                    ("QuotaPagedPoolUsage", ctypes.c_size_t),
+                    ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
+                    ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+                    ("PagefileUsage", ctypes.c_size_t),
+                    ("PeakPagefileUsage", ctypes.c_size_t),
+                ]
+
+            counters = _PROCESS_MEMORY_COUNTERS()
+            counters.cb = ctypes.sizeof(_PROCESS_MEMORY_COUNTERS)
+            handle = ctypes.windll.kernel32.GetCurrentProcess()
+            if not ctypes.windll.psapi.GetProcessMemoryInfo(
+                handle, ctypes.byref(counters), counters.cb
+            ):
+                return None
+            return counters.WorkingSetSize / (1024 ** 3)
+        except Exception:
+            return None
+
+    return None
+
+
+def total_ram_gb() -> float | None:
+    """Public alias for :func:`_total_ram_gb` — the trainer reports it per epoch."""
+    return _total_ram_gb()
+
+
 def check_memory() -> Check:
     total = _total_ram_gb()
     if total is None:

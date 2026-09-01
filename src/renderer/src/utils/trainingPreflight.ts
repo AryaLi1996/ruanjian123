@@ -38,6 +38,25 @@ export const ENGINE_AUDIO_EXTS = ['.wav', '.flac', '.ogg', '.mp3'] as const
  */
 export const MIN_CHUNK_SEC = (256 * 256) / 22_050
 
+/**
+ * Ticket P4: total material beyond which a run is worth trimming, per device.
+ *
+ * Not a cap — training a long upload is legal and sometimes right. It is the
+ * point where the engine's per-epoch silence starts to approach the bridge's
+ * budget (see CPU_PROFESSIONAL_STALL_TIMEOUT_MS) and where a laptop CPU turns
+ * a 20-minute job into an evening. A GPU chews through far more before either
+ * matters, so it gets a much higher bar.
+ */
+export const LONG_TOTAL_SEC = { cpu: 20 * 60, gpu: 60 * 60 } as const
+
+/**
+ * Above this many files, on a machine with less than MANY_FILES_RAM_GB, the
+ * one-shot read-everything-into-memory upload path (TrainingView →
+ * `engine:save-files`) is the thing most likely to fall over.
+ */
+export const MANY_FILES_COUNT = 5
+export const MANY_FILES_RAM_GB = 16
+
 /** Headroom on top of the raw upload: IPC copy + decode + the trainer's own working set. */
 export const MEMORY_OVERHEAD_FACTOR = 1.5
 export const MEMORY_BASE_GB = 2
@@ -54,6 +73,21 @@ export interface PreflightItem {
   messageKey: string
   /** Interpolation values for messageKey. */
   params:    Record<string, string | number>
+  /**
+   * Ticket P4: the files this row is actually about, named and measured.
+   * A warning that says "material is too long" leaves the user guessing
+   * which of seven files to drop; this is the list the dialog prints under
+   * the row so the next action is obvious.
+   */
+  files?:    TrainingFileInfo[]
+  /**
+   * Names the user can remove in one click to clear this row. Present only
+   * when removing exactly these files resolves it — advice that needs
+   * judgement (merge these, re-record that) carries `files` but no
+   * `removable`, because a button that half-fixes a problem is worse than
+   * a sentence that explains it.
+   */
+  removable?: string[]
 }
 
 export interface PreflightResult {
@@ -102,6 +136,31 @@ function minutes(sec: number): string {
 }
 
 /**
+ * The fewest files to remove to bring `files` under `targetSec`, longest
+ * first.
+ *
+ * Longest-first is what gets the total down in the fewest deletions, which is
+ * the whole point of the suggestion: the user should not have to delete five
+ * short takes when dropping one long one does it. Never suggests removing
+ * everything — a suggestion that empties the dropzone is not a suggestion.
+ */
+export function suggestRemovals(files: TrainingFileInfo[], targetSec: number): TrainingFileInfo[] {
+  const measured = files
+    .filter((f) => f.duration != null && f.duration > 0)
+    .sort((a, b) => (b.duration as number) - (a.duration as number))
+
+  let total = measured.reduce((sum, f) => sum + (f.duration as number), 0)
+  const remove: TrainingFileInfo[] = []
+  for (const f of measured) {
+    if (total <= targetSec) break
+    if (remove.length >= measured.length - 1) break   // always leave one behind
+    remove.push(f)
+    total -= f.duration as number
+  }
+  return remove
+}
+
+/**
  * Run every local check and return the checklist the dialog renders.
  *
  * Order is deliberate: blockers first, then warnings, then passes, so the
@@ -125,6 +184,10 @@ export function checkTrainingInputs(input: PreflightInput): PreflightResult {
         names: unreadable.map((f) => f.name).join('、'),
         exts:  ENGINE_AUDIO_EXTS.join(' / '),
       },
+      files: unreadable,
+      // Removing them unblocks the run honestly: they were never going to be
+      // trained on. Converting them is the better fix, which the message says.
+      removable: unreadable.map((f) => f.name),
     })
   } else if (files.length > 0) {
     items.push({ id: 'format', severity: 'ok', messageKey: 'preflight.format.ok', params: { count: files.length } })
@@ -149,15 +212,23 @@ export function checkTrainingInputs(input: PreflightInput): PreflightResult {
   const tooShort   = measurable.filter((f) => (f.duration as number) < MIN_CHUNK_SEC)
   if (measurable.length > 0 && tooShort.length === measurable.length) {
     // Every usable file would be dropped → the engine trains on synthetic
-    // sine waves and reports success. Never let that leave here.
+    // sine waves and reports success. Never let that leave here. No
+    // `removable` here on purpose: removing them all empties the dropzone,
+    // and what this needs is longer recordings, not fewer files.
     items.push({
       id: 'chunkable', severity: 'blocker', messageKey: 'preflight.chunkable.fail',
       params: { seconds: MIN_CHUNK_SEC.toFixed(1) },
+      files: tooShort,
     })
   } else if (tooShort.length > 0) {
     items.push({
       id: 'chunkable', severity: 'warning', messageKey: 'preflight.chunkable.warn',
       params: { count: tooShort.length, seconds: MIN_CHUNK_SEC.toFixed(1) },
+      // These contribute nothing to training either way, so removing them is
+      // pure clean-up: it changes what the list claims is being trained on,
+      // not what the model sees.
+      files: tooShort,
+      removable: tooShort.map((f) => f.name),
     })
   }
 
@@ -180,6 +251,42 @@ export function checkTrainingInputs(input: PreflightInput): PreflightResult {
     items.push({
       id: 'duration', severity: 'ok', messageKey: 'preflight.duration.ok',
       params: { actual: minutes(totalSec) },
+    })
+  }
+
+  // ── Material long enough to be worth trimming (Ticket P4) ─────────────
+  // Deliberately a warning, not a blocker: a long upload trains fine on a
+  // GPU, and refusing it would be the hard cap this whole feature avoids.
+  // What it earns is a concrete list — which files, how long each is — so
+  // "shorten your material" is an action rather than a puzzle.
+  const onCpu     = engineDeviceFor(deviceMode, device) === 'cpu'
+  const longLimit = onCpu ? LONG_TOTAL_SEC.cpu : LONG_TOTAL_SEC.gpu
+  if (measurable.length > 0 && totalSec > longLimit) {
+    const trim = suggestRemovals(measurable, longLimit)
+    items.push({
+      id: 'longMaterial', severity: 'warning', messageKey: 'preflight.longMaterial.warn',
+      params: {
+        actual: minutes(totalSec),
+        limit:  minutes(longLimit),
+        count:  trim.length,
+      },
+      files: trim,
+      removable: trim.map((f) => f.name),
+    })
+  }
+
+  // ── File count against available memory (Ticket P4) ───────────────────
+  // No `removable`: which files to merge (or drop) is a judgement about the
+  // material, and the fix the message proposes — merge takes into one file —
+  // isn't a deletion at all.
+  if (files.length > MANY_FILES_COUNT && availableRamGb != null && availableRamGb < MANY_FILES_RAM_GB) {
+    items.push({
+      id: 'fileCount', severity: 'warning', messageKey: 'preflight.fileCount.warn',
+      params: {
+        count: files.length,
+        available: availableRamGb.toFixed(1),
+        suggested: MANY_FILES_COUNT,
+      },
     })
   }
 
