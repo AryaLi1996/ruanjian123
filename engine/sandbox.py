@@ -3,7 +3,9 @@ Python-level sandbox applied before any engine imports.
 
 Restrictions applied:
   1. Outbound TCP/UDP blocked (AF_INET/AF_INET6 sockets raise PermissionError).
-     AF_UNIX is allowed so ORT can communicate with CoreML / local runtimes.
+     AF_UNIX is allowed — both creation *and* connect — so ORT can talk to
+     CoreML / local runtimes and PyTorch's DataLoader workers can hand file
+     descriptors back to the parent process.
   2. HTTP proxy environment variables removed so libraries cannot bypass (1).
   3. PYTHONNOUSERSITE=1 prevents user site-packages from loading.
 
@@ -39,12 +41,30 @@ def apply() -> None:
                 )
             super().__init__(family, type_, proto, fileno)
 
-        # Explicit block on connect in case __init__ is bypassed
+        # Explicit block on connect in case __init__ is bypassed — a socket
+        # built from an existing fd (fileno=) never goes through the family
+        # check above, so the real family is re-checked here.
+        #
+        # Ticket T1: this used to reject *every* connect, including AF_UNIX,
+        # which contradicts the family allow-list above and broke training
+        # outright: PyTorch's DataLoader workers pass tensor file descriptors
+        # to the parent over an AF_UNIX socket (multiprocessing's
+        # resource_sharer), so the first batch of any num_workers > 0 run died
+        # with "DataLoader worker (pid NNNN) exited unexpectedly". A unix
+        # socket cannot reach the network, so allowing it costs nothing
+        # against the threat this sandbox exists for (outbound egress).
+        def _require_local(self, action: str, address) -> None:
+            if self.family not in _ALLOWED_FAMILIES:
+                raise PermissionError(
+                    f"Engine sandbox: outbound {action} blocked → {address}")
+
         def connect(self, address):
-            raise PermissionError(f"Engine sandbox: outbound connect blocked → {address}")
+            self._require_local("connect", address)
+            return super().connect(address)
 
         def connect_ex(self, address):
-            raise PermissionError(f"Engine sandbox: outbound connect_ex blocked → {address}")
+            self._require_local("connect_ex", address)
+            return super().connect_ex(address)
 
     _socket.socket = _SandboxSocket  # type: ignore[assignment]
     # Also patch the module-level shortcut

@@ -125,6 +125,11 @@ export function TrainingView(): JSX.Element {
   // The model queued for deletion, held until the user confirms (Ticket UI-11).
   const [pendingDelete, setPendingDelete] = useState<TrainedModel | null>(null)
   const [progress,    setProgress]    = useState<ProgressData | null>(null)
+  // Ticket T1: non-fatal notices the engine reports mid-run (e.g. data
+  // loading degraded to a single process). They are shown as their own
+  // banner rather than as progress — a notice carries no epoch or percent,
+  // so treating it as a progress update would blank the progress bar.
+  const [notices,     setNotices]     = useState<string[]>([])
   const [logs,        setLogs]        = useState<string[]>([])
   const [result,      setResult]      = useState<TrainingResult | null>(null)
   const [demoUrl,     setDemoUrl]     = useState<string | null>(null)
@@ -149,8 +154,15 @@ export function TrainingView(): JSX.Element {
   useEffect(() => {
     if (phase !== 'training') return
     const unsub = window.engine.onProgress((raw) => {
-      const data = raw as ProgressData
-      setProgress(data)
+      const data = raw as ProgressData & { type?: string; message?: string }
+      // Only real progress drives the progress bar (Ticket T1/T2): the engine
+      // also emits warning notices on this channel, and anything unrecognised
+      // is logged rather than trusted to have the progress fields.
+      if (data.status === 'training' || data.status === 'done') setProgress(data)
+      else if (data.type === 'notice' && typeof data.message === 'string') {
+        const message = data.message
+        setNotices((prev) => (prev.includes(message) ? prev : [...prev, message]))
+      }
       // Professional runs emit thousands of lines; keep the tail so the DOM stays small.
       setLogs((prev) => {
         const next = [...prev, JSON.stringify(data)]
@@ -207,6 +219,7 @@ export function TrainingView(): JSX.Element {
     setError(null)
     setLogs([])
     setProgress(null)
+    setNotices([])
     setResult(null)
     setDemoUrl(null)
     setPhase('training')
@@ -401,6 +414,7 @@ export function TrainingView(): JSX.Element {
     setMode('standard')
     setEpochs(10)
     setProgress(null)
+    setNotices([])
     setLogs([])
     setResult(null)
     setDemoUrl(null)
@@ -514,6 +528,13 @@ export function TrainingView(): JSX.Element {
       {phase === 'training' && (
         <div className="card">
           <div className="card-title">{t('training.training')}</div>
+          {notices.length > 0 && (
+            <div className="training-notices" role="status">
+              {notices.map((message, i) => (
+                <p key={i} className="training-notice">⚠ {message}</p>
+              ))}
+            </div>
+          )}
           <TrainingProgress
             progress={progress}
             logs={logs}

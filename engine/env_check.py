@@ -22,6 +22,7 @@ import os
 import platform
 import shutil
 import sys
+from pathlib import Path
 from typing import Literal, TypedDict
 
 Status = Literal["ok", "warn", "fail"]
@@ -160,24 +161,84 @@ def _total_ram_gb() -> float | None:
         except Exception:
             return None
     if sys.platform == "win32":
+        status = _win_memory_status()
+        return None if status is None else status.ullTotalPhys / (1024 ** 3)
+    return None
+
+
+def _win_memory_status():
+    """Windows GlobalMemoryStatusEx result, or None if it can't be read.
+
+    Shared by the total- and available-RAM probes so both read the same
+    struct definition.
+    """
+    try:
+        import ctypes  # noqa: PLC0415
+
+        class _MemStatus(ctypes.Structure):
+            _fields_ = [
+                ("dwLength", ctypes.c_ulong), ("dwMemoryLoad", ctypes.c_ulong),
+                ("ullTotalPhys", ctypes.c_ulonglong), ("ullAvailPhys", ctypes.c_ulonglong),
+                ("ullTotalPageFile", ctypes.c_ulonglong), ("ullAvailPageFile", ctypes.c_ulonglong),
+                ("ullTotalVirtual", ctypes.c_ulonglong), ("ullAvailVirtual", ctypes.c_ulonglong),
+                ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+            ]
+
+        status = _MemStatus()
+        status.dwLength = ctypes.sizeof(_MemStatus)
+        if not ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):  # type: ignore[attr-defined]
+            return None
+        return status
+    except Exception:
+        return None
+
+
+def available_ram_gb() -> float | None:
+    """Currently *available* (not total) physical RAM in GB, or None where we
+    can't tell.
+
+    Total RAM says what the machine has; what decides whether a training run
+    survives is what is free right now, with a browser and a DAW already
+    resident. Same no-psutil rule as :func:`_total_ram_gb` — everything here
+    is stdlib, so the packaged bundle behaves exactly like a dev checkout.
+    """
+    # Linux: MemAvailable is the kernel's own estimate of what a new workload
+    # can claim without swapping — strictly better than MemFree, which ignores
+    # reclaimable page cache.
+    try:
+        meminfo = Path("/proc/meminfo")
+        if meminfo.exists():
+            for line in meminfo.read_text().splitlines():
+                if line.startswith("MemAvailable:"):
+                    return int(line.split()[1]) / (1024 ** 2)   # kB → GB
+    except Exception:
+        pass
+
+    if sys.platform == "darwin":
         try:
-            import ctypes  # noqa: PLC0415
-
-            class _MemStatus(ctypes.Structure):
-                _fields_ = [
-                    ("dwLength", ctypes.c_ulong), ("dwMemoryLoad", ctypes.c_ulong),
-                    ("ullTotalPhys", ctypes.c_ulonglong), ("ullAvailPhys", ctypes.c_ulonglong),
-                    ("ullTotalPageFile", ctypes.c_ulonglong), ("ullAvailPageFile", ctypes.c_ulonglong),
-                    ("ullTotalVirtual", ctypes.c_ulonglong), ("ullAvailVirtual", ctypes.c_ulonglong),
-                    ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
-                ]
-
-            status = _MemStatus()
-            status.dwLength = ctypes.sizeof(_MemStatus)
-            ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status))  # type: ignore[attr-defined]
-            return status.ullTotalPhys / (1024 ** 3)
+            import subprocess  # noqa: PLC0415
+            out = subprocess.run(["vm_stat"], capture_output=True, text=True, timeout=5)
+            page_size = 4096
+            free_pages = 0.0
+            for line in out.stdout.splitlines():
+                if "page size of" in line:
+                    page_size = int(line.rstrip(".").split()[-2])
+                # Free + inactive + speculative is the conventional "available"
+                # proxy on macOS: inactive pages are reclaimed on demand.
+                for label in ("Pages free:", "Pages inactive:", "Pages speculative:"):
+                    if line.startswith(label):
+                        free_pages += int(line.split(":")[1].strip().rstrip("."))
+            return free_pages * page_size / (1024 ** 3)
         except Exception:
             return None
+
+    if sys.platform == "win32":
+        try:
+            status = _win_memory_status()
+            return None if status is None else status.ullAvailPhys / (1024 ** 3)
+        except Exception:
+            return None
+
     return None
 
 

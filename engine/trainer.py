@@ -9,13 +9,16 @@ Provides:
   preprocess_vocals()     – slice + loudness-normalise raw vocal audio
   VocalDataset            – PyTorch Dataset over preprocessed chunks
   build_optimizer()       – Adam with LoRA+ param groups when needed
-  train()                 – training loop with JSON-line progress reporting
+  _plan_workers()         – DataLoader worker count, memory-aware (Ticket T1)
+  train()                 – training loop with JSON-line progress reporting,
+                            degrading to single-process loading if a worker dies
   export_to_onnx()        – merge LoRA, export to ONNX, verify with ORT
 """
 from __future__ import annotations
 
 import json
 import os
+import sys
 import time
 from pathlib import Path
 from typing import Literal, TypedDict
@@ -37,6 +40,13 @@ TARGET_RMS_DB = -20.0        # loudness normalisation target
 # likely to learn and reproduce the noise instead of the singer's timbre.
 MIN_DURATION_SEC: dict[str, float] = {"standard": 300.0, "professional": 900.0}
 MIN_SNR_DB = 15.0
+
+# Ticket T1: below this much *available* RAM, DataLoader worker processes are
+# the first thing to get OOM-killed — each one forks a copy of the parent's
+# address space, and the crash surfaces as a bare "worker (pid NNNN) exited
+# unexpectedly" long after the run started. Single-process loading is slower
+# but survives, so we pick it up front rather than crashing into it.
+LOW_MEMORY_GB = 8.0
 
 
 # ── Model ─────────────────────────────────────────────────────────────────────
@@ -471,6 +481,129 @@ def export_to_onnx(model: MicroVITSModel, output_path: Path) -> int:
     return len(raw)
 
 
+# ── Data loading (Ticket T1) ──────────────────────────────────────────────────
+
+def _emit(payload: dict, progress_path: Path | None = None) -> None:
+    """Write one JSON object on its own line to stdout.
+
+    Stdout is the machine-readable channel the Electron bridge parses line by
+    line, so every line it carries must be exactly one JSON object and nothing
+    else (Ticket T2). Diagnostics belong on stderr. A broken stdout pipe (the
+    UI closed mid-run) must never take down a training run, hence the guards.
+    """
+    try:
+        print(json.dumps(payload), flush=True)
+    except Exception:
+        pass
+    # Only real progress belongs in the polled progress file — a warning must
+    # not overwrite the last known epoch/percent a poller is reading.
+    if progress_path is not None and payload.get("status") in ("training", "done"):
+        try:
+            progress_path.write_text(json.dumps(payload))
+        except Exception:
+            pass
+
+
+# Must match LOG_PREFIX in main.py (and ENGINE_LOG_PREFIX in
+# src/main/engine-preflight.ts): the bridge classifies any stderr line
+# *without* it as a real error — shown in red in the log panel and quoted back
+# in failure messages — which is not what an informational line should look like.
+_LOG_PREFIX = "[engine]"
+
+
+def _diag(message: str) -> None:
+    """Human-readable diagnostic on stderr, where non-JSON output is expected."""
+    try:
+        print(f"{_LOG_PREFIX} [trainer] {message}", file=sys.stderr, flush=True)
+    except Exception:
+        pass
+
+
+def _available_ram_gb() -> float | None:
+    """Available RAM in GB, or None where the platform can't tell us."""
+    try:
+        from env_check import available_ram_gb  # noqa: PLC0415
+        return available_ram_gb()
+    except Exception:
+        return None
+
+
+def _is_worker_crash(exc: BaseException) -> bool:
+    """True when `exc` is PyTorch reporting a dead DataLoader worker process.
+
+    torch has no dedicated exception type for this — a worker that is
+    OOM-killed or segfaults comes back as a plain RuntimeError reading
+    "DataLoader worker (pid(s) 1984) exited unexpectedly", and shared-memory
+    exhaustion as an OSError with the same phrase — so the message is the
+    only signal available. An exception raised *inside* __getitem__ is
+    re-raised as "Caught ValueError in DataLoader worker process 0", which
+    matches too: re-running it single-process is exactly right there, since
+    that is what surfaces the real traceback instead of a wrapped one.
+    """
+    return "dataloader worker" in str(exc).lower()
+
+
+def _worker_init(worker_id: int) -> None:
+    """Make a worker's death legible in the engine log.
+
+    A worker killed by the OOM killer or a segfault dies without Python ever
+    raising in it, so the parent sees only "exited unexpectedly" with no
+    cause. faulthandler dumps the C-level traceback to the worker's stderr,
+    which it inherits from this process and which the bridge forwards to the
+    training log panel. (SIGKILL — the Linux OOM killer's weapon — can't be
+    caught by anything; the announcement line below at least pins the pid in
+    the log so a "pid 1984 exited" message can be tied to a worker.)
+    """
+    try:
+        import faulthandler  # noqa: PLC0415
+        faulthandler.enable(file=sys.stderr, all_threads=True)
+    except Exception:
+        pass
+    _diag(f"dataloader worker {worker_id} started (pid {os.getpid()})")
+
+
+def _plan_workers(dataset: VocalDataset) -> tuple[int, str | None]:
+    """Choose num_workers, and explain the choice when it isn't the default.
+
+    Worker processes only pay off when __getitem__ does real disk I/O (the
+    synthetic/dummy fallback is pure in-memory sine-wave math, where process
+    spawn/IPC overhead would make things slower, not faster), and they only
+    survive when there is memory to fork them into.
+    """
+    if dataset._dummy:
+        return 0, None
+
+    available = _available_ram_gb()
+    if available is not None and available < LOW_MEMORY_GB:
+        return 0, (
+            f"可用内存仅 {available:.1f} GB（低于 {LOW_MEMORY_GB:.0f} GB），"
+            "已改用单进程数据加载（num_workers=0），训练将继续但可能较慢。 / "
+            f"Only {available:.1f} GB of memory is available (below "
+            f"{LOW_MEMORY_GB:.0f} GB) — switched to single-process data loading "
+            "(num_workers=0) to avoid running out; training continues but may be slower."
+        )
+
+    return min(4, os.cpu_count() or 1), None
+
+
+def _build_loader(
+    dataset: VocalDataset, batch_size: int, device: str, n_workers: int,
+) -> DataLoader:
+    """DataLoader for one training pass, at the given worker count."""
+    # drop_last on a dataset smaller than one batch yields *zero* batches —
+    # an epoch that never steps the optimizer, which is one of the two ways
+    # the "lr_scheduler.step() before optimizer.step()" warning appears
+    # (Ticket T3). Keep the short final batch instead of training on nothing.
+    drop_last = len(dataset) >= batch_size
+    return DataLoader(
+        dataset, batch_size=batch_size, shuffle=True, drop_last=drop_last,
+        num_workers=n_workers,
+        pin_memory=(device == "cuda"),
+        persistent_workers=n_workers > 0,
+        worker_init_fn=_worker_init if n_workers > 0 else None,
+    )
+
+
 # ── Training loop ─────────────────────────────────────────────────────────────
 
 def _pick_device() -> str:
@@ -530,8 +663,15 @@ def train(
     """
     Full training entry point.
 
-    Emits one JSON line per epoch to stdout (for UI streaming) and optionally
-    writes the latest progress dict to progress_path for polling.
+    Emits one JSON object per line to stdout (for UI streaming) and optionally
+    writes the latest progress dict to progress_path for polling. Anything that
+    isn't a machine-readable message goes to stderr instead, so every stdout
+    line stays parseable (Ticket T2).
+
+    A DataLoader worker crash does not end the run: loading falls back to a
+    single process and the epoch is retried, with the reason reported to the
+    caller as a warning notice (Ticket T1).
+
     Returns the final stats dict.
     """
     device = device or _pick_device()
@@ -559,16 +699,12 @@ def train(
             proc_dir = data_dir   # VocalDataset will use dummy mode
 
     dataset = VocalDataset(proc_dir)
-    # Worker processes only pay off when __getitem__ does real disk I/O
-    # (the synthetic/dummy fallback is pure in-memory sine-wave math, where
-    # process spawn/IPC overhead would make things slower, not faster).
-    n_workers = min(4, os.cpu_count() or 1) if not dataset._dummy else 0
-    loader = DataLoader(
-        dataset, batch_size=batch_size, shuffle=True, drop_last=True,
-        num_workers=n_workers,
-        pin_memory=(device == "cuda"),
-        persistent_workers=n_workers > 0,
-    )
+    n_workers, worker_notice = _plan_workers(dataset)
+    if worker_notice:
+        _emit({"status": "warning", "type": "notice", "code": "dataloader_low_memory",
+               "message": worker_notice, "num_workers": n_workers})
+        _diag(worker_notice)
+    loader  = _build_loader(dataset, batch_size, device, n_workers)
     loss_fn = nn.MSELoss()
 
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -578,7 +714,13 @@ def train(
     # GradScaler(enabled=False)/autocast(enabled=False) fall straight
     # through to plain fp32 ops, so this one code path is safe on CPU/MPS.
     amp_enabled = (device == "cuda")
-    scaler      = torch.cuda.amp.GradScaler(enabled=amp_enabled)
+    # torch.amp.GradScaler is where this moved in torch 2.4; the old
+    # torch.cuda.amp spelling still works but emits a FutureWarning into the
+    # engine log on every single run. requirements.txt allows torch >= 2.0,
+    # so keep the fallback for interpreters that predate the move.
+    scaler      = (torch.amp.GradScaler("cuda", enabled=amp_enabled)
+                   if hasattr(torch.amp, "GradScaler")
+                   else torch.cuda.amp.GradScaler(enabled=amp_enabled))
     trainable_params = [p for p in model.parameters() if p.requires_grad]
 
     # Cosine LR decay improves final convergence over a flat LR for the
@@ -589,31 +731,74 @@ def train(
     t0        = time.perf_counter()
     best_loss = float("inf")
 
-    for epoch in range(1, epochs + 1):
+    epoch = 1
+    while epoch <= epochs:
         model.train()
         epoch_loss_t = torch.zeros((), device=device)
         n_batches    = 0
+        # Whether the optimizer actually stepped this epoch — see the
+        # scheduler.step() guard below (Ticket T3).
+        stepped      = False
 
-        for frames, cond in loader:
-            frames = frames.to(device, non_blocking=True)
-            cond   = cond.to(device, non_blocking=True)
-            opt.zero_grad(set_to_none=True)
-            with torch.autocast(device_type="cuda", enabled=amp_enabled):
-                pred   = model(frames, cond)
-                target = frames.flatten(start_dim=1)
-                loss   = loss_fn(pred, target)
-            scaler.scale(loss).backward()
-            scaler.unscale_(opt)
-            torch.nn.utils.clip_grad_norm_(trainable_params, max_norm=1.0)
-            scaler.step(opt)
-            scaler.update()
-            # Accumulate on-device and defer the CPU sync (.item()) to once
-            # per epoch instead of once per batch — on CUDA/MPS every
-            # .item() call forces a device sync that stalls the pipeline.
-            epoch_loss_t += loss.detach()
-            n_batches    += 1
+        try:
+            for frames, cond in loader:
+                frames = frames.to(device, non_blocking=True)
+                cond   = cond.to(device, non_blocking=True)
+                opt.zero_grad(set_to_none=True)
+                with torch.autocast(device_type="cuda", enabled=amp_enabled):
+                    pred   = model(frames, cond)
+                    target = frames.flatten(start_dim=1)
+                    loss   = loss_fn(pred, target)
+                scaler.scale(loss).backward()
+                scaler.unscale_(opt)
+                torch.nn.utils.clip_grad_norm_(trainable_params, max_norm=1.0)
+                scale_before = scaler.get_scale() if amp_enabled else None
+                scaler.step(opt)
+                scaler.update()
+                # GradScaler silently skips optimizer.step() when the
+                # gradients aren't finite, and lowers the scale when it does.
+                # An unskipped step is the precondition for stepping the LR
+                # scheduler (Ticket T3).
+                if scale_before is None or scaler.get_scale() >= scale_before:
+                    stepped = True
+                # Accumulate on-device and defer the CPU sync (.item()) to once
+                # per epoch instead of once per batch — on CUDA/MPS every
+                # .item() call forces a device sync that stalls the pipeline.
+                epoch_loss_t += loss.detach()
+                n_batches    += 1
+        except (RuntimeError, OSError) as exc:
+            # Ticket T1: a DataLoader worker died. Historically this ended the
+            # whole run with an opaque "worker (pid 1984) exited unexpectedly"
+            # and a suggestion to set num_workers=0 that no user of a packaged
+            # app can act on. Do it for them: fall back to single-process
+            # loading and re-run this epoch. Anything else — or a crash that
+            # happens when we are *already* single-process, where there is no
+            # further fallback and the traceback is the real one — propagates.
+            if not (_is_worker_crash(exc) and n_workers > 0):
+                raise
+            detail = " ".join(str(exc).split())[:400]
+            _diag(f"dataloader worker crash during epoch {epoch}: {detail}")
+            _diag("common causes: not enough memory to fork workers, or a "
+                  "corrupt/unreadable chunk file in the processed dataset")
+            message = (
+                "检测到多进程加载失败，已切换到单进程模式（num_workers=0），"
+                "训练将继续但可能较慢。 / "
+                "Multi-process data loading failed — switched to single-process "
+                "mode (num_workers=0). Training continues but may be slower."
+            )
+            _emit({"status": "warning", "type": "notice", "code": "dataloader_worker_crash",
+                   "message": message, "detail": detail, "epoch": epoch, "num_workers": 0})
+            n_workers = 0
+            del loader
+            loader = _build_loader(dataset, batch_size, device, n_workers)
+            continue    # redo this epoch from the top, single-process
 
-        scheduler.step()
+        # Stepping the LR scheduler in an epoch where the optimizer never
+        # stepped is what raises PyTorch's "lr_scheduler.step() before
+        # optimizer.step()" UserWarning — and it would burn an LR value on an
+        # epoch that changed no weights (Ticket T3).
+        if stepped:
+            scheduler.step()
         avg_loss  = (epoch_loss_t / max(n_batches, 1)).item()
         best_loss = min(best_loss, avg_loss)
         elapsed   = time.perf_counter() - t0
@@ -628,9 +813,8 @@ def train(
             "status":       "training",
             "device":       device,
         }
-        print(json.dumps(prog), flush=True)
-        if progress_path:
-            progress_path.write_text(json.dumps(prog))
+        _emit(prog, progress_path)
+        epoch += 1
 
     # Export
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -675,9 +859,7 @@ def train(
         # acceptance: standard ≤ 20 min CPU, professional ≤ 90 min CPU
         "passed":           elapsed <= (1200 if mode == "standard" else 5400),
     }
-    print(json.dumps(final), flush=True)
-    if progress_path:
-        progress_path.write_text(json.dumps(final))
+    _emit(final, progress_path)
 
     # Release accelerator memory before exit so the parent app isn't left under pressure.
     del model
