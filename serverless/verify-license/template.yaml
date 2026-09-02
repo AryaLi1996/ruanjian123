@@ -60,6 +60,36 @@ Parameters:
       as long as they haven't already expired — see
       _apply_trial_duration_cap() in handler.py.
 
+  # ── Demo licence ────────────────────────────────────────────────────────────
+  DemoDays:
+    Type: Number
+    Default: 30
+    MinValue: 1
+    MaxValue: 366
+    Description: >-
+      How long a demo licence runs, in days. Unlike TrialDays this is not
+      applied retroactively: a demo already issued keeps the window its token
+      was signed for, because the token is in the client's hands and
+      shortening the stored record would not shorten it.
+
+  DemoPlanId:
+    Type: String
+    Default: demo
+    AllowedPattern: '^[A-Za-z0-9_-]{1,32}$'
+    Description: >-
+      The planId a demo token carries. Deliberately matches no entry in
+      _PLAN_TIERS, so anything reading a licence can tell a demo from a
+      purchase.
+
+  DefaultAppId:
+    Type: String
+    Default: smoothvoice
+    AllowedPattern: '^[A-Za-z0-9_.-]{1,64}$'
+    Description: >-
+      Which app a request that names no appId belongs to. The existing rows
+      were stamped with this value, so an older client that sends none still
+      resolves to the same records.
+
   # ── Ticket 34: multi-period plans ───────────────────────────────────────────
   BaseMonthlyPrice:
     Type: String
@@ -131,6 +161,10 @@ Globals:
         ORDERS_TABLE: !Ref OrdersTable
         LICENSES_TABLE: !Ref LicensesTable
         TRIALS_TABLE: !Ref TrialsTable
+        DEMOS_TABLE: !Ref DemosTable
+        DEMO_DAYS: !Ref DemoDays
+        DEMO_PLAN_ID: !Ref DemoPlanId
+        DEFAULT_APP_ID: !Ref DefaultAppId
         PAYMENT_SUCCESS_URL: !Ref PaymentSuccessUrl
         PAYMENT_CANCEL_URL: !Ref PaymentCancelUrl
         DOUYIN_APP_ID: !Ref DouyinAppId
@@ -187,6 +221,21 @@ Resources:
         - AttributeName: deviceId
           KeyType: HASH
 
+  # ── Demo licences, keyed by "<appId>#<deviceId>" ────────────────────────────
+  # Separate from TrialsTable because a demo is scoped per app as well as per
+  # device: a demo spent in one app on a machine is not another app's demo to
+  # refuse. See _demo_key() in handler.py.
+  DemosTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: demoKey
+          AttributeType: S
+      KeySchema:
+        - AttributeName: demoKey
+          KeyType: HASH
+
   LicenseVerifierRole:
     Type: AWS::IAM::Role
     Properties:
@@ -237,6 +286,7 @@ Resources:
                   - !Sub '${OrdersTable.Arn}/index/*'
                   - !GetAtt LicensesTable.Arn
                   - !GetAtt TrialsTable.Arn
+                  - !GetAtt DemosTable.Arn
 
   LicenseVerifier:
     Type: AWS::Serverless::Function
@@ -284,3 +334,5 @@ Outputs:
     Value: !Ref LicensesTable
   TrialsTableName:
     Value: !Ref TrialsTable
+  DemosTableName:
+    Value: !Ref DemosTable
