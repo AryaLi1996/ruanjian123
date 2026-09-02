@@ -462,19 +462,6 @@ class FakeLicensesTable:
         return {"Items": hits[:Limit] if Limit else hits}
 
 
-class FakeLegacyTable:
-    """The pre-Ticket-72 tables: one key field, no appId. Read-only, which is
-    exactly what handler.py is allowed to do with them."""
-
-    def __init__(self, key_field, items=None):
-        self.key_field = key_field
-        self.items = dict(items or {})
-
-    def get_item(self, Key):
-        item = self.items.get(Key[self.key_field])
-        return {"Item": item} if item is not None else {}
-
-
 class AppIdTestCase(unittest.TestCase):
     """Swaps every store handler.py reaches for an in-memory fake, and puts
     them back afterward."""
@@ -483,17 +470,15 @@ class AppIdTestCase(unittest.TestCase):
     DEVICE = "d" * 32
 
     def setUp(self):
-        for name in ("_trials_table", "_legacy_trials_table",
-                     "_licenses_table", "_legacy_licenses_table"):
+        for name in ("_trials_table", "_licenses_table"):
             orig = getattr(h, name)
             self.addCleanup(lambda n=name, o=orig: setattr(h, n, o))
-        # Default: configured, empty, and no legacy table at all.
+        # Configured and empty. Since Ticket 74 these are the only stores
+        # there are: a miss here is simply a miss.
         self.trials = FakeTrialsTable()
         self.licenses = FakeLicensesTable()
         h._trials_table = lambda: self.trials
         h._licenses_table = lambda: self.licenses
-        h._legacy_trials_table = lambda: None
-        h._legacy_licenses_table = lambda: None
 
     def activate(self, app_id=None, device_id=None):
         body = {"deviceId": device_id or self.DEVICE}
@@ -561,55 +546,26 @@ class TrialAppIdIsolationTests(AppIdTestCase):
                 )["statusCode"], 400, app_id)
 
 
-class LegacyTrialAdoptionTests(AppIdTestCase):
-    """The migration's correctness, from the function's side: a device that
-    already spent its trial under the old key must not get a fresh one just
-    because the table it lives in changed."""
+class PostLegacyReadTests(AppIdTestCase):
+    """Ticket 74 removed the read-through into the pre-appId tables. These
+    pin what the two reads it ran through do now: consult the V2 table and
+    nothing else, so a miss is a miss rather than a lookup somewhere older."""
 
-    def legacy(self, start_offset=-30 * DAY):
-        now = int(time.time())
-        h._legacy_trials_table = lambda: FakeLegacyTable("deviceId", {
-            self.DEVICE: {
-                "deviceId": self.DEVICE,
-                "trialStart": now + start_offset,
-                "trialEnd": now + start_offset + h.TRIAL_DAYS * DAY,
-                "createdAt": now + start_offset, "lastSeen": now + start_offset,
-            },
-        })
-
-    def test_a_spent_legacy_trial_is_not_handed_out_again(self):
-        self.legacy()
+    def test_a_trial_miss_is_a_miss_and_activation_starts_a_fresh_window(self):
+        self.assertIsNone(h._get_trial(h.DEFAULT_APP_ID, self.DEVICE))
         body = self.activate(h.DEFAULT_APP_ID)
-        # The original dates, not a new window.
-        self.assertLess(body["trialEnd"], int(time.time()))
-        self.assertTrue(self.status(h.DEFAULT_APP_ID)["expired"])
-
-    def test_the_legacy_row_is_adopted_into_the_new_table_once(self):
-        self.legacy()
-        self.activate(h.DEFAULT_APP_ID)
-        adopted = self.trials.items[trial_key(self.DEVICE, h.DEFAULT_APP_ID)]
-        self.assertEqual(adopted["appId"], h.DEFAULT_APP_ID)
-        self.assertIn("migratedAt", adopted)
-
-    def test_a_legacy_trial_belongs_to_the_default_app_and_no_other(self):
-        # The old table had no app dimension because there was one app. Giving
-        # its rows to whichever app asks first would spend the sibling's trial
-        # for it — the exact bug, inverted.
-        self.legacy()
-        body = self.activate(self.SHUYIN)
         self.assertGreater(body["trialEnd"], int(time.time()))
-        self.assertNotIn(trial_key(self.DEVICE, self.SHUYIN), {
-            k: v for k, v in self.trials.items.items() if v.get("migratedAt")
-        })
+        # Written where the V2 key schema says, and with no migration stamp:
+        # nothing was adopted from anywhere.
+        row = self.trials.items[trial_key(self.DEVICE, h.DEFAULT_APP_ID)]
+        self.assertEqual(row["appId"], h.DEFAULT_APP_ID)
+        self.assertNotIn("migratedAt", row)
 
-    def test_an_already_adopted_row_wins_over_the_legacy_one(self):
-        now = int(time.time())
-        self.trials.items[trial_key(self.DEVICE, h.DEFAULT_APP_ID)] = {
-            "deviceId": self.DEVICE, "appId": h.DEFAULT_APP_ID,
-            "trialStart": now, "trialEnd": now + h.TRIAL_DAYS * DAY,
-        }
-        self.legacy()
-        self.assertEqual(self.activate(h.DEFAULT_APP_ID)["trialStart"], now)
+    def test_a_licence_reads_back_only_for_the_app_it_was_issued_in(self):
+        h._issue_or_extend_license("user-1", "monthly", h.DEFAULT_APP_ID)
+        self.assertIsNotNone(h._get_license_row("user-1", h.DEFAULT_APP_ID))
+        self.assertIsNone(h._get_license_row("user-1", self.SHUYIN))
+        self.assertIsNone(h._get_license_row("user-2", h.DEFAULT_APP_ID))
 
 
 class LicenseAppIdIsolationTests(AppIdTestCase):
@@ -680,17 +636,6 @@ class LicenseAppIdIsolationTests(AppIdTestCase):
         self.assertEqual(resp["statusCode"], 200)
         self.assertTrue(body["valid"])
         self.assertEqual(self.claims(body["token"])["appId"], self.SHUYIN)
-
-    def test_a_legacy_licence_row_belongs_to_the_default_app_only(self):
-        now = int(time.time())
-        h._legacy_licenses_table = lambda: FakeLegacyTable("userId", {
-            "user-1": {
-                "userId": "user-1", "token": "t", "planId": "monthly",
-                "licenseKey": "LEGACYKEY123", "expiresAt": now + 100 * DAY, "updatedAt": now,
-            },
-        })
-        self.assertIsNotNone(h._get_license_row("user-1", h.DEFAULT_APP_ID))
-        self.assertIsNone(h._get_license_row("user-1", self.SHUYIN))
 
     def test_a_settled_order_issues_for_the_app_it_was_bought_in(self):
         orig = h._mark_order_paid
