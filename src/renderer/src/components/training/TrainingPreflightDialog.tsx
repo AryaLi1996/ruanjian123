@@ -13,6 +13,16 @@ interface Props {
    * becomes one click on the exact files the row is about.
    */
   onRemoveFiles?: (names: string[]) => void
+  /**
+   * Ticket P6: merge the whole selection into one file instead of deleting
+   * any of it. Offered whenever there is more than one file, because "I don't
+   * want to delete any of my takes" is the usual answer to a removal
+   * suggestion — this keeps every second of material and still cuts the
+   * per-file memory and IPC cost the warnings are about.
+   */
+  onMergeFiles?: () => void
+  /** True while that merge is decoding, so the dialog can't be double-fired. */
+  merging?: boolean
   onConfirm: () => void
   onCancel:  () => void
 }
@@ -30,7 +40,7 @@ const ICONS: Record<PreflightSeverity, string> = { blocker: '❌', warning: '⚠
  * failed run look like a button that does nothing.
  */
 export function TrainingPreflightDialog({
-  result, onSwitchToStandard, onRemoveFiles, onConfirm, onCancel,
+  result, onSwitchToStandard, onRemoveFiles, onMergeFiles, merging, onConfirm, onCancel,
 }: Props): JSX.Element {
   const { t } = useTranslation()
   const cancelRef = useRef<HTMLButtonElement>(null)
@@ -90,6 +100,7 @@ export function TrainingPreflightDialog({
                     type="button"
                     className="btn btn-ghost preflight-remove-btn"
                     onClick={() => onRemoveFiles(item.removable as string[])}
+                    disabled={merging}
                   >
                     {t('preflight.removeSuggested', { count: item.removable.length })}
                   </button>
@@ -98,6 +109,26 @@ export function TrainingPreflightDialog({
             </li>
           ))}
         </ul>
+
+        {/* Ticket P6: the alternative to deleting anything. Its own row rather
+            than a third action button — it changes the material, which is a
+            different kind of decision from "start" or "cancel". */}
+        {onMergeFiles && result.mergeableCount > 1 && (
+          <div className="preflight-merge">
+            <span className="preflight-merge-text">
+              {t('preflight.merge.hint', { count: result.mergeableCount })}
+            </span>
+            <button
+              type="button"
+              className="btn btn-ghost preflight-merge-btn"
+              onClick={onMergeFiles}
+              disabled={merging}
+              aria-busy={merging || undefined}
+            >
+              {merging ? t('preflight.merge.working') : t('preflight.merge.action')}
+            </button>
+          </div>
+        )}
 
         <div className="confirm-actions">
           <button ref={cancelRef} type="button" className="btn btn-ghost confirm-cancel" onClick={onCancel}>

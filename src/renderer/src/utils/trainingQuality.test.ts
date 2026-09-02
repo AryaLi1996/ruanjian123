@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
-  assessQuality, scoreStars,
+  assessQuality, buildRetrainPlan, scoreStars,
   type DataQualityReport,
 } from './trainingQuality'
 
@@ -96,5 +96,51 @@ describe('scoreStars', () => {
     expect(scoreStars(0.62)).toBe(3)
     expect(scoreStars(0.01)).toBe(1)   // never zero stars for a real score
     expect(scoreStars(null)).toBe(0)
+  })
+})
+
+describe('buildRetrainPlan — Ticket P8', () => {
+  it('sends a short run back for more material', () => {
+    const assessment = assessQuality({
+      quality_score: 0.9,
+      data_quality: report({ duration_sec: 34, duration_ok: false }),
+    })
+    expect(buildRetrainPlan(assessment)?.id).toBe('addMaterial')
+  })
+
+  it('sends a noisy run to the cleanup tool', () => {
+    const assessment = assessQuality({
+      quality_score: 0.9,
+      data_quality: report({ snr_db: 7.8, snr_ok: false }),
+    })
+    expect(buildRetrainPlan(assessment)?.id).toBe('cleanup')
+  })
+
+  it('asks for a re-record when the material is both short and noisy', () => {
+    const assessment = assessQuality({
+      quality_score: 0.9,
+      data_quality: report({ duration_sec: 34, duration_ok: false, snr_db: 7.8, snr_ok: false }),
+    })
+    // Neither "add material" nor "denoise" alone would get this user anywhere.
+    expect(buildRetrainPlan(assessment)?.id).toBe('rerecord')
+  })
+
+  it('points at the training settings when the data was fine', () => {
+    const assessment = assessQuality({ quality_score: 0.2, data_quality: report() })
+    expect(buildRetrainPlan(assessment)?.id).toBe('tune')
+  })
+
+  it('recommends nothing when there is nothing wrong', () => {
+    expect(buildRetrainPlan(assessQuality({ quality_score: 0.95, data_quality: report() }))).toBeNull()
+  })
+
+  it('carries the numbers its sentence quotes', () => {
+    const assessment = assessQuality({
+      quality_score: 0.9,
+      data_quality: report({ duration_sec: 34, duration_ok: false }),
+    })
+    expect(buildRetrainPlan(assessment)?.values).toMatchObject(
+      assessment.issues.find((i) => i.id === 'duration')?.values ?? {},
+    )
   })
 })

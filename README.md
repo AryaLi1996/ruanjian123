@@ -753,6 +753,14 @@ dropped anyway, and files the engine cannot read. Suggestions never empty the
 selection, and "merge these takes" — which needs judgement about the material
 — is stated, not automated.
 
+Removal is never the only route: where more than one readable file is
+selected, the checklist also offers to **merge** them into a single WAV
+(`utils/mergeAudioFiles.ts`, Ticket P6) — same total duration, one file for
+the engine to read, a 0.25 s gap between takes so chunking can't manufacture
+a click. It answers the memory- and count-shaped warnings without deleting
+anything; it does not shorten material, so a run that is too long for the
+device stays too long.
+
 While a run is in flight the console reports its own pace and the engine's
 memory (Ticket P5): over 10 minutes remaining is called out, over 20 offers to
 restart in standard mode, and `engine/trainer.py` attaches `rss_gb` /
@@ -760,7 +768,18 @@ restart in standard mode, and `engine/trainer.py` attaches `rss_gb` /
 before it happens rather than arriving as a dead process. Those figures use
 stdlib probes (`/proc/self/status`, `resource`, `psapi`) rather than psutil,
 which is deliberately not a dependency — see `_total_ram_gb()`'s note in
-`engine/env_check.py`.
+`engine/env_check.py`. The memory warning lists the steps that actually help
+and offers to drop the renderer's own log buffers (Ticket P7) — it cannot
+free the engine process's memory, and says so rather than implying a rescue
+it can't perform.
+
+When a run finishes below par, `buildRetrainPlan()` (Ticket P8) turns the
+findings into one recommendation with the button that carries it out: add
+material, clean the recordings up, re-record when the material is both short
+and noisy, or adjust epochs/mode when the data was fine. The cleanup route
+opens **Audio Tools**, whose enhanced separation includes a dereverb pass —
+not Data Preparation's 执行降噪, which is still disabled and which the report
+used to send noisy runs to.
 
 **Note**: Timing with stub models is near-instantaneous. Production models will be larger and slower. Benchmarks should be re-run with real trained ONNX models before shipping.
 

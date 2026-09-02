@@ -25,6 +25,8 @@ import { interpretProgress, interpretTrainingResult } from '../utils/engineLog'
 import type { DataQualityReport } from '../utils/trainingQuality'
 import { checkTrainingInputs, type PreflightResult } from '../utils/trainingPreflight'
 import { classifyTrainingFailure } from '../utils/trainingError'
+import { mergeAudioFiles } from '../utils/mergeAudioFiles'
+import { isEngineReadable } from '../utils/trainingPreflight'
 
 type Phase = 'idle' | 'training' | 'finalizing' | 'done'
 
@@ -171,6 +173,8 @@ export function TrainingView(): JSX.Element {
   // already trained — the two modes differ in LoRA rank and in which layers
   // are adapted, so there are no weights to carry across.
   const [confirmingModeSwitch, setConfirmingModeSwitch] = useState(false)
+  // Ticket P6: set while the selection is being decoded and concatenated.
+  const [merging, setMerging] = useState(false)
   // Ticket T3: measured by the dropzone as each file decodes; a lower bound,
   // since a file whose duration can't be read contributes nothing.
   // Ticket T1: the reason from a `{"status":"failed"}` on the progress
@@ -280,6 +284,37 @@ export function TrainingView(): JSX.Element {
       // which the check reports as a warning rather than inventing a number.
       availableRamGb: envReport?.available_ram_gb ?? null,
     })
+  }
+
+  /**
+   * Ticket P6: fold the selection into one file instead of removing any of it.
+   *
+   * Decoding happens here rather than in the dropzone because this is where
+   * the failure has somewhere to go: a file the browser cannot decode leaves
+   * the selection untouched and says so, instead of silently dropping a take
+   * the user believed was merged in.
+   */
+  async function handleMergeFiles(): Promise<void> {
+    const mergeable = audioFiles.filter((u) => isEngineReadable(u.file.name)).map((u) => u.file)
+    if (mergeable.length < 2) return
+
+    setMerging(true)
+    const ctx = new AudioContext()
+    try {
+      const merged = await mergeAudioFiles(mergeable, (data) => ctx.decodeAudioData(data))
+      const next: TrainingUpload[] = [{ file: merged.file, duration: merged.duration }]
+      dropzoneRef.current?.replaceAll(merged.file)
+      setAudioFiles(next)
+      setPreflight(runPreflight(mode, next))
+    } catch (err) {
+      // The selection is untouched — say what went wrong and let the user
+      // pick a different route (remove a file, or start anyway).
+      setError(describeError(err, t('preflight.merge.failed')))
+      setPreflight(null)
+    } finally {
+      void ctx.close()
+      setMerging(false)
+    }
   }
 
   /**
@@ -760,6 +795,10 @@ export function TrainingView(): JSX.Element {
             onSwitchToStandard={mode === 'professional'
               ? () => setConfirmingModeSwitch(true)
               : undefined}
+            // Ticket P7: the renderer's own buffers are the only memory this
+            // process can give back — the engine runs in a separate process.
+            onReleaseCache={() => { setEngineLogs([]); setLogs([]) }}
+            cachedEntryCount={engineLogs.length + logs.length}
           />
           <EngineLogPanel entries={engineLogs} defaultOpen />
         </div>
@@ -888,6 +927,8 @@ export function TrainingView(): JSX.Element {
             // the same click that removed the files.
             setPreflight(runPreflight(mode, remaining))
           }}
+          onMergeFiles={() => void handleMergeFiles()}
+          merging={merging}
           onConfirm={() => { setPreflight(null); void runTraining() }}
           onCancel={() => setPreflight(null)}
         />
@@ -910,7 +951,10 @@ export function TrainingView(): JSX.Element {
           result={result}
           onKeep={() => setShowQuality(false)}
           onRetrain={returnToForm}
-          onOpenDenoise={() => { setShowQuality(false); setActiveView('waveform') }}
+          // Ticket P8: Audio Tools, not Data Preparation — enhanced
+          // separation's dereverb pass is the cleanup that exists today,
+          // while 执行降噪 there is still disabled.
+          onOpenCleanup={() => { setShowQuality(false); setActiveView('audio-tools') }}
         />
       )}
 
