@@ -16,7 +16,7 @@
 
 ## 1. 总体架构
 
-整个授权体系是 **单函数 + 单 Function URL + 四张 DynamoDB 表** 的
+整个授权体系是 **单函数 + 单 Function URL + 四张 DynamoDB 表** 的（另有两张 Ticket 72 前的遗留表，只读、待删）
 serverless 架构，没有 API Gateway、没有服务器、没有账号系统。
 
 ```
@@ -42,10 +42,11 @@ serverless 架构，没有 API Gateway、没有服务器、没有账号系统。
               └───┬───────────────┬───────────────┬───────────┘
                   │               │               │
         ┌─────────▼───┐ ┌─────▼────────┐ ┌──▼─────────┐ ┌▼───────────┐
-        │ OrdersTable │ │LicensesTable │ │ TrialsTable│ │ DemosTable │
+        │ OrdersTable │ │LicensesV2    │ │ TrialsV2   │ │ DemosTable │
         │ PK orderId  │ │ PK userId    │ │PK deviceId │ │ PK demoKey │
-        │ GSI userId- │ │              │ │            │ │ appId#dev  │
-        │  createdAt  │ │              │ │            │ │            │
+        │ GSI userId- │ │ SK appId     │ │ SK appId   │ │ appId#dev  │
+        │  createdAt  │ │ GSI license- │ │            │ │            │
+        │             │ │  Key         │ │            │ │            │
         └─────────────┘ └──────────────┘ └────────────┘ └────────────┘
                   ▲               ▲
                   │ webhook       │ SES 发信
@@ -101,13 +102,14 @@ Stack 名默认 `ruanjian-license`，区域 `us-east-1`，AWS 账号 `6416289811
    资源仅限三张表及 `OrdersTable` 的索引
 4. （无 VPC、无其他权限）
 
-### 2.3 四张 DynamoDB 表
+### 2.3 四张 DynamoDB 表（+ 两张待删的遗留表）
 
 | 表 | 主键 | 索引 | 存什么 |
 |---|---|---|---|
 | `OrdersTable` | HASH `orderId` (S) | GSI `userId-createdAt-index`（HASH `userId`, RANGE `createdAt`, 投影 ALL） | 支付订单：`orderId, userId, planId, method, status(pending/paid), amount, currency, createdAt, providerOrderId, paidAt, providerTxnId` |
-| `LicensesTable` | HASH `userId` (S) | — | 当前有效授权：`userId, token, planId, licenseKey, expiresAt, updatedAt` |
-| `TrialsTable` | HASH `deviceId` (S) | — | 免费试用：`deviceId, trialStart, trialEnd, createdAt, lastSeen` |
+| `LicensesV2Table` | HASH `userId` (S) + RANGE `appId` (S) | GSI `licenseKey-index`（HASH `licenseKey`, 投影 ALL） | 当前有效授权：`userId, appId, token, planId, licenseKey, expiresAt, updatedAt` |
+| `TrialsV2Table` | HASH `deviceId` (S) + RANGE `appId` (S) | — | 免费试用：`deviceId, appId, trialStart, trialEnd, createdAt, lastSeen` |
+| ~~`LicensesTable`~~ / ~~`TrialsTable`~~ | 旧的单键表 | — | **Ticket 72 前的遗留表**，只读回落，backfill 验证后删除。模板里带 `DeletionPolicy: Retain` |
 | `DemosTable` | HASH `demoKey` (S) = `"<appId>#<deviceId>"` | — | 演示许可证：`demoKey, appId, deviceId, planId, issuedAt, expiresAt, createdAt` |
 
 全部 `BillingMode: PAY_PER_REQUEST`。GSI 存在的唯一目的是支撑
@@ -157,7 +159,13 @@ Stack 名默认 `ruanjian-license`，区域 `us-east-1`，AWS 账号 `6416289811
 | 应用 | `appId` |
 |---|---|
 | SootheVoice（本仓库） | `smoothvoice` |
-| 舒音水印去除 | 该应用自身的 appId（由 Ticket 65a 服务端登记） |
+| 舒音水印去除 | 该应用自身的 appId |
+
+**服务端支持状态（Ticket 72 起）**：`/demo/*`、`/trial/*`、`/create-order`、
+`/order-status`、`/payment-history` 和默认的 verify 路由**都**按 `appId` 分区。
+在此之前只有 `/demo/*` 支持——试用记录仅按 `deviceId`，授权记录仅按 `userId`，
+所以同一台机器上两个应用**共用一个试用期**，在一个应用里续费会顺带延长另一个的
+到期日。这两条都由 Ticket 72 修掉。
 
 客户端侧（Ticket 65b）：
 
@@ -343,6 +351,76 @@ webhook 且 metadata 无 `orderId` → `_generate_license_key()` 生成
 
 `DEMOS_TABLE` 未配置时两条路由都返回 501，和其他可选能力一致。
 
+### 5.5 `appId` 隔离与 Ticket 72 迁移
+
+Ticket 72 之前，`TrialsTable` 只按 `deviceId` 记录、`LicensesTable` 只按
+`userId` 记录。后果是实打实的：同一台机器上，SootheVoice 和舒音**共用一个三天
+试用期**——后打开的那个应用发现试用已经用掉了；而在一个应用里续费，会顺着同一条
+`userId` 记录**延长另一个应用的到期日**。
+
+#### 表结构
+
+两张表都重建为复合主键：
+
+| 表 | HASH | RANGE |
+|---|---|---|
+| `TrialsV2Table` | `deviceId` | `appId` |
+| `LicensesV2Table` | `userId` | `appId` |
+
+**分区键选 `deviceId`/`userId` 而不是 `appId`**：账号上只有个位数个应用，用
+`appId` 做分区键会把所有写入挤进这几个分区（DynamoDB 单分区 1000 WCU 上限）。
+按设备/用户分区则天然打散，而且「这台设备/这个用户手上的所有记录」变成一次
+`query` 就能拿到——backfill 和客服排查要的正是这个。
+
+`LicensesV2Table` 另有 GSI `licenseKey-index`（HASH `licenseKey`，投影 ALL）。
+这是全文件唯一一处**不预先知道 `(userId, appId)`** 的查询：一串 license key 单独
+到达 verify 路由，要判断的正是「它属不属于这个应用」。投影必须是 ALL，因为
+`_find_license_by_key()` 要从命中的行上读 `expiresAt`。
+
+#### 迁移：backfill，不是 cutover
+
+DynamoDB 不能原地改主键，所以只能建新表搬数据。但**不做硬切换**——
+`handler.py` 在新表未命中时会去读遗留表（`_adopt_legacy_trial` /
+`_adopt_legacy_license`），把找到的行按 `DEFAULT_APP_ID` 收编进新表。因此部署与
+迁移脚本的先后顺序**不影响正确性**：中间窗口里没有人会白拿第二个试用期，也没有
+人的订阅会消失。跑迁移脚本换来的是——遗留表不再承重，可以删掉，回落逻辑也可以
+一并移除。
+
+**遗留行只归 `DEFAULT_APP_ID`。** 旧表没有应用维度，是因为当时只有一个应用；
+把它的行给「先来问的那个应用」，等于替兄弟应用花掉它的试用期，而真正的主人反倒
+拿到一个新的——正是这张单要修的 bug，反过来又犯一遍。所以其他 `appId` 在遗留表
+里什么也看不见，会正常开始自己的试用期。
+
+遗留表在模板里带 `DeletionPolicy: Retain` / `UpdateReplacePolicy: Retain`：
+以后从模板里删掉这两个资源时，**不会**把数据一起删掉。IAM 上它们只给了
+`dynamodb:GetItem`——函数收编时是往新表写，从不回写旧表。
+
+#### 迁移步骤
+
+```bash
+# 1. 部署（创建 V2 表 + GSI，函数切到 V2，遗留表保留只读回落）
+sam build && sam deploy
+
+# 2. 从 stack outputs 取表名
+aws cloudformation describe-stacks --stack-name ruanjian-license \
+  --query "Stacks[0].Outputs" --output table
+
+# 3. 先空跑，什么都不写
+python3 serverless/verify-license/migrate_app_id.py \
+  --trials-from   <TrialsTableName>   --trials-to   <TrialsV2TableName> \
+  --licenses-from <LicensesTableName> --licenses-to <LicensesV2TableName>
+
+# 4. 确认无误后再写
+python3 serverless/verify-license/migrate_app_id.py ... --apply
+```
+
+脚本是**幂等**的：目标表里已存在的行绝不覆盖（`attribute_not_exists` 条件写），
+所以中断后重跑能补完，跑完再跑是空操作。这也意味着**函数已经收编过的行胜过脚本的
+副本**——那是更新的事实，方向是对的。
+
+验证 backfill 完成后，再单独提一个 PR 删掉两张遗留表资源、两个 `LEGACY_*` 环境
+变量和 `_adopt_legacy_*` 回落逻辑。
+
 ---
 
 ## 6. 客户端存储（Electron `userData` 目录）
@@ -492,7 +570,9 @@ Function URL 是 `AuthType: NONE`，即完全公开，所有输入都是攻击�
 | `LEMON_API_KEY` | `LemonApiKey` | | Lemon Squeezy |
 | `SES_SENDER_EMAIL` | `SesSenderEmail` | | 已验证的 SES 发件地址；留空则不发信 |
 | `SES_REGION` | — | | 默认取函数自身 `AWS_REGION` |
-| `ORDERS_TABLE` / `LICENSES_TABLE` / `TRIALS_TABLE` / `DEMOS_TABLE` | 自动注入 | | 四张表名，由模板 `!Ref` 注入 |
+| `ORDERS_TABLE` / `LICENSES_TABLE` / `TRIALS_TABLE` / `DEMOS_TABLE` | 自动注入 | | 四张表名，由模板 `!Ref` 注入（后两者现指向 V2 表） |
+| `LICENSES_KEY_INDEX` | 模板写死 | | `licenseKey-index`，verify 路由用它判断某个 key 属于哪个应用 |
+| `LEGACY_LICENSES_TABLE` / `LEGACY_TRIALS_TABLE` | 自动注入 | | Ticket 72 前的单键表，**只读回落**；backfill 验证后连同表一起删除 |
 | `DEMO_DAYS` | `DemoDays` | | 演示许可证时长，默认 30 |
 | `DEMO_PLAN_ID` | `DemoPlanId` | | 演示 token 的 `planId`，默认 `demo`（刻意不属于任何付费档） |
 | `DEFAULT_APP_ID` | `DefaultAppId` | | 请求未声明 `appId` 时的归属，默认 `smoothvoice` |

@@ -22,33 +22,46 @@ import handler as h  # noqa: E402
 DAY = 86400
 
 
+def trial_key(device_id, app_id=None):
+    """The composite key Ticket 72 gave TrialsTable — (deviceId, appId) — as
+    the tuple these in-memory fakes index by."""
+    return (device_id, app_id if app_id is not None else h.DEFAULT_APP_ID)
+
+
 class FakeTrialsTable:
     """Minimal in-memory stand-in for the DynamoDB Table object handler.py
     calls through _trials_table() — just enough of get_item/put_item/
     update_item's shapes for the trial code paths under test, so these tests
-    never touch real AWS/boto3."""
+    never touch real AWS/boto3.
+
+    Indexed by the (deviceId, appId) tuple, matching the real table's key
+    schema since Ticket 72; pass items keyed with trial_key()."""
 
     def __init__(self, items=None):
         self.items = dict(items or {})
         self.update_calls: list[dict] = []
 
+    @staticmethod
+    def _key(d):
+        return trial_key(d["deviceId"], d.get("appId"))
+
     def get_item(self, Key):
-        item = self.items.get(Key["deviceId"])
+        item = self.items.get(self._key(Key))
         return {"Item": item} if item is not None else {}
 
     def put_item(self, Item, ConditionExpression=None):
-        device_id = Item["deviceId"]
-        if ConditionExpression and device_id in self.items:
+        key = self._key(Item)
+        if ConditionExpression and key in self.items:
             raise Exception("ConditionalCheckFailedException: item already exists")
-        self.items[device_id] = dict(Item)
+        self.items[key] = dict(Item)
 
     def update_item(self, Key, UpdateExpression, ExpressionAttributeValues, ConditionExpression=None):
-        device_id = Key["deviceId"]
+        key = self._key(Key)
         self.update_calls.append({"Key": Key, "Values": dict(ExpressionAttributeValues)})
-        if ConditionExpression and device_id not in self.items:
+        if ConditionExpression and key not in self.items:
             raise Exception("ConditionalCheckFailedException: item does not exist")
         # Only ever asked to "SET trialEnd = :capped" in the code under test.
-        self.items[device_id]["trialEnd"] = ExpressionAttributeValues[":capped"]
+        self.items[key]["trialEnd"] = ExpressionAttributeValues[":capped"]
 
 
 class TrialTestCase(unittest.TestCase):
@@ -81,7 +94,10 @@ class ApplyTrialDurationCapTests(TrialTestCase):
         self.assertEqual(result["trialEnd"], expected_end)
         self.assertLess(now, result["trialEnd"])  # confirms this case is still "active"
         self.assertEqual(len(table.update_calls), 1)
-        self.assertEqual(table.update_calls[0]["Key"], {"deviceId": "dev-still-active"})
+        self.assertEqual(
+            table.update_calls[0]["Key"],
+            {"deviceId": "dev-still-active", "appId": h.DEFAULT_APP_ID},
+        )
         self.assertEqual(table.update_calls[0]["Values"][":capped"], expected_end)
 
     def test_truncation_can_immediately_expire_a_trial(self):
@@ -167,18 +183,21 @@ class GetTrialAppliesCapTests(TrialTestCase):
         device_id = "dev-get-trial"
         start = now - 1 * DAY
         table = self.use_table(FakeTrialsTable({
-            device_id: {"deviceId": device_id, "trialStart": start, "trialEnd": start + 7 * DAY},
+            trial_key(device_id): {
+                "deviceId": device_id, "appId": h.DEFAULT_APP_ID,
+                "trialStart": start, "trialEnd": start + 7 * DAY,
+            },
         }))
 
-        result = h._get_trial(device_id)
+        result = h._get_trial(h.DEFAULT_APP_ID, device_id)
 
         expected_end = start + h.TRIAL_DAYS * DAY
         self.assertEqual(result["trialEnd"], expected_end)
-        self.assertEqual(table.items[device_id]["trialEnd"], expected_end)
+        self.assertEqual(table.items[trial_key(device_id)]["trialEnd"], expected_end)
 
     def test_get_trial_returns_none_when_absent(self):
         self.use_table(FakeTrialsTable())
-        self.assertIsNone(h._get_trial("dev-absent"))
+        self.assertIsNone(h._get_trial(h.DEFAULT_APP_ID, "dev-absent"))
 
 
 class TrialEndpointResponseTests(TrialTestCase):
@@ -202,8 +221,9 @@ class TrialEndpointResponseTests(TrialTestCase):
     def test_trial_status_includes_duration_days_when_used(self):
         now = int(time.time())
         self.use_table(FakeTrialsTable({
-            self.VALID_DEVICE_ID: {
-                "deviceId": self.VALID_DEVICE_ID, "trialStart": now, "trialEnd": now + h.TRIAL_DAYS * DAY,
+            trial_key(self.VALID_DEVICE_ID): {
+                "deviceId": self.VALID_DEVICE_ID, "appId": h.DEFAULT_APP_ID,
+                "trialStart": now, "trialEnd": now + h.TRIAL_DAYS * DAY,
                 "createdAt": now, "lastSeen": now,
             },
         }))
@@ -405,6 +425,296 @@ class CreateTokenAppIdTests(unittest.TestCase):
         then = int(time.time()) - 3 * DAY
         token = h.create_token("user-1", "demo", "KEY12345", issued_at=then)
         self.assertEqual(DemoTestCase.payload_of(token)["issuedAt"], then)
+
+
+# ── Ticket 72: appId isolation for trials, licences and orders ─────────────
+# The trial used to be keyed by deviceId alone, so the same machine running
+# SootheVoice and 舒音 shared one three-day trial: whichever app was opened
+# second found it already spent. The licence row was keyed by userId alone,
+# with the same consequence one table along — a purchase in one app extended
+# the other's expiry. These cover the isolation, and cover just as carefully
+# that isolating it did not hand anybody a *second* trial.
+
+class FakeLicensesTable:
+    """In-memory stand-in for LicensesV2Table: (userId, appId) key plus the
+    licenseKey-index GSI the verify route queries."""
+
+    def __init__(self, items=None):
+        self.items = dict(items or {})
+
+    @staticmethod
+    def _key(d):
+        return (d["userId"], d.get("appId", h.DEFAULT_APP_ID))
+
+    def get_item(self, Key):
+        item = self.items.get(self._key(Key))
+        return {"Item": item} if item is not None else {}
+
+    def put_item(self, Item, ConditionExpression=None):
+        key = self._key(Item)
+        if ConditionExpression and key in self.items:
+            raise Exception("ConditionalCheckFailedException: item already exists")
+        self.items[key] = dict(Item)
+
+    def query(self, IndexName, KeyConditionExpression, ExpressionAttributeValues, Limit=None):
+        wanted = ExpressionAttributeValues[":k"]
+        hits = [v for v in self.items.values() if v.get("licenseKey") == wanted]
+        return {"Items": hits[:Limit] if Limit else hits}
+
+
+class FakeLegacyTable:
+    """The pre-Ticket-72 tables: one key field, no appId. Read-only, which is
+    exactly what handler.py is allowed to do with them."""
+
+    def __init__(self, key_field, items=None):
+        self.key_field = key_field
+        self.items = dict(items or {})
+
+    def get_item(self, Key):
+        item = self.items.get(Key[self.key_field])
+        return {"Item": item} if item is not None else {}
+
+
+class AppIdTestCase(unittest.TestCase):
+    """Swaps every store handler.py reaches for an in-memory fake, and puts
+    them back afterward."""
+
+    SHUYIN = "shuyin"
+    DEVICE = "d" * 32
+
+    def setUp(self):
+        for name in ("_trials_table", "_legacy_trials_table",
+                     "_licenses_table", "_legacy_licenses_table"):
+            orig = getattr(h, name)
+            self.addCleanup(lambda n=name, o=orig: setattr(h, n, o))
+        # Default: configured, empty, and no legacy table at all.
+        self.trials = FakeTrialsTable()
+        self.licenses = FakeLicensesTable()
+        h._trials_table = lambda: self.trials
+        h._licenses_table = lambda: self.licenses
+        h._legacy_trials_table = lambda: None
+        h._legacy_licenses_table = lambda: None
+
+    def activate(self, app_id=None, device_id=None):
+        body = {"deviceId": device_id or self.DEVICE}
+        if app_id is not None:
+            body["appId"] = app_id
+        return json.loads(h._handle_trial_activate({"body": json.dumps(body)})["body"])
+
+    def status(self, app_id=None, device_id=None):
+        params = {"deviceId": device_id or self.DEVICE}
+        if app_id is not None:
+            params["appId"] = app_id
+        return json.loads(h._handle_trial_status({"queryStringParameters": params})["body"])
+
+
+class TrialAppIdIsolationTests(AppIdTestCase):
+    def test_one_device_gets_a_separate_trial_in_each_app(self):
+        # The bug this ticket exists for: before, the second app to ask found
+        # the trial already spent.
+        first = self.activate(h.DEFAULT_APP_ID)
+        self.assertTrue(first["success"])
+        self.assertEqual(first["appId"], h.DEFAULT_APP_ID)
+
+        # Move the first app's trial into the past so a shared record would
+        # read as expired rather than merely "already started".
+        row = self.trials.items[trial_key(self.DEVICE, h.DEFAULT_APP_ID)]
+        row["trialStart"] -= 30 * DAY
+        row["trialEnd"] -= 30 * DAY
+
+        second = self.activate(self.SHUYIN)
+        self.assertTrue(second["success"])
+        self.assertEqual(second["appId"], self.SHUYIN)
+        self.assertGreater(second["trialEnd"], int(time.time()))
+        self.assertNotEqual(second["trialStart"], row["trialStart"])
+
+        # And each app still sees only its own.
+        self.assertTrue(self.status(h.DEFAULT_APP_ID)["expired"])
+        self.assertFalse(self.status(self.SHUYIN)["expired"])
+
+    def test_re_activating_the_same_app_does_not_restart_the_trial(self):
+        first = self.activate(self.SHUYIN)
+        second = self.activate(self.SHUYIN)
+        self.assertEqual(second["trialStart"], first["trialStart"])
+        self.assertEqual(second["trialEnd"], first["trialEnd"])
+
+    def test_a_request_naming_no_app_falls_back_to_the_default(self):
+        body = self.activate(app_id=None)
+        self.assertEqual(body["appId"], h.DEFAULT_APP_ID)
+        self.assertIn(trial_key(self.DEVICE, h.DEFAULT_APP_ID), self.trials.items)
+
+    def test_status_reports_which_app_it_answered_for(self):
+        self.activate(self.SHUYIN)
+        self.assertEqual(self.status(self.SHUYIN)["appId"], self.SHUYIN)
+        self.assertTrue(self.status(self.SHUYIN)["trialUsed"])
+        self.assertFalse(self.status(h.DEFAULT_APP_ID)["trialUsed"])
+
+    def test_a_malformed_app_id_is_refused_on_both_trial_routes(self):
+        for app_id in ("has space", "sh#uyin", "x" * 65):
+            self.assertEqual(
+                h._handle_trial_activate(
+                    {"body": json.dumps({"deviceId": self.DEVICE, "appId": app_id})}
+                )["statusCode"], 400, app_id)
+            self.assertEqual(
+                h._handle_trial_status(
+                    {"queryStringParameters": {"deviceId": self.DEVICE, "appId": app_id}}
+                )["statusCode"], 400, app_id)
+
+
+class LegacyTrialAdoptionTests(AppIdTestCase):
+    """The migration's correctness, from the function's side: a device that
+    already spent its trial under the old key must not get a fresh one just
+    because the table it lives in changed."""
+
+    def legacy(self, start_offset=-30 * DAY):
+        now = int(time.time())
+        h._legacy_trials_table = lambda: FakeLegacyTable("deviceId", {
+            self.DEVICE: {
+                "deviceId": self.DEVICE,
+                "trialStart": now + start_offset,
+                "trialEnd": now + start_offset + h.TRIAL_DAYS * DAY,
+                "createdAt": now + start_offset, "lastSeen": now + start_offset,
+            },
+        })
+
+    def test_a_spent_legacy_trial_is_not_handed_out_again(self):
+        self.legacy()
+        body = self.activate(h.DEFAULT_APP_ID)
+        # The original dates, not a new window.
+        self.assertLess(body["trialEnd"], int(time.time()))
+        self.assertTrue(self.status(h.DEFAULT_APP_ID)["expired"])
+
+    def test_the_legacy_row_is_adopted_into_the_new_table_once(self):
+        self.legacy()
+        self.activate(h.DEFAULT_APP_ID)
+        adopted = self.trials.items[trial_key(self.DEVICE, h.DEFAULT_APP_ID)]
+        self.assertEqual(adopted["appId"], h.DEFAULT_APP_ID)
+        self.assertIn("migratedAt", adopted)
+
+    def test_a_legacy_trial_belongs_to_the_default_app_and_no_other(self):
+        # The old table had no app dimension because there was one app. Giving
+        # its rows to whichever app asks first would spend the sibling's trial
+        # for it — the exact bug, inverted.
+        self.legacy()
+        body = self.activate(self.SHUYIN)
+        self.assertGreater(body["trialEnd"], int(time.time()))
+        self.assertNotIn(trial_key(self.DEVICE, self.SHUYIN), {
+            k: v for k, v in self.trials.items.items() if v.get("migratedAt")
+        })
+
+    def test_an_already_adopted_row_wins_over_the_legacy_one(self):
+        now = int(time.time())
+        self.trials.items[trial_key(self.DEVICE, h.DEFAULT_APP_ID)] = {
+            "deviceId": self.DEVICE, "appId": h.DEFAULT_APP_ID,
+            "trialStart": now, "trialEnd": now + h.TRIAL_DAYS * DAY,
+        }
+        self.legacy()
+        self.assertEqual(self.activate(h.DEFAULT_APP_ID)["trialStart"], now)
+
+
+class LicenseAppIdIsolationTests(AppIdTestCase):
+    def issue(self, app_id, plan_id="monthly", user_id="user-1"):
+        return h._issue_or_extend_license(user_id, plan_id, app_id)
+
+    @staticmethod
+    def claims(token):
+        import base64
+        body = token.split(".")[1]
+        return json.loads(base64.urlsafe_b64decode(body + "=" * (-len(body) % 4)))
+
+    def test_a_purchase_in_one_app_does_not_extend_the_other(self):
+        _, first_end = self.issue(h.DEFAULT_APP_ID)
+        _, other_end = self.issue(self.SHUYIN)
+        # Both start from now, neither stacks onto the other.
+        self.assertAlmostEqual(first_end, other_end, delta=5)
+
+        # A renewal in the *same* app does stack, as it always has.
+        _, renewed = self.issue(h.DEFAULT_APP_ID)
+        self.assertGreater(renewed, first_end)
+        # And it left the sibling's expiry exactly where it was.
+        self.assertEqual(
+            self.licenses.items[("user-1", self.SHUYIN)]["expiresAt"], other_end,
+        )
+
+    def test_the_issued_token_names_its_app(self):
+        token, _ = self.issue(self.SHUYIN)
+        self.assertEqual(self.claims(token)["appId"], self.SHUYIN)
+
+    def test_verify_refuses_a_key_issued_for_another_app(self):
+        token, _ = self.issue(self.SHUYIN)
+        key = self.licenses.items[("user-1", self.SHUYIN)]["licenseKey"]
+
+        resp = h.handler({"body": json.dumps({"licenseKey": key, "appId": h.DEFAULT_APP_ID})}, None)
+
+        self.assertEqual(resp["statusCode"], 403)
+        body = json.loads(resp["body"])
+        self.assertFalse(body["valid"])
+        self.assertEqual(body["code"], "app_id_mismatch")
+        self.assertNotIn("token", body)
+        # Every shape the clients recognise a mismatch by: the code, the
+        # owning appId, and "appId" in the message. A refusal one of them
+        # cannot spot reads as "try again" for something retrying will never
+        # fix — see isAppMismatch() in the Electron clients.
+        self.assertEqual(body["appId"], self.SHUYIN)
+        self.assertIn("appId", body["error"])
+
+    def test_verify_accepts_the_key_in_the_app_it_was_issued_for(self):
+        _, expires_at = self.issue(self.SHUYIN)
+        key = self.licenses.items[("user-1", self.SHUYIN)]["licenseKey"]
+
+        resp = h.handler({"body": json.dumps({"licenseKey": key, "appId": self.SHUYIN})}, None)
+
+        self.assertEqual(resp["statusCode"], 200)
+        body = json.loads(resp["body"])
+        self.assertTrue(body["valid"])
+        self.assertEqual(body["appId"], self.SHUYIN)
+        # Re-verifying returns the expiry the purchase bought — it must not
+        # quietly push it out by EXPIRY_DAYS every time the client refreshes.
+        self.assertEqual(self.claims(body["token"])["expiresAt"], expires_at)
+
+    def test_a_key_this_service_never_issued_still_verifies_as_before(self):
+        # Legacy Stripe-metadata keys and every `custom`-provider key have no
+        # row, so they are unknown rather than foreign.
+        resp = h.handler({"body": json.dumps({"licenseKey": "NOTOURSKEY123", "appId": self.SHUYIN})}, None)
+        body = json.loads(resp["body"])
+        self.assertEqual(resp["statusCode"], 200)
+        self.assertTrue(body["valid"])
+        self.assertEqual(self.claims(body["token"])["appId"], self.SHUYIN)
+
+    def test_a_legacy_licence_row_belongs_to_the_default_app_only(self):
+        now = int(time.time())
+        h._legacy_licenses_table = lambda: FakeLegacyTable("userId", {
+            "user-1": {
+                "userId": "user-1", "token": "t", "planId": "monthly",
+                "licenseKey": "LEGACYKEY123", "expiresAt": now + 100 * DAY, "updatedAt": now,
+            },
+        })
+        self.assertIsNotNone(h._get_license_row("user-1", h.DEFAULT_APP_ID))
+        self.assertIsNone(h._get_license_row("user-1", self.SHUYIN))
+
+    def test_a_settled_order_issues_for_the_app_it_was_bought_in(self):
+        orig = h._mark_order_paid
+        self.addCleanup(lambda: setattr(h, "_mark_order_paid", orig))
+        h._mark_order_paid = lambda order_id, txn: {"orderId": order_id, "status": "paid"}
+
+        h._settle_paid_order(
+            {"orderId": "o1", "userId": "user-1", "planId": "monthly",
+             "appId": self.SHUYIN, "status": "pending"},
+            "txn-1",
+        )
+        self.assertIn(("user-1", self.SHUYIN), self.licenses.items)
+        self.assertNotIn(("user-1", h.DEFAULT_APP_ID), self.licenses.items)
+
+    def test_an_order_written_before_this_ticket_settles_for_the_default_app(self):
+        orig = h._mark_order_paid
+        self.addCleanup(lambda: setattr(h, "_mark_order_paid", orig))
+        h._mark_order_paid = lambda order_id, txn: {"orderId": order_id, "status": "paid"}
+
+        h._settle_paid_order(
+            {"orderId": "o2", "userId": "user-2", "planId": "monthly", "status": "pending"},
+            "txn-2",
+        )
+        self.assertIn(("user-2", h.DEFAULT_APP_ID), self.licenses.items)
 
 
 if __name__ == "__main__":
