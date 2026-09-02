@@ -159,7 +159,17 @@ Stack 名默认 `ruanjian-license`，区域 `us-east-1`，AWS 账号 `6416289811
 | 应用 | `appId` |
 |---|---|
 | SootheVoice（本仓库） | `smoothvoice` |
-| 舒音水印去除 | 该应用自身的 appId |
+| 舒音水印去除 | `shuyin` |
+
+舒音一度也发 `smoothvoice`——理由是它在表里的历史记录没有 appId、backfill 会把它们
+盖成这个值、改名会 strand 掉它的付费用户。这个理由不成立：它的 License 代码
+2026-08-31 才进仓库，晚于 1.1.0 发版（2026-08-30），**没有任何已发布的构建调用过本
+服务**，所以它在表里根本没有行。表里的历史行是 SootheVoice 的——这也正是
+`DefaultAppId` 保持 `smoothvoice`、遗留行只按它收编的原因（§5.5）。
+
+两边共用一个 id 期间，`DemosTable` 的 `"<appId>#<deviceId>"` 和 `TrialsV2Table` 的
+`(deviceId, appId)` 在同时装了两个应用的机器上会撞成同一个键——在一个应用领过的
+演示/试用，在另一个应用里显示为已用掉，正是 appId 维度要堵的那个洞。
 
 **服务端支持状态（Ticket 72 起）**：`/demo/*`、`/trial/*`、`/create-order`、
 `/order-status`、`/payment-history` 和默认的 verify 路由**都**按 `appId` 分区。
