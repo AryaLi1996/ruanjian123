@@ -29,7 +29,10 @@ export type LicenseStatus =
 
 export interface LicensePayload {
   userId:     string
-  planId:     'monthly' | 'annual' | 'trial'
+  // 'demo' is deliberately not a plan anyone can buy — no entry in PLANS uses
+  // it — so anything reading a license can tell a demo from a purchase. See
+  // DEMO_PLAN_ID below and activateDemo().
+  planId:     'monthly' | 'annual' | 'trial' | 'demo'
   licenseKey: string
   expiresAt:  number   // Unix epoch seconds
   issuedAt:   number
@@ -183,6 +186,49 @@ export interface PlanInfo {
   currency:          string
 }
 
+/**
+ * The plan id a demo license carries.
+ *
+ * Matches DEMO_PLAN_ID in the service's handler.py, and deliberately matches
+ * no entry in PLANS: it is the one field that tells a demo apart from a
+ * purchase to anything that only checks the signature.
+ */
+export const DEMO_PLAN_ID = 'demo'
+
+/** What the service says about this device's demo, cached so the page can
+ *  answer without a round trip and with no network at all. */
+export interface DemoRecord {
+  appId:        string
+  issuedAt:     number
+  expiresAt:    number
+  durationDays: number
+}
+
+/** The demo, as the renderer reads it. */
+export interface DemoState {
+  used:         boolean
+  durationDays: number
+  /** ISO, or null where no demo has been taken. */
+  issuedAt:     string | null
+  expiresAt:    string | null
+  /** Whether the service was reached for this answer, or it is the cache. */
+  source:       'server' | 'local'
+}
+
+/** Taking a demo. `code` is one of the three below. */
+export interface DemoActivation {
+  success: boolean
+  error?:  string
+  code?:   string
+  demo?:   DemoState
+  state?:  SubscriptionState
+}
+
+/** This device already had its demo for this app. Final — retrying never helps. */
+export const DEMO_ALREADY_USED = 'demo_already_used'
+/** The service could not be reached. Nothing granted, nothing spent, worth retrying. */
+export const DEMO_UNAVAILABLE  = 'demo_unavailable'
+
 // ── Token helpers ─────────────────────────────────────────────────────────────
 
 function b64url(s: string): string  { return Buffer.from(s).toString('base64url') }
@@ -277,6 +323,7 @@ export class SubscriptionMonitor extends EventEmitter {
   private get _tsPath():    string { return join(app.getPath('userData'), '.license_ts') }
   private get _anonIdPath(): string { return join(app.getPath('userData'), '.anon_id') }
   private get _trialPath(): string { return join(app.getPath('userData'), 'trial.enc') }
+  private get _demoPath():  string { return join(app.getPath('userData'), 'demo.enc') }
 
   // ── Anonymous user ID ───────────────────────────────────────────────────────
   // No account system: payments/licenses are tied to a random ID generated on
@@ -406,44 +453,36 @@ export class SubscriptionMonitor extends EventEmitter {
     // finish on its own, instead of leaving people to be locked out by the
     // build that eventually drops the old secret. Deliberately not awaited
     // and silent on failure: the token in hand already works, so this is an
-    // optimisation, and the next launch tries again. The demo key never goes
-    // to the server — same reason refresh() skips it.
-    if (verifiedWithPreviousSecret(token) && payload.licenseKey !== LICENSE_CONFIG.demoKey) {
+    // optimisation, and the next launch tries again. A demo license is
+    // skipped for the same reason refresh() skips it: the verify route only
+    // knows about purchases.
+    if (verifiedWithPreviousSecret(token) && payload.planId !== DEMO_PLAN_ID) {
       void this.refresh().catch(() => {})
     }
   }
 
+  /**
+   * Activate from a license key the shop issued.
+   *
+   * There is no longer a key that shortcuts this. Until Ticket 47's successor,
+   * one hardcoded 57-character string in license-config.ts minted a 30-day
+   * token locally, with no service call and nothing counting the uses — a
+   * credential that shipped inside every installer. Demos come from
+   * activateDemo() and the service now; a key typed here is a key the shop
+   * issued, and it is verified as one.
+   */
   async activate(licenseKey: string): Promise<ActivationResult> {
-    // Case-insensitive: the Settings key-entry field upper-cases whatever the
-    // user types (see SubscriptionView.tsx), and the demo key documented in
-    // DEMO_LICENSE.md contains mixed-case characters — compare, then store,
-    // the canonical demoKey so the resulting token matches it exactly (see
-    // the `refresh()` demo check below, which relies on that).
-    const isDemo = licenseKey.trim().toUpperCase() === LICENSE_CONFIG.demoKey.toUpperCase()
-
     let token: string
-    if (isDemo) {
-      // The explicit demo key is local-only so packaged builds can be tested offline.
-      token = createToken({
-        userId:     'demo_user',
-        planId:     'monthly',
-        licenseKey: LICENSE_CONFIG.demoKey,
-        expiresAt:  Math.floor(Date.now() / 1000) + 30 * 86400,
-        issuedAt:   Math.floor(Date.now() / 1000),
-        features:   ['training', 'synthesis', 'separation', 'cover'],
-      })
-    } else {
-      try {
-        token = await this._verifyWithServer(licenseKey)
-      } catch (err) {
-        if (err instanceof AppIdMismatchError) {
-          // Nothing to clear (activation never stored a token) — just report
-          // it as the distinct failure it is so the UI can say "that key is
-          // for another app" rather than "verification failed".
-          return { success: false, error: err.message, appIdMismatch: true }
-        }
-        return { success: false, error: String(err) }
+    try {
+      token = await this._verifyWithServer(licenseKey)
+    } catch (err) {
+      if (err instanceof AppIdMismatchError) {
+        // Nothing to clear (activation never stored a token) — just report
+        // it as the distinct failure it is so the UI can say "that key is
+        // for another app" rather than "verification failed".
+        return { success: false, error: err.message, appIdMismatch: true }
       }
+      return { success: false, error: String(err) }
     }
 
     const payload = verifyToken(token)
@@ -474,6 +513,177 @@ export class SubscriptionMonitor extends EventEmitter {
     await this._syncTrial()
   }
 
+  // ── The demo license ────────────────────────────────────────────────────────
+  /**
+   * The cached demo record, or null. Anything unreadable reads as "no record",
+   * which is now a cheap failure rather than a generous one: the worst it does
+   * is offer a button the service then refuses, where the old local-only
+   * scheme would have handed out another demo.
+   */
+  private async _loadDemoRecord(): Promise<DemoRecord | null> {
+    if (!existsSync(this._demoPath)) return null
+    try {
+      const plain = await decryptModelBytes(await fs.readFile(this._demoPath))
+      const rec   = JSON.parse(plain.toString('utf8')) as Partial<DemoRecord>
+      if (typeof rec.issuedAt !== 'number' || typeof rec.expiresAt !== 'number') return null
+      return {
+        appId:        typeof rec.appId === 'string' && rec.appId ? rec.appId : LICENSE_CONFIG.appId,
+        issuedAt:     rec.issuedAt,
+        expiresAt:    rec.expiresAt,
+        durationDays: typeof rec.durationDays === 'number' && rec.durationDays > 0
+          ? rec.durationDays
+          : LICENSE_CONFIG.demoDurationDays,
+      }
+    } catch { return null }
+  }
+
+  private async _saveDemoRecord(rec: DemoRecord): Promise<void> {
+    try {
+      const enc = await encryptModelBytes(Buffer.from(JSON.stringify(rec), 'utf8'))
+      await fs.writeFile(this._demoPath, enc, { mode: 0o600 })
+    } catch {
+      // Only the cache is lost. The license was still issued, and the service
+      // still knows this device has had its demo.
+    }
+  }
+
+  /** The record to cache from a demo/activate or demo/status reply. The dates
+   *  are the service's, not this clock's: the window is the one the token was
+   *  signed for, so a machine whose clock is off is still told the truth. */
+  private _demoRecordFrom(reply: Record<string, unknown>): DemoRecord | null {
+    const issuedAt  = reply['issuedAt']
+    const expiresAt = reply['expiresAt']
+    if (typeof issuedAt !== 'number' || typeof expiresAt !== 'number') return null
+    const days = reply['demoDurationDays']
+    return {
+      appId: typeof reply['appId'] === 'string' && reply['appId'] ? reply['appId'] as string : LICENSE_CONFIG.appId,
+      issuedAt,
+      expiresAt,
+      durationDays: typeof days === 'number' && days > 0 ? days : LICENSE_CONFIG.demoDurationDays,
+    }
+  }
+
+  private _demoStateFrom(rec: DemoRecord | null, source: 'server' | 'local'): DemoState {
+    // A record from another app is not this app's demo — the same reason the
+    // service keys DemosTable by (appId, deviceId).
+    const mine = rec !== null && rec.appId === LICENSE_CONFIG.appId
+    return {
+      used:         mine,
+      durationDays: mine ? rec.durationDays : LICENSE_CONFIG.demoDurationDays,
+      issuedAt:     mine ? new Date(rec.issuedAt * 1000).toISOString() : null,
+      expiresAt:    mine ? new Date(rec.expiresAt * 1000).toISOString() : null,
+      source,
+    }
+  }
+
+  /**
+   * Whether this device has had its demo, having asked the service.
+   *
+   * The service holds the record, so its answer wins and is cached — which is
+   * what closes the hole the old scheme left: a device that deletes demo.enc
+   * is told again, by the service, that its demo is spent. An unreachable
+   * service falls back to the cache rather than failing, because "we cannot
+   * tell you right now" is not "you may have another one".
+   */
+  async demoStatus(): Promise<DemoState> {
+    const deviceId = await getDeviceId()
+    try {
+      const reply = await this._request<Record<string, unknown>>(
+        'POST', 'demo/status', { deviceId },
+      )
+      const rec = this._demoRecordFrom(reply)
+      if (rec) {
+        await this._saveDemoRecord(rec)
+        return this._demoStateFrom(rec, 'server')
+      }
+      if (reply['used'] === false) {
+        // The service has no record, so there is a demo to be had whatever
+        // the local file says. The file is left alone — it is only a cache,
+        // and the activation itself is what the service decides.
+        const days = reply['demoDurationDays']
+        return {
+          used: false,
+          durationDays: typeof days === 'number' && days > 0 ? days : LICENSE_CONFIG.demoDurationDays,
+          issuedAt: null, expiresAt: null, source: 'server',
+        }
+      }
+      return this._demoStateFrom(await this._loadDemoRecord(), 'server')
+    } catch {
+      return this._demoStateFrom(await this._loadDemoRecord(), 'local')
+    }
+  }
+
+  /**
+   * Take this device's demo license: a month of everything, once per app.
+   *
+   * The service issues it. There is no code to type — the credential is "this
+   * device has not taken one for this app", checked against a record this
+   * machine cannot reach, where the old scheme was a string shipped in every
+   * installer and nothing counting the uses at all. Asking again inside the
+   * window returns the *same* window re-signed, so a reinstall recovers
+   * without buying more time; asking after it has run out is
+   * DEMO_ALREADY_USED, and final.
+   *
+   * An unreachable service is DEMO_UNAVAILABLE and nothing else: there is
+   * deliberately no offline path. Falling back to a locally signed license
+   * would put back exactly the thing this replaced.
+   */
+  async activateDemo(): Promise<DemoActivation> {
+    const deviceId = await getDeviceId()
+
+    let reply: Record<string, unknown>
+    try {
+      reply = await this._request<Record<string, unknown>>('POST', 'demo/activate', { deviceId })
+    } catch (err) {
+      return {
+        success: false,
+        code: DEMO_UNAVAILABLE,
+        error: `The license service could not be reached: ${String(err)}`,
+      }
+    }
+
+    const alreadyUsed = reply['code'] === DEMO_ALREADY_USED
+      || (typeof reply['error'] === 'string' && (reply['error'] as string).includes('already used'))
+    if (alreadyUsed) {
+      // Cache what it told us, so the entry is not offered again on the next
+      // launch — including one with no network.
+      const rec = this._demoRecordFrom(reply)
+      if (rec) await this._saveDemoRecord(rec)
+      return {
+        success: false,
+        code: DEMO_ALREADY_USED,
+        error: 'this device has already used its demo',
+        demo: this._demoStateFrom(rec ?? await this._loadDemoRecord(), 'server'),
+      }
+    }
+
+    const token = reply['token']
+    if (reply['success'] !== true || typeof token !== 'string') {
+      const error = reply['error']
+      return { success: false, error: typeof error === 'string' ? error : 'the demo was not issued' }
+    }
+
+    const payload = verifyToken(token)
+    if (!payload) return { success: false, error: 'The demo token did not verify' }
+    if (!tokenAppIdMatches(payload.appId, LICENSE_CONFIG.appId)) {
+      return { success: false, error: 'The demo token was issued for another app' }
+    }
+
+    // Adopted before the record is written: marking a demo as taken and then
+    // failing to apply it is the one ordering that leaves someone with
+    // nothing. Re-asking returns the same token either way.
+    await this._saveToken(token)
+    const now = Math.floor(Date.now() / 1000)
+    await this._saveMaxSeenTs(now)
+    const state = this._buildState(this._resolveStatus(payload, now), payload, now)
+    this._setState(state)
+    this._startRefreshTimer()
+
+    const rec = this._demoRecordFrom(reply)
+    if (rec) await this._saveDemoRecord(rec)
+    return { success: true, state, demo: this._demoStateFrom(rec, 'server') }
+  }
+
   async deactivate(): Promise<void> {
     await this._deleteToken()
     this._stopRefreshTimer()
@@ -490,7 +700,12 @@ export class SubscriptionMonitor extends EventEmitter {
     if (!token) return
     const payload = verifyToken(token)
     if (!payload) return
-    if (payload.licenseKey === LICENSE_CONFIG.demoKey) return
+    // A demo license is the service's, but it is not a purchase, and the
+    // verify route only knows about purchases: exchanging a demo key there
+    // would come back "not accepted" and read as a license that had been
+    // revoked. demo/activate is what reissues one, and it returns the same
+    // window rather than a fresher one — so there is nothing here to pick up.
+    if (payload.planId === DEMO_PLAN_ID) return
     try {
       const fresh = await this._verifyWithServer(payload.licenseKey)
       await this._saveToken(fresh)

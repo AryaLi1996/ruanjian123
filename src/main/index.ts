@@ -882,12 +882,24 @@ ipcMain.handle('license:get-state',   ()           => monitor.getState())
 ipcMain.handle('license:activate',    (_, key: string) => monitor.activate(key))
 ipcMain.handle('license:deactivate',  ()           => monitor.deactivate())
 ipcMain.handle('license:refresh',     ()           => monitor.refresh())
+// The demo license (Ticket 47's successor): issued by the service, one per
+// app per device. No code to pass — the credential is "this device has not
+// taken one for this app", which the service checks against a record this
+// machine cannot reach.
+ipcMain.handle('license:activate-demo', () => monitor.activateDemo())
+// The service's answer, not just the cached one — a device that deleted its
+// local record is told again here that its demo is spent.
+ipcMain.handle('license:demo-status',   () => monitor.demoStatus())
+
 ipcMain.handle('license:get-config',  () => ({
   checkoutUrl:    LICENSE_CONFIG.checkoutUrl,
   plans:          LICENSE_CONFIG.plans,
   paymentMethods: LICENSE_CONFIG.paymentMethods,
   pollIntervalMs: LICENSE_CONFIG.orderPollIntervalMs,
   pollTimeoutMs:  LICENSE_CONFIG.orderPollTimeoutMs,
+  // What this build falls back to before the service has been asked; the
+  // service reports its own and that answer is preferred.
+  demoDurationDays: LICENSE_CONFIG.demoDurationDays,
 }))
 
 // Ticket 34: server-computed plan pricing — see getPlans() doc.

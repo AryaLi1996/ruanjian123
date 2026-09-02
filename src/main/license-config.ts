@@ -156,14 +156,19 @@ export const LICENSE_CONFIG = {
   provider: (process.env['LICENSE_PROVIDER'] ?? 'custom') as
     'stripe' | 'lemonsqueezy' | 'paddle' | 'custom',
 
-  // ── Demo / CI key (Ticket 47) ────────────────────────────────────────────────
-  // Activating this key creates a local 30-day token without hitting the
-  // server — for automated tests and internal support use only. Deliberately
-  // long/random (not the old guessable "SOOTHEVOICE-DEMO-2026") and never
-  // surfaced in the UI — see DEMO_LICENSE.md at the repo root for the value,
-  // usage notes, and the warning not to share it. Override via the
-  // DEMO_LICENSE_KEY env var if it ever needs rotating without a code change.
-  demoKey: process.env['DEMO_LICENSE_KEY'] ?? 'SOOTHEVOICE-DEMO-8f3aQ9c#2b7e1D4f6a9B2c3d4e5F6a7b8C9d0e1f',
+  // ── Demo license ─────────────────────────────────────────────────────────────
+  // There is no demo *key* any more. Until this change, typing a 57-character
+  // string that shipped inside this file minted a local 30-day token with
+  // every paid feature, and "once" was not enforced at all. Both halves of
+  // that were unenforceable: the string went out with every installer, so
+  // knowing it was never a credential, and nothing counted the uses.
+  //
+  // The service issues it now — POST demo/activate, one per (appId, deviceId),
+  // holding the record itself. See activateDemo() in subscription-monitor.ts
+  // and docs/LICENSE_INFRASTRUCTURE.md §5.4. The value below is only what this
+  // build falls back to for display before the service has been asked; the
+  // service reports its own demoDurationDays and that answer is preferred.
+  demoDurationDays: 30,
 
   // ── Plans & payment methods (Ticket 28) ─────────────────────────────────────
   plans:          PLANS,
