@@ -12,6 +12,26 @@
 // active can have its license tokens forged offline; see the warning below.
 const DEFAULT_SIGNING_SECRET = 'ruanjian-dev-signing-secret-v1-change-in-production'
 
+// ── Rotating the signing secret ───────────────────────────────────────────────
+// The secret this build *also* accepts a token from, and never signs with.
+//
+// Rotating an HMAC secret is not like rotating a password: both ends hold the
+// same string, so the moment the service starts signing with a new one, every
+// token already in a customer's hands stops verifying. To this app that reads
+// as a license that was revoked — grace period, then lockout — for people
+// whose subscription is perfectly current, and the only way out is an update
+// they have not installed yet.
+//
+// So a rotation runs in two steps. First ship a build that accepts both, and
+// wait for it to reach people. Then let the service switch which one it signs
+// with: an old token still verifies here, and the next refresh exchanges it
+// for one signed with the new secret. Once those have all been swapped or
+// expired, a later build drops this.
+//
+// Empty means "one secret", which is the normal state — this is set only
+// while a rotation is in flight. See docs/LICENSE_INFRASTRUCTURE.md §4.1.
+const PREVIOUS_SIGNING_SECRET = (process.env['PREVIOUS_LICENSE_SIGNING_SECRET'] ?? '').trim()
+
 // ── Multi-channel payment (Ticket 28) ─────────────────────────────────────────
 // One payment = one order = license extended by that plan's duration.
 // This is independent of Stripe's own "subscription" object — the source of
@@ -122,6 +142,9 @@ export const LICENSE_CONFIG = {
   // public key embedded here.  For HMAC (this template): rotate via app update.
   signingSecret: process.env['LICENSE_SIGNING_SECRET'] ?? DEFAULT_SIGNING_SECRET,
 
+  // Also accepted when verifying, never signed with — see the note above.
+  previousSigningSecret: PREVIOUS_SIGNING_SECRET,
+
   // ── Payment checkout URL (legacy: static Stripe Payment Link / "Manage") ───
   checkoutUrl: process.env['CHECKOUT_URL'] ?? '',
 
@@ -160,3 +183,13 @@ export const LICENSE_CONFIG = {
 
 /** True when no LICENSE_SIGNING_SECRET override was supplied — see the warning this drives in index.ts. */
 export const usingDefaultSigningSecret = LICENSE_CONFIG.signingSecret === DEFAULT_SIGNING_SECRET
+
+/**
+ * True while a signing-secret rotation is in flight — see the note above.
+ *
+ * Worth saying in both directions: accepting the outgoing secret is what stops
+ * a rotation logging every current subscriber out, and it also means a token
+ * signed with a leaked old secret still verifies here. It is a window to get
+ * through, not a state to sit in, which is why index.ts warns about it.
+ */
+export const rotatingSigningSecret = LICENSE_CONFIG.previousSigningSecret !== ''

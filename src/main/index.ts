@@ -11,7 +11,7 @@ import {
 import { encryptModelFile, decryptModelFile } from './model-crypto'
 import { setupAutoUpdater, checkForUpdates, getLastUpdateResult, downloadUpdate, quitAndInstall } from './auto-updater'
 import { SubscriptionMonitor } from './subscription-monitor'
-import { LICENSE_CONFIG, usingDefaultSigningSecret } from './license-config'
+import { LICENSE_CONFIG, usingDefaultSigningSecret, rotatingSigningSecret } from './license-config'
 import { loadModels, saveModels, type PersistedModel } from './model-registry'
 import { loadLyricsCache, saveLyricsCache, type LyricsCache } from './lyrics-cache'
 import { searchLibrary, fetchLibraryAudio, listCachedLibraryIds, type LibrarySong } from './library'
@@ -392,6 +392,18 @@ if (app.isPackaged && usingDefaultSigningSecret) {
     'build is using the public template default from license-config.ts. ' +
     'License tokens can be forged offline. Set LICENSE_SIGNING_SECRET (and ' +
     'redeploy the serverless function with the same value) before shipping.',
+  )
+}
+
+// Accepting the outgoing secret is what stops a rotation logging every
+// current subscriber out — and it also means a token signed with a leaked
+// old secret still verifies here. A window to get through, not a state to
+// sit in, so say so on every launch until the next build closes it.
+if (rotatingSigningSecret) {
+  log.warn(
+    '[license] PREVIOUS_LICENSE_SIGNING_SECRET is set — this build also ' +
+    'accepts tokens signed with the outgoing secret, and refreshes them onto ' +
+    'the current one. Unset it in the build after the rotation has settled.',
   )
 }
 

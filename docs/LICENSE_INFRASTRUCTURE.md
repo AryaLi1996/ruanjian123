@@ -222,6 +222,43 @@ base64url(header) . base64url(payload) . hex(HMAC-SHA256)
 
 因为一旦生产仍用它，任何人都能离线伪造有效 token。
 
+### 4.1 轮换签名密钥
+
+轮换 HMAC 密钥和轮换密码不是一回事：**两端持有同一个字符串**，所以服务端一旦改用
+新密钥签发，**每一个已经发到用户手上的 token 都会立刻验不过**。客户端把这读作
+「授权被吊销」——进入 3 天宽限期，然后锁功能——而这些人的订阅明明还好好的，唯一的
+出路是一个他们还没装的更新。
+
+所以必须分两步，而且**第一步要先铺到用户手上**，第二步才能做：
+
+| 步骤 | 做什么 |
+|---|---|
+| 1. 发一个两把都收的版本 | 构建环境里设 `PREVIOUS_LICENSE_SIGNING_SECRET=<当前密钥>`，`LICENSE_SIGNING_SECRET` 不动。此刻对任何人都毫无变化。 |
+| 2. 等 | 等到装机量里足够多的人升上来。没有办法加速，而**抢跑正是这整件事要避免的**。 |
+| 3. 服务端切换 | `sam deploy --parameter-overrides LicenseSigningSecret=<新密钥>`。新 token 用新密钥签，旧 token 在客户端仍然验得过。 |
+| 4. 等它自己收敛 | 每个客户端在下次启动时自行换掉手上的 token——见下。 |
+| 5. 发一个去掉旧密钥的版本 | 不再设 `PREVIOUS_LICENSE_SIGNING_SECRET`，旧密钥彻底停止被接受。 |
+
+`verifyToken()` **先试当前密钥、失败才试上一把**，所以额外开销只落在轮换前签发的
+那批 token 上，一次 HMAC。签发（`createToken`）**永远只用当前密钥**——这个应用不
+会用旧密钥铸造任何 token。
+
+**第 4 步自己会完成。** 启动时如果本地 token 只在上一把密钥下验得过
+（`verifiedWithPreviousSecret()`，在 `initialize()` 里读），就立刻触发一次
+`refresh()` 把 license key 换成用新密钥签的 token。刻意不 await、失败也不报错：
+手上的 token 本来就还能用，这只是一个优化，下次启动会再试。**没有这一步的话**，
+客户端会一直用着旧 token 直到过期，然后被第 5 步的版本锁在门外。
+
+**同时接受两把密钥的代价。** 旧密钥签的 token 仍然验得过，所以如果轮换的原因正是
+**旧密钥泄露了**，那么在整个窗口期内泄露仍然可被利用。这就是这笔交易：拿「泄露的
+密钥还能再用一阵子」换「不把每一个付费用户都登出」。**这是一个要穿过去的窗口，不是
+一个可以一直待着的状态**——`rotatingSigningSecret` 会在每次启动时告警，正是为此。
+
+两个客户端都实现了这套：本仓库的 `src/main/`，以及舒音的 `electron/`
+（`PREVIOUS_LICENSE_SIGNING_SECRET`，另接受 `VITE_` 前缀的同名变量）。
+Lambda 本身**不需要改**——它只签发、从不校验 license token
+（`_verify_stripe_signature` 和抖音回调用的是各自支付渠道的密钥，与此无关）。
+
 ---
 
 ## 5. 三条授权发放路径
@@ -561,6 +598,7 @@ Function URL 是 `AuthType: NONE`，即完全公开，所有输入都是攻击�
 | 环境变量 | SAM 参数 | 必需 | 说明 |
 |---|---|---|---|
 | `LICENSE_SIGNING_SECRET` | `LicenseSigningSecret` | ✅ | HMAC 密钥，≥32 字符，须与客户端一致 |
+| `PREVIOUS_LICENSE_SIGNING_SECRET` | — | | **仅客户端**。轮换期间额外接受的上一把密钥，从不用于签发——见 §4.1。Lambda 不读它 |
 | `MOCK_MODE` | `MockMode` | | `true` 时任何 key 都通过，仅 CI/演示 |
 | `PAYMENT_PROVIDER` | `PaymentProvider` | | `custom`(默认)/`stripe`/`lemonsqueezy`/`paddle` |
 | `EXPIRY_DAYS` | `ExpiryDays` | | 旧 key 流程签发的 token 有效期，默认 30 |

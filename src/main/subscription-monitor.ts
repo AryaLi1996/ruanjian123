@@ -190,8 +190,8 @@ function fromb64(s: string): string { return Buffer.from(s, 'base64url').toStrin
 
 const HEADER = b64url(JSON.stringify({ alg: 'HS256', typ: 'LICENSE' }))
 
-function _sign(data: string): string {
-  return createHmac('sha256', LICENSE_CONFIG.signingSecret).update(data).digest('hex')
+function _sign(data: string, secret: string = LICENSE_CONFIG.signingSecret): string {
+  return createHmac('sha256', secret).update(data).digest('hex')
 }
 
 export function createToken(payload: LicensePayload): string {
@@ -199,22 +199,61 @@ export function createToken(payload: LicensePayload): string {
   return `${HEADER}.${body}.${_sign(`${HEADER}.${body}`)}`
 }
 
-export function verifyToken(token: string): LicensePayload | null {
+/**
+ * Every secret a token may have been signed with, most recent first.
+ *
+ * Order matters only for speed: the current secret verifies all but the tokens
+ * issued before a rotation, so trying it first means the fallback costs one
+ * extra HMAC on exactly those. Signing always uses the current secret alone —
+ * this app never mints a token with the outgoing one.
+ */
+function acceptedSecrets(): string[] {
+  return [LICENSE_CONFIG.signingSecret, LICENSE_CONFIG.previousSigningSecret].filter(Boolean)
+}
+
+function _signatureMatches(data: string, sig: string, secret: string): boolean {
+  try {
+    // Timing-safe comparison prevents timing attacks
+    return timingSafeEqual(Buffer.from(sig, 'hex'), Buffer.from(_sign(data, secret), 'hex'))
+  } catch {
+    // Non-hex, or a length mismatch timingSafeEqual refuses to compare.
+    return false
+  }
+}
+
+export function verifyToken(token: string, secret?: string): LicensePayload | null {
   const parts = token.split('.')
   if (parts.length !== 3) return null
   const [hdr, body, sig] = parts
-  const expected = _sign(`${hdr}.${body}`)
-  try {
-    // Timing-safe comparison prevents timing attacks
-    if (!timingSafeEqual(Buffer.from(sig, 'hex'), Buffer.from(expected, 'hex'))) return null
-  } catch {
-    return null
-  }
+
+  const secrets = secret ? [secret] : acceptedSecrets()
+  if (!secrets.some((s) => _signatureMatches(`${hdr}.${body}`, sig, s))) return null
+
   try {
     return JSON.parse(fromb64(body)) as LicensePayload
   } catch {
     return null
   }
+}
+
+/**
+ * Whether this token only verifies under the *previous* secret.
+ *
+ * A license that is genuine but signed with the outgoing secret: still
+ * honoured, and worth re-fetching, because the window in which the old secret
+ * is accepted is meant to close. initialize() uses it to swap the token for
+ * one signed with the current secret rather than waiting for the license to
+ * lapse — otherwise the later build that drops the old secret locks this
+ * person out.
+ *
+ * False when no rotation is in flight, and false for a forgery: a token that
+ * verifies under neither secret is not a license at all.
+ */
+export function verifiedWithPreviousSecret(token: string): boolean {
+  const previous = LICENSE_CONFIG.previousSigningSecret
+  if (!previous) return false
+  return verifyToken(token, LICENSE_CONFIG.signingSecret) === null
+    && verifyToken(token, previous) !== null
 }
 
 // ── SubscriptionMonitor ───────────────────────────────────────────────────────
@@ -360,6 +399,18 @@ export class SubscriptionMonitor extends EventEmitter {
     const status = this._resolveStatus(payload, now)
     this._setState(this._buildState(status, payload, now))
     this._startRefreshTimer()
+
+    // A license signed with the outgoing secret is honoured above, but the
+    // window in which that secret is accepted is meant to close. Swapping it
+    // now for one signed with the current secret is what makes a rotation
+    // finish on its own, instead of leaving people to be locked out by the
+    // build that eventually drops the old secret. Deliberately not awaited
+    // and silent on failure: the token in hand already works, so this is an
+    // optimisation, and the next launch tries again. The demo key never goes
+    // to the server — same reason refresh() skips it.
+    if (verifiedWithPreviousSecret(token) && payload.licenseKey !== LICENSE_CONFIG.demoKey) {
+      void this.refresh().catch(() => {})
+    }
   }
 
   async activate(licenseKey: string): Promise<ActivationResult> {
