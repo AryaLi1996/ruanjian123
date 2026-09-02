@@ -512,8 +512,18 @@ payment:order-status / payment:history /
 payment:open-embedded / payment:close-embedded / payment:window-closed
 ```
 
-演示 key（`DEMO_LICENSE.md`，Ticket 47）：激活时本地直接生成 30 天 token，
-不走网络；`refresh()` 遇到该 key 会直接 return，不会去服务端撞墙。
+```
+license:activate-demo / license:demo-status   （演示许可证，见 §5.4）
+```
+
+**演示许可证不再有「密钥」。** 在此之前，`license-config.ts` 里硬编码着一串
+57 字符（记录在已删除的 `DEMO_LICENSE.md` 里），输进激活框就本地生成一个 30 天
+token，不走网络，**而且完全没有次数限制**。这两半都不成立：那串字符随每个安装包
+发出去，所以「知道它」从来不是凭据；而次数根本没人数。
+
+现在由服务端签发（`POST demo/activate`，每个 `(appId, deviceId)` 一次，记录在
+`DemosTable`），客户端只保留一份加密缓存。`refresh()` 仍然跳过演示 token，但判据
+从「等于那串 key」换成了 `planId === 'demo'`——verify 路由只认购买。
 
 ---
 
@@ -622,7 +632,8 @@ Function URL 是 `AuthType: NONE`，即完全公开，所有输入都是攻击�
 | `DISABLED_PAYMENT_METHODS` | — | | 逗号分隔，强制隐藏某些支付方式 |
 
 客户端侧：`LICENSE_URL`（main）/ `VITE_LICENSE_URL`（renderer）、
-`LICENSE_SIGNING_SECRET`、`CHECKOUT_URL`、`LICENSE_PROVIDER`、`DEMO_LICENSE_KEY`。
+`LICENSE_SIGNING_SECRET`、`PREVIOUS_LICENSE_SIGNING_SECRET`（见 §4.1）、
+`CHECKOUT_URL`、`LICENSE_PROVIDER`。`DEMO_LICENSE_KEY` 已随硬编码演示密钥一并移除。
 
 ---
 

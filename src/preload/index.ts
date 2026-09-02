@@ -160,6 +160,10 @@ contextBridge.exposeInMainWorld('engine', {
   deactivateLicense:  ():                    Promise<void>    => ipcRenderer.invoke('license:deactivate'),
   refreshLicense:     ():                    Promise<void>    => ipcRenderer.invoke('license:refresh'),
   getLicenseConfig:   ():                    Promise<unknown> => ipcRenderer.invoke('license:get-config'),
+  // The demo license: a month of everything, once per device, issued by the
+  // service. No code to pass — see subscription-monitor.ts activateDemo().
+  activateDemo:       ():                    Promise<unknown> => ipcRenderer.invoke('license:activate-demo'),
+  demoStatus:         ():                    Promise<unknown> => ipcRenderer.invoke('license:demo-status'),
   onLicenseStateChange: (cb: (state: unknown) => void): (() => void) => {
     const h = (_: Electron.IpcRendererEvent, s: unknown) => cb(s)
     ipcRenderer.on('license:state-changed', h)
