@@ -16,7 +16,7 @@
 
 ## 1. 总体架构
 
-整个授权体系是 **单函数 + 单 Function URL + 三张 DynamoDB 表** 的
+整个授权体系是 **单函数 + 单 Function URL + 四张 DynamoDB 表** 的
 serverless 架构，没有 API Gateway、没有服务器、没有账号系统。
 
 ```
@@ -41,12 +41,12 @@ serverless 架构，没有 API Gateway、没有服务器、没有账号系统。
               │  单一 handler.py，按 path 自行路由（§3）        │
               └───┬───────────────┬───────────────┬───────────┘
                   │               │               │
-        ┌─────────▼───┐   ┌───────▼──────┐  ┌─────▼────────┐
-        │ OrdersTable │   │LicensesTable │  │ TrialsTable  │
-        │ PK orderId  │   │ PK userId    │  │ PK deviceId  │
-        │ GSI userId- │   │              │  │              │
-        │  createdAt  │   │              │  │              │
-        └─────────────┘   └──────────────┘  └──────────────┘
+        ┌─────────▼───┐ ┌─────▼────────┐ ┌──▼─────────┐ ┌▼───────────┐
+        │ OrdersTable │ │LicensesTable │ │ TrialsTable│ │ DemosTable │
+        │ PK orderId  │ │ PK userId    │ │PK deviceId │ │ PK demoKey │
+        │ GSI userId- │ │              │ │            │ │ appId#dev  │
+        │  createdAt  │ │              │ │            │ │            │
+        └─────────────┘ └──────────────┘ └────────────┘ └────────────┘
                   ▲               ▲
                   │ webhook       │ SES 发信
      ┌────────────┴───────┐  ┌────┴──────────┐
@@ -101,13 +101,14 @@ Stack 名默认 `ruanjian-license`，区域 `us-east-1`，AWS 账号 `6416289811
    资源仅限三张表及 `OrdersTable` 的索引
 4. （无 VPC、无其他权限）
 
-### 2.3 三张 DynamoDB 表
+### 2.3 四张 DynamoDB 表
 
 | 表 | 主键 | 索引 | 存什么 |
 |---|---|---|---|
 | `OrdersTable` | HASH `orderId` (S) | GSI `userId-createdAt-index`（HASH `userId`, RANGE `createdAt`, 投影 ALL） | 支付订单：`orderId, userId, planId, method, status(pending/paid), amount, currency, createdAt, providerOrderId, paidAt, providerTxnId` |
 | `LicensesTable` | HASH `userId` (S) | — | 当前有效授权：`userId, token, planId, licenseKey, expiresAt, updatedAt` |
 | `TrialsTable` | HASH `deviceId` (S) | — | 免费试用：`deviceId, trialStart, trialEnd, createdAt, lastSeen` |
+| `DemosTable` | HASH `demoKey` (S) = `"<appId>#<deviceId>"` | — | 演示许可证：`demoKey, appId, deviceId, planId, issuedAt, expiresAt, createdAt` |
 
 全部 `BillingMode: PAY_PER_REQUEST`。GSI 存在的唯一目的是支撑
 `GET /payment-history` 按用户倒序列出订单。
@@ -140,6 +141,8 @@ Stack 名默认 `ruanjian-license`，区域 `us-east-1`，AWS 账号 `6416289811
 | GET | `/plans` | 返回四档套餐及服务端计算的价格 | — |
 | POST | `/trial/activate` | 幂等创建/读取设备试用记录 | `TRIALS_TABLE` |
 | GET | `/trial/status` | 查询设备试用状态 | `TRIALS_TABLE` |
+| POST | `/demo/activate` | 幂等签发本应用+本设备的演示许可证，返回签名 token | `DEMOS_TABLE` |
+| GET/POST | `/demo/status` | 查询演示许可证状态（不返回 token） | `DEMOS_TABLE` |
 | OPTIONS | 任意 | CORS 预检，返回 204 | — |
 
 所有响应都带统一的 CORS 头
@@ -305,6 +308,41 @@ webhook 且 metadata 无 `orderId` → `_generate_license_key()` 生成
 2. 后端可达但无记录 → 调用 activate 建立（幂等）
 3. 后端不可达 → 用本地记录；首次启动且离线则本地创建
 
+### 5.4 演示许可证（`/demo/activate`）
+
+免费试用给的是"这个应用能用几天"，演示许可证给的是 **`DEMO_DAYS`（默认 30）天
+的完整付费功能**，用于演示、评测和支持人员复现客户环境。
+
+在此之前，演示许可证是**客户端自己用共享 HMAC 密钥签发**的：客户端里硬编码一串
+演示码，校验通过就本地 mint 一个 token，"每设备一次"只靠应用数据目录里的一个
+文件兜底。这有两个无法回避的问题——演示码随安装包一起发出去，而唯一的次数限制
+是用户自己就能删掉的文件。把签发挪到服务端就是为了消掉这两点：
+
+- **没有演示码**。凭据不再是"知道某个字符串"，而是"这台设备在这个应用上还没领
+  过"。因此也没有可以泄露、需要轮换的演示码。
+- **一应用一设备一次**，记录在 `DemosTable`，主键 `"<appId>#<deviceId>"`。
+  分区键带 `appId` 的理由和 §3.1 一样：在 A 应用领过的演示不是 B 应用的演示。
+  `appId` 与 `deviceId` 的字符集都排除了 `#`（`_APP_ID_RE` / `_DEVICE_ID_RE`），
+  所以 `"a#b" + "c"` 不可能和 `"a" + "b#c"` 撞键。
+- **幂等，但不续期**。和 `/trial/activate` 同样的
+  `ConditionExpression="attribute_not_exists(demoKey)"`：第一次调用建记录，
+  之后每次都读回**原来那个窗口**，并按原 `expiresAt`/`issuedAt` 重新签一个
+  token。所以重装、丢 token 都能恢复，但拿不到更多时间。窗口过完之后再调用
+  返回 **409 `demo_already_used`** —— 客户端把它和网络失败区分开来措辞。
+- **token 就是普通的 license token**（§4 的格式，同一把签名密钥），只是
+  `planId` 为 `DEMO_PLAN_ID`（默认 `demo`），刻意不属于 `_PLAN_TIERS` 里任何一
+  档，任何读许可证的地方都能一眼把演示和购买区分开；payload 里带 `appId`。
+- `GET/POST /demo/status` 只回状态，**不回 token** —— 状态查询不该成为
+  重新领取许可证的通道。客户端在画按钮之前先问它，已经领过的设备直接告知，而不
+  是点下去才发现。
+- 响应回传 `demoDurationDays`，理由同 §5.3 的 `trialDurationDays`：避免客户端和
+  服务端各自硬编码天数。
+
+与试用不同，**演示时长的调整不追溯**：token 已经在客户端手里，改短记录也改不短
+已签发的 token，所以这里没有 `_apply_trial_duration_cap` 那样的截断逻辑。
+
+`DEMOS_TABLE` 未配置时两条路由都返回 501，和其他可选能力一致。
+
 ---
 
 ## 6. 客户端存储（Electron `userData` 目录）
@@ -454,7 +492,10 @@ Function URL 是 `AuthType: NONE`，即完全公开，所有输入都是攻击�
 | `LEMON_API_KEY` | `LemonApiKey` | | Lemon Squeezy |
 | `SES_SENDER_EMAIL` | `SesSenderEmail` | | 已验证的 SES 发件地址；留空则不发信 |
 | `SES_REGION` | — | | 默认取函数自身 `AWS_REGION` |
-| `ORDERS_TABLE` / `LICENSES_TABLE` / `TRIALS_TABLE` | 自动注入 | | 三张表名，由模板 `!Ref` 注入 |
+| `ORDERS_TABLE` / `LICENSES_TABLE` / `TRIALS_TABLE` / `DEMOS_TABLE` | 自动注入 | | 四张表名，由模板 `!Ref` 注入 |
+| `DEMO_DAYS` | `DemoDays` | | 演示许可证时长，默认 30 |
+| `DEMO_PLAN_ID` | `DemoPlanId` | | 演示 token 的 `planId`，默认 `demo`（刻意不属于任何付费档） |
+| `DEFAULT_APP_ID` | `DefaultAppId` | | 请求未声明 `appId` 时的归属，默认 `smoothvoice` |
 | `BASE_MONTHLY_PRICE` | `BaseMonthlyPrice` | | 默认 `99` |
 | `PLAN_CURRENCY` | `PlanCurrency` | | 默认 `cny` |
 | `USD_EXCHANGE_RATE` | `UsdExchangeRate` | | 默认 `7.0`，仅用于展示 |

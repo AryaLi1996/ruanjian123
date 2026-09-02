@@ -92,6 +92,22 @@ TRIAL_DAYS              Ticket 33: trial length in days. Defaults to 3
                         original trialStart the next time they're read, as
                         long as they haven't already expired — see
                         _apply_trial_duration_cap().
+DEMOS_TABLE             DynamoDB table name for demo-licence records, keyed
+                        by "<appId>#<deviceId>". /demo/activate and
+                        /demo/status 501 until this is set.
+DEMO_DAYS               How long a demo licence runs, in days. Defaults to 30.
+                        Unlike TRIAL_DAYS there is no retroactive cap: a demo
+                        already issued keeps the window it was signed for,
+                        because the token is in the client's hands and
+                        shortening the record would not shorten that token.
+DEMO_PLAN_ID            The planId a demo token carries. Defaults to "demo",
+                        which deliberately matches no entry in _PLAN_TIERS so
+                        anything reading a licence can tell a demo from a
+                        purchase.
+DEFAULT_APP_ID          Which app a request that names none belongs to.
+                        Defaults to "smoothvoice" — the value the existing
+                        rows were stamped with, so an older client that sends
+                        no appId still resolves to the same records.
 BASE_MONTHLY_PRICE      Ticket 34/36: base monthly subscription price (major
                         currency units, e.g. "99"). Quarterly/semi-annual/
                         annual plans apply a discount on top of this — see
@@ -127,6 +143,9 @@ MOCK_MODE       = os.environ.get("MOCK_MODE", "false").lower() == "true"
 PROVIDER        = os.environ.get("PAYMENT_PROVIDER", "custom")
 EXPIRY_DAYS     = int(os.environ.get("EXPIRY_DAYS", "30"))
 TRIAL_DAYS      = int(os.environ.get("TRIAL_DAYS", "3"))  # Ticket 33 (was 7 — Ticket 42)
+DEMO_DAYS       = int(os.environ.get("DEMO_DAYS", "30"))
+DEMO_PLAN_ID    = os.environ.get("DEMO_PLAN_ID", "demo")
+DEFAULT_APP_ID  = os.environ.get("DEFAULT_APP_ID", "smoothvoice")
 
 # This string is public (it ships in the Electron app's source at
 # src/main/license-config.ts), so a real deployment still using it means
@@ -307,19 +326,39 @@ def _sign(data: str) -> str:
     return hmac.new(SIGNING_SECRET.encode(), data.encode(), hashlib.sha256).hexdigest()
 
 
-def create_token(user_id: str, plan_id: str, license_key: str, expires_at: int | None = None) -> str:
+def create_token(
+    user_id: str,
+    plan_id: str,
+    license_key: str,
+    expires_at: int | None = None,
+    app_id: str | None = None,
+    issued_at: int | None = None,
+) -> str:
     """expires_at: Unix seconds. Defaults to now + EXPIRY_DAYS (legacy verify-key flow);
     the Ticket 28 order flow passes an explicit value so renewals correctly
-    extend from the *current* expiry rather than always restarting the clock."""
+    extend from the *current* expiry rather than always restarting the clock.
+
+    app_id: stamped into the payload as "appId" when given, and left out
+    entirely when not. Omitting it rather than defaulting it is what keeps
+    every token this function already issues byte-identical: a client that
+    checks the field treats a token without one as "not scoped elsewhere",
+    so adding the key unconditionally would change how existing tokens read.
+
+    issued_at: overrides the "issued now" default so a re-issued demo token
+    reports the moment the demo was *first* taken, not the moment the client
+    asked for its copy again."""
     header  = _b64url(json.dumps({"alg": "HS256", "typ": "LICENSE"}))
-    payload = _b64url(json.dumps({
+    claims: dict[str, Any] = {
         "userId":     user_id,
         "planId":     plan_id,
         "licenseKey": license_key,
         "expiresAt":  expires_at if expires_at is not None else int(time.time()) + EXPIRY_DAYS * 86400,
-        "issuedAt":   int(time.time()),
+        "issuedAt":   issued_at if issued_at is not None else int(time.time()),
         "features":   ALLOWED_FEATURES,
-    }))
+    }
+    if app_id:
+        claims["appId"] = app_id
+    payload = _b64url(json.dumps(claims))
     sig = _sign(f"{header}.{payload}")
     return f"{header}.{payload}.{sig}"
 
@@ -346,6 +385,25 @@ _DEVICE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{16,128}$")
 
 def _valid_device_id_format(device_id: str) -> bool:
     return bool(_DEVICE_ID_RE.match(device_id))
+
+
+# App ids are chosen by us, not by users, but they arrive over the same
+# untrusted POST body as everything else here and are concatenated into a
+# DynamoDB partition key — so they get the same treatment. "#" is the
+# separator _demo_key() uses and is therefore excluded from the character
+# class, which is what stops "a#b" + "c" colliding with "a" + "b#c".
+_APP_ID_RE = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
+
+
+def _valid_app_id_format(app_id: str) -> bool:
+    return bool(_APP_ID_RE.match(app_id))
+
+
+def _requested_app_id(body: dict[str, Any]) -> str:
+    """The app a request belongs to. A body that names none is an older
+    client, and belongs to DEFAULT_APP_ID — the value its rows were stamped
+    with — rather than to nothing."""
+    return str(body.get("appId", "") or "").strip() or DEFAULT_APP_ID
 
 
 def _escape_search_value(value: str) -> str:
@@ -761,6 +819,200 @@ def _handle_trial_status(event: dict) -> dict:
             "trialUsed": True, "trialStart": trial["trialStart"], "trialEnd": trial["trialEnd"],
             "expired": int(time.time()) > trial["trialEnd"],
             "trialDurationDays": TRIAL_DAYS,  # Ticket 42 — see _handle_trial_activate
+        }),
+    }
+
+
+# ── Demo licence store ──────────────────────────────────────────────────────
+# A demo is not a trial and not a purchase, so it is neither table's business.
+#
+# The trial grants the *app* for a few days and is tracked by device alone; a
+# demo grants the paid features for DEMO_DAYS and is tracked per app *and*
+# device, because a demo spent in one app on a machine is not the other app's
+# demo to refuse. The token it returns is signed by this function with the
+# same secret every other licence uses, which is the entire point of moving
+# demo issuance here: a client that mints its own can only be limited by a
+# file it owns, and a file it owns is not a limit.
+
+def _demos_table():  # noqa: ANN201
+    return _ddb_table(os.environ.get("DEMOS_TABLE", ""))
+
+
+def _demo_key(app_id: str, device_id: str) -> str:
+    """The partition key: app and device, in that order, separated by the one
+    character neither may contain (see _APP_ID_RE / _DEVICE_ID_RE)."""
+    return f"{app_id}#{device_id}"
+
+
+def _demo_user_id(app_id: str, device_id: str) -> str:
+    """A stable, anonymous userId for a demo token.
+
+    Derived from the demo key rather than random so re-issuing a token for
+    the same demo produces the same identity, and hashed rather than carrying
+    the device id so a token that gets pasted into a support ticket does not
+    also hand over the hardware fingerprint it was minted from."""
+    digest = hashlib.sha256(_demo_key(app_id, device_id).encode()).hexdigest()
+    return f"demo-{digest[:24]}"
+
+
+def _demo_license_key(app_id: str, device_id: str) -> str:
+    """Formatted so it passes _LICENSE_KEY_RE, which is what lets a demo token
+    travel the same paths as a purchased one."""
+    return f"DEMO-{_demo_user_id(app_id, device_id)[5:21].upper()}"
+
+
+def _create_demo_if_absent(app_id: str, device_id: str) -> dict[str, Any]:
+    """Idempotent issuance, same conditional-put shape as
+    _create_trial_if_absent: the first caller for an (app, device) creates the
+    record, and every later one reads back the *original* window rather than
+    starting a new one. Raises if DEMOS_TABLE isn't configured — callers check
+    _demos_table() first, matching this module's convention."""
+    table = _demos_table()
+    now   = int(time.time())
+    item  = {
+        "demoKey":   _demo_key(app_id, device_id),
+        "appId":     app_id,
+        "deviceId":  device_id,
+        "planId":    DEMO_PLAN_ID,
+        "issuedAt":  now,
+        "expiresAt": now + DEMO_DAYS * 86400,
+        "createdAt": now,
+    }
+    try:
+        table.put_item(Item=item, ConditionExpression="attribute_not_exists(demoKey)")
+        return item
+    except Exception as exc:  # noqa: BLE001
+        # Same botocore quirk as _mark_order_paid/_create_trial_if_absent:
+        # ConditionalCheckFailedException only shows up in str(exc).
+        if "ConditionalCheckFailed" in str(exc):
+            existing = _from_decimal((table.get_item(Key={"demoKey": item["demoKey"]})).get("Item"))
+            if existing:
+                return existing
+        raise
+
+
+def _get_demo(app_id: str, device_id: str) -> dict[str, Any] | None:
+    table = _demos_table()
+    if table is None:
+        return None
+    return _from_decimal(table.get_item(Key={"demoKey": _demo_key(app_id, device_id)}).get("Item"))
+
+
+# ── /demo/activate, /demo/status handlers ───────────────────────────────────
+
+def _demo_request_ids(event: dict) -> tuple[str, str] | dict:
+    """(appId, deviceId) for a demo request, or the error response to return.
+
+    Shared by both demo handlers so a malformed request is refused the same
+    way on either — /activate reads them from the JSON body, /status from the
+    query string."""
+    if event.get("httpMethod") == "GET" or (event.get("requestContext") or {}).get("http", {}).get("method") == "GET":
+        params = _query_params(event)
+        body: dict[str, Any] = {"appId": params.get("appId", ""), "deviceId": params.get("deviceId", "")}
+    else:
+        try:
+            body = json.loads(event.get("body") or "{}")
+        except json.JSONDecodeError:
+            return {"statusCode": 400, "headers": _cors_headers(),
+                    "body": json.dumps({"success": False, "error": "invalid body"})}
+        if not isinstance(body, dict):
+            return {"statusCode": 400, "headers": _cors_headers(),
+                    "body": json.dumps({"success": False, "error": "invalid body"})}
+
+    device_id = str(body.get("deviceId", "") or "").strip()
+    if not device_id or not _valid_device_id_format(device_id):
+        return {"statusCode": 400, "headers": _cors_headers(),
+                "body": json.dumps({"success": False, "error": "deviceId required"})}
+
+    app_id = _requested_app_id(body)
+    if not _valid_app_id_format(app_id):
+        return {"statusCode": 400, "headers": _cors_headers(),
+                "body": json.dumps({"success": False, "error": "invalid appId"})}
+
+    return app_id, device_id
+
+
+def _handle_demo_activate(event: dict) -> dict:
+    """Issue this device's demo licence for this app, once.
+
+    A second call inside the window is not an error: it returns the same
+    record and a freshly signed token for the *same* expiry, so a reinstall
+    or a lost token recovers without granting more time. Only once that
+    window has passed does the demo read as spent, and then it is final —
+    "demo_already_used", the code the client words differently from a network
+    failure."""
+    if _demos_table() is None:
+        return _not_configured("DEMOS_TABLE")
+
+    ids = _demo_request_ids(event)
+    if isinstance(ids, dict):
+        return ids
+    app_id, device_id = ids
+
+    record = _create_demo_if_absent(app_id, device_id)
+    now    = int(time.time())
+    if now >= record["expiresAt"]:
+        return {
+            "statusCode": 409, "headers": _cors_headers(),
+            "body": json.dumps({
+                "success": False, "code": "demo_already_used",
+                "error": "this device has already used its demo for this app",
+                "appId": app_id, "issuedAt": record["issuedAt"], "expiresAt": record["expiresAt"],
+            }),
+        }
+
+    token = create_token(
+        _demo_user_id(app_id, device_id),
+        record.get("planId", DEMO_PLAN_ID),
+        _demo_license_key(app_id, device_id),
+        expires_at=record["expiresAt"],
+        app_id=app_id,
+        issued_at=record["issuedAt"],
+    )
+    return {
+        "statusCode": 200, "headers": _cors_headers(),
+        "body": json.dumps({
+            "success": True, "token": token, "appId": app_id,
+            "planId": record.get("planId", DEMO_PLAN_ID),
+            "issuedAt": record["issuedAt"], "expiresAt": record["expiresAt"],
+            # So a client that first ran offline can cache the server's own
+            # demo length instead of trusting a second hardcoded constant —
+            # the mistake Ticket 42 had to migrate out of the trial.
+            "demoDurationDays": DEMO_DAYS,
+        }),
+    }
+
+
+def _handle_demo_status(event: dict) -> dict:
+    """Whether this device has taken its demo for this app, and when it ends.
+
+    The client asks before it draws the button, so a device with nothing left
+    is told so rather than finding out by clicking. No token here: a status
+    read must not be a way to re-fetch a licence."""
+    if _demos_table() is None:
+        return _not_configured("DEMOS_TABLE")
+
+    ids = _demo_request_ids(event)
+    if isinstance(ids, dict):
+        return ids
+    app_id, device_id = ids
+
+    record = _get_demo(app_id, device_id)
+    if not record:
+        return {
+            "statusCode": 200, "headers": _cors_headers(),
+            "body": json.dumps({
+                "used": False, "appId": app_id, "issuedAt": None, "expiresAt": None,
+                "expired": False, "demoDurationDays": DEMO_DAYS,
+            }),
+        }
+    return {
+        "statusCode": 200, "headers": _cors_headers(),
+        "body": json.dumps({
+            "used": True, "appId": app_id,
+            "issuedAt": record["issuedAt"], "expiresAt": record["expiresAt"],
+            "expired": int(time.time()) >= record["expiresAt"],
+            "demoDurationDays": DEMO_DAYS,
         }),
     }
 
@@ -1283,6 +1535,10 @@ def handler(event: dict, context: object) -> dict:
         return _handle_trial_activate(event)
     if path.endswith("/trial/status"):
         return _handle_trial_status(event)
+    if path.endswith("/demo/activate"):
+        return _handle_demo_activate(event)
+    if path.endswith("/demo/status"):
+        return _handle_demo_status(event)
     if path.endswith("/plans"):
         return _handle_get_plans(event)
 
