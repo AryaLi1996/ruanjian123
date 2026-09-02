@@ -60,9 +60,22 @@ SES_REGION              defaults to the function's own AWS_REGION
 ORDERS_TABLE            DynamoDB table name for payment orders (Ticket 28).
                         /create-order, /order-status, /payment-history, and
                         both webhooks 501 until this is set.
-LICENSES_TABLE          DynamoDB table name mapping anonymous userId →
+LICENSES_TABLE          DynamoDB table name mapping (userId, appId) →
                         current license token (Ticket 28 auto-issuance path;
                         independent of the legacy Stripe-metadata lookup).
+                        Ticket 72 re-keyed it — see LEGACY_LICENSES_TABLE.
+LICENSES_KEY_INDEX      Name of the GSI over licenseKey on LICENSES_TABLE.
+                        Defaults to "licenseKey-index". The verify route
+                        queries it to find which app a key belongs to; a key
+                        with no row is unknown rather than foreign and
+                        verifies exactly as it did before.
+LEGACY_LICENSES_TABLE   Ticket 72: the pre-appId licence table, keyed by
+                        userId alone. Read on a miss only, and the row found
+                        is adopted under DEFAULT_APP_ID — which makes the
+                        deploy safe whether migrate_app_id.py has run or not.
+                        Unset once the backfill is verified.
+LEGACY_TRIALS_TABLE     Ticket 72: the same, for the pre-appId trial table
+                        keyed by deviceId alone.
 PAYMENT_SUCCESS_URL     Stripe Checkout success_url base (Ticket 28); the app
                         never actually loads this page — see order-status
                         polling — but Stripe requires a valid URL.
@@ -84,7 +97,9 @@ DISABLED_PAYMENT_METHODS
                         the Douyin merchant business-verification is still
                         pending. Example: "douyin_pay,card".
 TRIALS_TABLE            Ticket 33: DynamoDB table name for free trial
-                        records, keyed by deviceId. /trial/activate and
+                        records, keyed by (deviceId, appId) since Ticket 72 —
+                        so one machine gets its own trial in each app rather
+                        than sharing the sibling's. /trial/activate and
                         /trial/status 501 until this is set.
 TRIAL_DAYS              Ticket 33: trial length in days. Defaults to 3
                         (Ticket 42 — was 7). Existing trial records longer
@@ -107,7 +122,11 @@ DEMO_PLAN_ID            The planId a demo token carries. Defaults to "demo",
 DEFAULT_APP_ID          Which app a request that names none belongs to.
                         Defaults to "smoothvoice" — the value the existing
                         rows were stamped with, so an older client that sends
-                        no appId still resolves to the same records.
+                        no appId still resolves to the same records. It is
+                        also the only app a pre-Ticket-72 row is adopted for:
+                        the old tables had no app dimension because there was
+                        one app, and handing their rows to whichever app asks
+                        first would spend the sibling's trial for it.
 BASE_MONTHLY_PRICE      Ticket 34/36: base monthly subscription price (major
                         currency units, e.g. "99"). Quarterly/semi-annual/
                         annual plans apply a discount on top of this — see
@@ -406,6 +425,19 @@ def _requested_app_id(body: dict[str, Any]) -> str:
     return str(body.get("appId", "") or "").strip() or DEFAULT_APP_ID
 
 
+def _app_id_or_error(source: dict[str, Any]) -> str | dict:
+    """The requested appId, or the 400 to return instead.
+
+    `source` is the JSON body on a POST and the query string on a GET; both
+    are attacker-controlled and both end up in a DynamoDB key, so both go
+    through _valid_app_id_format."""
+    app_id = _requested_app_id(source)
+    if not _valid_app_id_format(app_id):
+        return {"statusCode": 400, "headers": _cors_headers(),
+                "body": json.dumps({"error": "invalid appId"})}
+    return app_id
+
+
 def _escape_search_value(value: str) -> str:
     """Escape a value for Stripe's search query language (single-quoted string)."""
     return value.replace("\\", "\\\\").replace("'", "\\'")
@@ -508,6 +540,21 @@ def _orders_table():  # noqa: ANN201
 
 def _licenses_table():  # noqa: ANN201
     return _ddb_table(os.environ.get("LICENSES_TABLE", ""))
+
+
+def _legacy_licenses_table():  # noqa: ANN201
+    """The pre-Ticket-72 licence table, keyed by userId alone. Read-through
+    on a miss, for the same reason and with the same lifetime as
+    _legacy_trials_table() — see the note there."""
+    return _ddb_table(os.environ.get("LEGACY_LICENSES_TABLE", ""))
+
+
+def _license_key_index() -> str:
+    """GSI over licenseKey, so the verify route can ask which app a key
+    belongs to. It is the only lookup in this file that does not already know
+    the (userId, appId) pair — a key arrives on its own, typed or pasted, and
+    what has to be decided is whether it is *this* app's."""
+    return os.environ.get("LICENSES_KEY_INDEX", "licenseKey-index")
 
 
 def _not_configured(what: str) -> dict:
@@ -613,7 +660,13 @@ def _settle_paid_order(order: dict[str, Any], provider_txn_id: str) -> None:
         return
     updated = _mark_order_paid(order["orderId"], provider_txn_id)
     if updated:
-        _issue_or_extend_license(order["userId"], order["planId"])
+        # The order's appId, not a request's: the webhook is the payment
+        # provider talking, and the app the purchase was made in was decided
+        # at /create-order. An order written before Ticket 72 carries none
+        # and belongs to DEFAULT_APP_ID.
+        _issue_or_extend_license(
+            order["userId"], order["planId"], order.get("appId", DEFAULT_APP_ID),
+        )
 
 
 def _query_orders_by_user(user_id: str, limit: int = 50) -> list[dict[str, Any]]:
@@ -630,32 +683,103 @@ def _query_orders_by_user(user_id: str, limit: int = 50) -> list[dict[str, Any]]
     return [_from_decimal(item) for item in resp.get("Items", [])]
 
 
-def _get_license_row(user_id: str) -> dict[str, Any] | None:
+def _license_key(user_id: str, app_id: str) -> dict[str, str]:
+    """userId partitions, appId sorts. Same reasoning as _trial_key(), plus
+    one of its own: a user's licences across apps are then one query."""
+    return {"userId": user_id, "appId": app_id}
+
+
+def _adopt_legacy_license(user_id: str, app_id: str) -> dict[str, Any] | None:
+    """A pre-Ticket-72 licence row for this user, re-keyed under
+    DEFAULT_APP_ID — the app that bought it, since the old table had no other.
+
+    Restricted to DEFAULT_APP_ID for the reason _adopt_legacy_trial() is: a
+    purchase made in one app is not a licence for another, and this ticket
+    exists to stop exactly that. A request for any other app sees nothing
+    here and is unlicensed, which is correct."""
+    if app_id != DEFAULT_APP_ID:
+        return None
+    legacy = _legacy_licenses_table()
+    if legacy is None:
+        return None
+    try:
+        old = _from_decimal(legacy.get_item(Key={"userId": user_id}).get("Item"))
+    except Exception:  # noqa: BLE001
+        return None
+    if not old:
+        return None
+
+    adopted = {**old, "appId": app_id, "migratedAt": int(time.time())}
+    table = _licenses_table()
+    if table is not None:
+        try:
+            table.put_item(Item=adopted, ConditionExpression="attribute_not_exists(userId)")
+        except Exception:  # noqa: BLE001
+            existing = _from_decimal(table.get_item(Key=_license_key(user_id, app_id)).get("Item"))
+            if existing:
+                return existing
+    return adopted
+
+
+def _get_license_row(user_id: str, app_id: str) -> dict[str, Any] | None:
     table = _licenses_table()
     if table is None:
         return None
-    resp = table.get_item(Key={"userId": user_id})
-    return _from_decimal(resp.get("Item"))
+    resp = table.get_item(Key=_license_key(user_id, app_id))
+    row  = _from_decimal(resp.get("Item"))
+    return row if row is not None else _adopt_legacy_license(user_id, app_id)
 
 
-def _issue_or_extend_license(user_id: str, plan_id: str) -> tuple[str, int]:
+def _find_license_by_key(license_key: str) -> dict[str, Any] | None:
+    """The row this licence key was issued into, or None.
+
+    None is not "the key is bad" — it is "this service did not issue it", the
+    case a legacy Stripe-metadata key and every `custom`-provider key fall
+    into. The verify route reads it that way: a row that names another app is
+    a refusal, no row at all is the old behaviour unchanged.
+
+    Best-effort by design. An unconfigured index or a query that fails must
+    not turn a working activation into an error, so both read as "unknown"
+    and the provider check has the final say."""
+    table = _licenses_table()
+    if table is None:
+        return None
+    try:
+        resp = table.query(
+            IndexName=_license_key_index(),
+            KeyConditionExpression="licenseKey = :k",
+            ExpressionAttributeValues={":k": license_key},
+            Limit=1,
+        )
+    except Exception:  # noqa: BLE001
+        return None
+    items = resp.get("Items") or []
+    return _from_decimal(items[0]) if items else None
+
+
+def _issue_or_extend_license(user_id: str, plan_id: str, app_id: str) -> tuple[str, int]:
     """Extends from the user's current expiry if it's still in the future
     (renewal before lapse stacks, matching Ticket 28 §4), otherwise starts
-    fresh from now. Returns (token, expiresAt)."""
+    fresh from now. Returns (token, expiresAt).
+
+    Ticket 72: the expiry it stacks onto is this app's. A renewal bought in
+    one app extending the other's licence was the same bug as the shared
+    trial, one table along — and the token now carries the appId, so a client
+    can tell before it ever asks."""
     plan = PLANS.get(plan_id, PLANS["monthly"])
     now  = int(time.time())
 
-    existing   = _get_license_row(user_id)
+    existing   = _get_license_row(user_id, app_id)
     base       = existing["expiresAt"] if existing and existing.get("expiresAt", 0) > now else now
     expires_at = base + plan["durationDays"] * 86400
 
     license_key = _generate_license_key()
-    token = create_token(user_id, plan_id, license_key, expires_at=expires_at)
+    token = create_token(user_id, plan_id, license_key, expires_at=expires_at, app_id=app_id)
 
     table = _licenses_table()
     if table is not None:
         table.put_item(Item={
-            "userId": user_id, "token": token, "planId": plan_id,
+            **_license_key(user_id, app_id), "token": token, "planId": plan_id,
             "licenseKey": license_key, "expiresAt": expires_at, "updatedAt": now,
         })
     return token, expires_at
@@ -670,6 +794,28 @@ def _issue_or_extend_license(user_id: str, plan_id: str) -> tuple[str, int]:
 
 def _trials_table():  # noqa: ANN201
     return _ddb_table(os.environ.get("TRIALS_TABLE", ""))
+
+
+def _legacy_trials_table():  # noqa: ANN201
+    """The pre-Ticket-72 table, keyed by deviceId alone.
+
+    Read-through only, and only on a miss: a key schema cannot be altered in
+    place, so the appId dimension needs a new table, and a deploy that
+    switched to it cleanly would hand a second trial to every device that had
+    already spent one. Every read that misses in the current table looks here
+    and adopts what it finds under DEFAULT_APP_ID, which makes the migration
+    script a backfill rather than a cutover — correct whether it has run yet
+    or not. Unset once the backfill is verified and the old table is gone."""
+    return _ddb_table(os.environ.get("LEGACY_TRIALS_TABLE", ""))
+
+
+def _trial_key(app_id: str, device_id: str) -> dict[str, str]:
+    """deviceId is the partition key and appId the sort key, not the other way
+    round. With a handful of apps, appId as the partition key would funnel
+    every trial write on the account into that handful of partitions; deviceId
+    spreads them, and it also makes "every trial this device holds" a single
+    query — which is what the backfill and any support lookup actually want."""
+    return {"deviceId": device_id, "appId": app_id}
 
 
 def _apply_trial_duration_cap(trial: dict[str, Any]) -> dict[str, Any]:
@@ -691,12 +837,12 @@ def _apply_trial_duration_cap(trial: dict[str, Any]) -> dict[str, Any]:
     if table is not None:
         try:
             table.update_item(
-                Key={"deviceId": trial["deviceId"]},
+                Key=_trial_key(trial.get("appId", DEFAULT_APP_ID), trial["deviceId"]),
                 UpdateExpression="SET trialEnd = :capped",
                 # Guards against a get/update race with a (hypothetical —
                 # nothing deletes trial records today) concurrent delete: an
                 # unconditional update_item would otherwise upsert a partial
-                # item carrying only deviceId/trialEnd, silently dropping
+                # item carrying only the key and trialEnd, silently dropping
                 # trialStart/createdAt/lastSeen.
                 ConditionExpression="attribute_exists(deviceId)",
                 ExpressionAttributeValues={":capped": capped_end},
@@ -710,18 +856,59 @@ def _apply_trial_duration_cap(trial: dict[str, Any]) -> dict[str, Any]:
     return {**trial, "trialEnd": capped_end}
 
 
-def _get_trial(device_id: str) -> dict[str, Any] | None:
+def _adopt_legacy_trial(app_id: str, device_id: str) -> dict[str, Any] | None:
+    """A pre-Ticket-72 record for this device, re-keyed under DEFAULT_APP_ID.
+
+    Only DEFAULT_APP_ID: the old table had no app dimension, and every record
+    in it was written by the app that value names. Adopting it for whichever
+    app happened to ask first would hand that app someone else's spent trial
+    and hand the real owner a fresh one — exactly backwards. So a request for
+    any other app sees no legacy record and starts its own trial, which is
+    the behaviour this ticket exists to produce.
+
+    The copy is written back so the next read is a plain hit; a write that
+    fails still returns the record, because being told the truth about a
+    spent trial matters more than the cache."""
+    if app_id != DEFAULT_APP_ID:
+        return None
+    legacy = _legacy_trials_table()
+    if legacy is None:
+        return None
+    try:
+        old = _from_decimal(legacy.get_item(Key={"deviceId": device_id}).get("Item"))
+    except Exception:  # noqa: BLE001
+        return None
+    if not old:
+        return None
+
+    adopted = {**old, "appId": app_id, "migratedAt": int(time.time())}
+    table = _trials_table()
+    if table is not None:
+        try:
+            # attribute_not_exists guards the race with a concurrent
+            # activation: whoever wrote first keeps their trialStart.
+            table.put_item(Item=adopted, ConditionExpression="attribute_not_exists(deviceId)")
+        except Exception:  # noqa: BLE001
+            existing = _from_decimal(table.get_item(Key=_trial_key(app_id, device_id)).get("Item"))
+            if existing:
+                return existing
+    return adopted
+
+
+def _get_trial(app_id: str, device_id: str) -> dict[str, Any] | None:
     table = _trials_table()
     if table is None:
         return None
-    resp  = table.get_item(Key={"deviceId": device_id})
+    resp  = table.get_item(Key=_trial_key(app_id, device_id))
     trial = _from_decimal(resp.get("Item"))
+    if trial is None:
+        trial = _adopt_legacy_trial(app_id, device_id)
     if trial is None:
         return None
     return _apply_trial_duration_cap(trial)
 
 
-def _create_trial_if_absent(device_id: str) -> dict[str, Any]:
+def _create_trial_if_absent(app_id: str, device_id: str) -> dict[str, Any]:
     """Idempotent activation: the first caller for a deviceId creates the
     trial record; every later call (including a legitimate re-sync from the
     client, or an uninstall/reinstall recomputing the same hardware-derived
@@ -729,12 +916,23 @@ def _create_trial_if_absent(device_id: str) -> dict[str, Any]:
     and gets back the *original* trialStart/trialEnd unchanged, matching
     Ticket 33 §2's "do not reset the trial" requirement and §5's abuse
     prevention. Raises if TRIALS_TABLE isn't configured — callers must check
-    _trials_table() first, same convention as _mark_order_paid/_orders_table."""
+    _trials_table() first, same convention as _mark_order_paid/_orders_table.
+
+    Ticket 72: scoped per app as well as per device, so the same machine gets
+    its own trial in each app rather than the sibling's leftovers. A device
+    carrying a pre-Ticket-72 record is caught before the put — otherwise the
+    conditional would pass against the new table and hand out a second
+    trial, which is the one thing this must not do."""
     table = _trials_table()
+    existing = _get_trial(app_id, device_id)
+    if existing:
+        return existing
+
     now        = int(time.time())
     trial_end  = now + TRIAL_DAYS * 86400
     item = {
-        "deviceId": device_id, "trialStart": now, "trialEnd": trial_end,
+        **_trial_key(app_id, device_id),
+        "trialStart": now, "trialEnd": trial_end,
         "createdAt": now, "lastSeen": now,
     }
     try:
@@ -744,20 +942,20 @@ def _create_trial_if_absent(device_id: str) -> dict[str, Any]:
         # Same botocore quirk as _mark_order_paid: ConditionalCheckFailedException
         # only shows up in str(exc), not the exception class.
         if "ConditionalCheckFailed" in str(exc):
-            existing = _get_trial(device_id)
-            if existing:
-                return existing
+            raced = _get_trial(app_id, device_id)
+            if raced:
+                return raced
         raise
 
 
-def _touch_trial_last_seen(device_id: str) -> None:
+def _touch_trial_last_seen(app_id: str, device_id: str) -> None:
     """Best-effort bookkeeping only — never lets a write hiccup fail /trial/status."""
     table = _trials_table()
     if table is None:
         return
     try:
         table.update_item(
-            Key={"deviceId": device_id},
+            Key=_trial_key(app_id, device_id),
             UpdateExpression="SET lastSeen = :now",
             ExpressionAttributeValues={":now": int(time.time())},
         )
@@ -779,11 +977,16 @@ def _handle_trial_activate(event: dict) -> dict:
     if not device_id or not _valid_device_id_format(device_id):
         return {"statusCode": 400, "headers": _cors_headers(), "body": json.dumps({"error": "deviceId required"})}
 
-    trial = _create_trial_if_absent(device_id)
+    app_id = _app_id_or_error(body)
+    if isinstance(app_id, dict):
+        return app_id
+
+    trial = _create_trial_if_absent(app_id, device_id)
     return {
         "statusCode": 200, "headers": _cors_headers(),
         "body": json.dumps({
-            "success": True, "trialStart": trial["trialStart"], "trialEnd": trial["trialEnd"],
+            "success": True, "appId": app_id,
+            "trialStart": trial["trialStart"], "trialEnd": trial["trialEnd"],
             # Ticket 42: lets the client cache the *server's* current trial
             # length instead of trusting only its own hardcoded
             # LICENSE_CONFIG.trial.durationDays for later offline fallback —
@@ -798,25 +1001,32 @@ def _handle_trial_activate(event: dict) -> dict:
 def _handle_trial_status(event: dict) -> dict:
     if _trials_table() is None:
         return _not_configured("TRIALS_TABLE")
-    device_id = _query_params(event).get("deviceId", "").strip()
+    params    = _query_params(event)
+    device_id = params.get("deviceId", "").strip()
     if not device_id or not _valid_device_id_format(device_id):
         return {"statusCode": 400, "headers": _cors_headers(), "body": json.dumps({"error": "deviceId required"})}
 
-    trial = _get_trial(device_id)
+    app_id = _app_id_or_error(params)
+    if isinstance(app_id, dict):
+        return app_id
+
+    trial = _get_trial(app_id, device_id)
     if not trial:
         return {
             "statusCode": 200, "headers": _cors_headers(),
             "body": json.dumps({
-                "trialUsed": False, "trialStart": None, "trialEnd": None, "expired": False,
+                "trialUsed": False, "appId": app_id,
+                "trialStart": None, "trialEnd": None, "expired": False,
                 "trialDurationDays": TRIAL_DAYS,  # Ticket 42 — see _handle_trial_activate
             }),
         }
 
-    _touch_trial_last_seen(device_id)
+    _touch_trial_last_seen(app_id, device_id)
     return {
         "statusCode": 200, "headers": _cors_headers(),
         "body": json.dumps({
-            "trialUsed": True, "trialStart": trial["trialStart"], "trialEnd": trial["trialEnd"],
+            "trialUsed": True, "appId": app_id,
+            "trialStart": trial["trialStart"], "trialEnd": trial["trialEnd"],
             "expired": int(time.time()) > trial["trialEnd"],
             "trialDurationDays": TRIAL_DAYS,  # Ticket 42 — see _handle_trial_activate
         }),
@@ -1203,6 +1413,10 @@ def _handle_create_order(event: dict) -> dict:
     if not user_id or len(user_id) > 128:
         return {"statusCode": 400, "headers": _cors_headers(), "body": json.dumps({"error": "userId required"})}
 
+    app_id = _app_id_or_error(body)
+    if isinstance(app_id, dict):
+        return app_id
+
     order_id = _new_order_id()
     plan     = PLANS[plan_id]
 
@@ -1216,7 +1430,8 @@ def _handle_create_order(event: dict) -> dict:
                 "body": json.dumps({"error": f"payment provider error: {exc}"})}
 
     order = {
-        "orderId": order_id, "userId": user_id, "planId": plan_id, "method": method,
+        "orderId": order_id, "userId": user_id, "appId": app_id,
+        "planId": plan_id, "method": method,
         "status": "pending", "amount": plan["amount"], "currency": plan["currency"],
         "createdAt": int(time.time()), "providerOrderId": provider["providerOrderId"],
     }
@@ -1225,7 +1440,8 @@ def _handle_create_order(event: dict) -> dict:
     return {
         "statusCode": 200, "headers": _cors_headers(),
         "body": json.dumps({
-            "orderId": order_id, "planId": plan_id, "method": method, "status": "pending",
+            "orderId": order_id, "appId": app_id,
+            "planId": plan_id, "method": method, "status": "pending",
             "amount": plan["amount"], "currency": plan["currency"], "createdAt": order["createdAt"],
             "presentAs": provider["presentAs"], "redirectUrl": provider["url"],
         }),
@@ -1241,20 +1457,31 @@ def _handle_order_status(event: dict) -> dict:
     if not order_id or not user_id:
         return {"statusCode": 400, "headers": _cors_headers(), "body": json.dumps({"error": "orderId and userId required"})}
 
+    app_id = _app_id_or_error(qs)
+    if isinstance(app_id, dict):
+        return app_id
+
     order = _get_order(order_id)
     if not order or order.get("userId") != user_id:
+        return {"statusCode": 404, "headers": _cors_headers(), "body": json.dumps({"error": "order not found"})}
+    # An order belongs to the app it was created in. Polling it from another
+    # is not a 403 but a 404: the client asking has no business knowing this
+    # order exists, and "not found" is what it would see if the two apps had
+    # separate tables — which, as far as each is concerned, they do.
+    if order.get("appId", DEFAULT_APP_ID) != app_id:
         return {"statusCode": 404, "headers": _cors_headers(), "body": json.dumps({"error": "order not found"})}
 
     resp: dict[str, Any] = {
         "status": order["status"],
         "order": {
-            "orderId": order["orderId"], "planId": order["planId"], "method": order["method"],
+            "orderId": order["orderId"], "appId": app_id,
+            "planId": order["planId"], "method": order["method"],
             "status": order["status"], "amount": order["amount"], "currency": order["currency"],
             "createdAt": order["createdAt"],
         },
     }
     if order["status"] == "paid":
-        row = _get_license_row(user_id)
+        row = _get_license_row(user_id, app_id)
         if row:
             resp["token"] = row["token"]
     return {"statusCode": 200, "headers": _cors_headers(), "body": json.dumps(resp)}
@@ -1263,11 +1490,23 @@ def _handle_order_status(event: dict) -> dict:
 def _handle_payment_history(event: dict) -> dict:
     if _orders_table() is None:
         return _not_configured("ORDERS_TABLE")
-    user_id = _query_params(event).get("userId", "")
+    params  = _query_params(event)
+    user_id = params.get("userId", "")
     if not user_id:
         return {"statusCode": 400, "headers": _cors_headers(), "body": json.dumps({"error": "userId required"})}
 
-    orders = _query_orders_by_user(user_id)
+    app_id = _app_id_or_error(params)
+    if isinstance(app_id, dict):
+        return app_id
+
+    # Filtered here rather than in the query: the GSI is (userId, createdAt),
+    # and adding appId to it would mean a second index for a list that is a
+    # handful of rows long. Pre-Ticket-72 orders carry no appId and belong to
+    # DEFAULT_APP_ID.
+    orders = [
+        o for o in _query_orders_by_user(user_id)
+        if o.get("appId", DEFAULT_APP_ID) == app_id
+    ]
     history = [{
         "orderId": o["orderId"], "planId": o["planId"], "method": o["method"], "status": o["status"],
         "amount": o["amount"], "currency": o["currency"], "createdAt": o["createdAt"],
@@ -1551,17 +1790,62 @@ def handler(event: dict, context: object) -> dict:
             return {"statusCode": 400, "headers": _cors_headers(),
                     "body": json.dumps({"valid": False, "error": "licenseKey required"})}
 
+        app_id = _app_id_or_error(body if isinstance(body, dict) else {})
+        if isinstance(app_id, dict):
+            return {**app_id, "body": json.dumps({"valid": False, "error": "invalid appId"})}
+
+        # Ticket 72: a key this service issued knows which app it was issued
+        # for, and a key issued for another app is refused here rather than
+        # exchanged for a token this app would then honour. A key with no row
+        # — a legacy Stripe-metadata key, or any key under the `custom`
+        # provider — is unknown rather than foreign, and falls through to the
+        # provider check exactly as before.
+        owner = _find_license_by_key(license_key)
+        if owner and owner.get("appId", DEFAULT_APP_ID) != app_id:
+            owner_app = owner.get("appId", DEFAULT_APP_ID)
+            return {
+                "statusCode": 403, "headers": _cors_headers(),
+                # Three ways of saying the same thing, because the clients
+                # read it three ways: SootheVoice matches on `code`, the
+                # sibling app compares a returned `appId` against its own,
+                # and both fall back to looking for "appId" in the message.
+                # A refusal the client cannot recognise is worded as an
+                # ordinary failure — "try again" for something retrying will
+                # never fix.
+                "body": json.dumps({
+                    "valid": False, "code": "app_id_mismatch",
+                    "appId": owner_app,
+                    "error": f"appId mismatch: this license belongs to {owner_app}, not {app_id}",
+                }),
+            }
+
         info = _check_payment_provider(license_key)
         if not info:
             return {"statusCode": 402, "headers": _cors_headers(),
                     "body": json.dumps({"valid": False, "error": "License key not found or subscription inactive"})}
 
-        token = create_token(info["userId"], info["planId"], license_key)
+        # The stored row is preferred over EXPIRY_DAYS-from-now where there
+        # is one: it carries the expiry the purchase actually bought, and a
+        # client that re-verifies its key on every refresh must not thereby
+        # push its own expiry out — which, before Ticket 72, is exactly what
+        # it did, quietly turning an annual plan into a rolling monthly one.
+        # Its userId is preferred for the same reason: it is the identity the
+        # licence was issued to, where _check_payment_provider under the
+        # `custom` provider only re-derives one from the key.
+        expires_at = owner.get("expiresAt") if owner else None
+        token = create_token(
+            owner.get("userId", info["userId"]) if owner else info["userId"],
+            info["planId"], license_key,
+            expires_at=expires_at, app_id=app_id,
+        )
         return {
             "statusCode": 200,
             "headers":    _cors_headers(),
-            "body":       json.dumps({"valid": True, "token": token,
-                                      "expiresIn": EXPIRY_DAYS * 86400}),
+            "body":       json.dumps({
+                "valid": True, "token": token, "appId": app_id,
+                "expiresIn": max(0, expires_at - int(time.time())) if expires_at
+                             else EXPIRY_DAYS * 86400,
+            }),
         }
 
     except Exception as exc:  # noqa: BLE001
