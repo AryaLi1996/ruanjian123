@@ -38,10 +38,17 @@ Usage:
     # Then, with --apply, actually write:
     python3 migrate_app_id.py ... --apply
 
-Table names come from the stack outputs:
+The V2 table names come from the stack outputs:
 
     aws cloudformation describe-stacks --stack-name ruanjian-license \\
       --query "Stacks[0].Outputs" --output table
+
+The two legacy names do **not**, since Ticket 74: removing those resources
+from template.yaml took their TrialsTableName/LicensesTableName outputs with
+them. They carried DeletionPolicy: Retain, so the tables themselves are still
+in the account, just no longer managed by the stack — list them directly:
+
+    aws dynamodb list-tables --query "TableNames[?contains(@, 'ruanjian-license')]"
 """
 from __future__ import annotations
 

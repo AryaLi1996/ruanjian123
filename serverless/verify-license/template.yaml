@@ -159,14 +159,12 @@ Globals:
         PLAN_CURRENCY: !Ref PlanCurrency
         USD_EXCHANGE_RATE: !Ref UsdExchangeRate
         ORDERS_TABLE: !Ref OrdersTable
-        # Ticket 72: the (userId, appId) and (deviceId, appId) tables. A key
-        # schema cannot be altered in place, so these are new tables and the
-        # originals below are kept, read-only, until the backfill is verified.
+        # Ticket 72: the (userId, appId) and (deviceId, appId) tables. The
+        # pre-appId originals they replaced are gone from this template as of
+        # Ticket 74, along with the read-through that used to reach them.
         LICENSES_TABLE: !Ref LicensesV2Table
         TRIALS_TABLE: !Ref TrialsV2Table
         LICENSES_KEY_INDEX: licenseKey-index
-        LEGACY_LICENSES_TABLE: !Ref LicensesTable
-        LEGACY_TRIALS_TABLE: !Ref TrialsTable
         DEMOS_TABLE: !Ref DemosTable
         DEMO_DAYS: !Ref DemoDays
         DEMO_PLAN_ID: !Ref DemoPlanId
@@ -204,39 +202,11 @@ Resources:
           Projection:
             ProjectionType: ALL
 
-  # Superseded by LicensesV2Table (Ticket 72). Retained rather than deleted:
-  # dropping it from this template must never take the rows with it, and the
-  # function still reads it on a miss until the backfill is confirmed.
-  LicensesTable:
-    Type: AWS::DynamoDB::Table
-    DeletionPolicy: Retain
-    UpdateReplacePolicy: Retain
-    Properties:
-      BillingMode: PAY_PER_REQUEST
-      AttributeDefinitions:
-        - AttributeName: userId
-          AttributeType: S
-      KeySchema:
-        - AttributeName: userId
-          KeyType: HASH
-
-  # ── Ticket 33: free trial (3 days — Ticket 42) ──────────────────────────────
-  # Superseded by TrialsV2Table (Ticket 72); retained for the same reason as
-  # LicensesTable above.
-  TrialsTable:
-    Type: AWS::DynamoDB::Table
-    DeletionPolicy: Retain
-    UpdateReplacePolicy: Retain
-    Properties:
-      BillingMode: PAY_PER_REQUEST
-      AttributeDefinitions:
-        - AttributeName: deviceId
-          AttributeType: S
-      KeySchema:
-        - AttributeName: deviceId
-          KeyType: HASH
-
-  # ── Ticket 72: the same tables, keyed per app ───────────────────────────────
+  # ── Ticket 33 / 72: free trial and licences, keyed per app ─────────────────
+  # The pre-appId LicensesTable and TrialsTable stood here until Ticket 74.
+  # They carried DeletionPolicy: Retain, so removing them from this template
+  # only stopped CloudFormation managing them — the rows are still in the
+  # account and must be deleted by hand once they are certainly not needed.
   # deviceId/userId partitions and appId sorts, not the other way round: with
   # a handful of apps, appId as the partition key would funnel every write on
   # the account into that handful of partitions. This way the load spreads and
@@ -285,7 +255,7 @@ Resources:
             ProjectionType: ALL
 
   # ── Demo licences, keyed by "<appId>#<deviceId>" ────────────────────────────
-  # Separate from TrialsTable because a demo is scoped per app as well as per
+  # Separate from TrialsV2Table because a demo is scoped per app as well as per
   # device: a demo spent in one app on a machine is not another app's demo to
   # refuse. See _demo_key() in handler.py.
   DemosTable:
@@ -351,16 +321,6 @@ Resources:
                   - !Sub '${LicensesV2Table.Arn}/index/*'
                   - !GetAtt TrialsV2Table.Arn
                   - !GetAtt DemosTable.Arn
-              # Legacy tables: read-only. The function adopts a row it finds
-              # there into the V2 table but never writes back, so GetItem is
-              # the whole of what it needs — and withholding the write is what
-              # makes "the old table is the record of what things were" true
-              # rather than merely intended.
-              - Effect: Allow
-                Action: dynamodb:GetItem
-                Resource:
-                  - !GetAtt LicensesTable.Arn
-                  - !GetAtt TrialsTable.Arn
 
   LicenseVerifier:
     Type: AWS::Serverless::Function
@@ -404,10 +364,6 @@ Outputs:
     Value: !GetAtt LicenseVerifierUrl.FunctionUrl
   OrdersTableName:
     Value: !Ref OrdersTable
-  LicensesTableName:
-    Value: !Ref LicensesTable
-  TrialsTableName:
-    Value: !Ref TrialsTable
   TrialsV2TableName:
     Value: !Ref TrialsV2Table
   LicensesV2TableName:

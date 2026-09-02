@@ -63,19 +63,12 @@ ORDERS_TABLE            DynamoDB table name for payment orders (Ticket 28).
 LICENSES_TABLE          DynamoDB table name mapping (userId, appId) →
                         current license token (Ticket 28 auto-issuance path;
                         independent of the legacy Stripe-metadata lookup).
-                        Ticket 72 re-keyed it — see LEGACY_LICENSES_TABLE.
+                        Ticket 72 re-keyed it to (userId, appId).
 LICENSES_KEY_INDEX      Name of the GSI over licenseKey on LICENSES_TABLE.
                         Defaults to "licenseKey-index". The verify route
                         queries it to find which app a key belongs to; a key
                         with no row is unknown rather than foreign and
                         verifies exactly as it did before.
-LEGACY_LICENSES_TABLE   Ticket 72: the pre-appId licence table, keyed by
-                        userId alone. Read on a miss only, and the row found
-                        is adopted under DEFAULT_APP_ID — which makes the
-                        deploy safe whether migrate_app_id.py has run or not.
-                        Unset once the backfill is verified.
-LEGACY_TRIALS_TABLE     Ticket 72: the same, for the pre-appId trial table
-                        keyed by deviceId alone.
 PAYMENT_SUCCESS_URL     Stripe Checkout success_url base (Ticket 28); the app
                         never actually loads this page — see order-status
                         polling — but Stripe requires a valid URL.
@@ -542,13 +535,6 @@ def _licenses_table():  # noqa: ANN201
     return _ddb_table(os.environ.get("LICENSES_TABLE", ""))
 
 
-def _legacy_licenses_table():  # noqa: ANN201
-    """The pre-Ticket-72 licence table, keyed by userId alone. Read-through
-    on a miss, for the same reason and with the same lifetime as
-    _legacy_trials_table() — see the note there."""
-    return _ddb_table(os.environ.get("LEGACY_LICENSES_TABLE", ""))
-
-
 def _license_key_index() -> str:
     """GSI over licenseKey, so the verify route can ask which app a key
     belongs to. It is the only lookup in this file that does not already know
@@ -689,45 +675,12 @@ def _license_key(user_id: str, app_id: str) -> dict[str, str]:
     return {"userId": user_id, "appId": app_id}
 
 
-def _adopt_legacy_license(user_id: str, app_id: str) -> dict[str, Any] | None:
-    """A pre-Ticket-72 licence row for this user, re-keyed under
-    DEFAULT_APP_ID — the app that bought it, since the old table had no other.
-
-    Restricted to DEFAULT_APP_ID for the reason _adopt_legacy_trial() is: a
-    purchase made in one app is not a licence for another, and this ticket
-    exists to stop exactly that. A request for any other app sees nothing
-    here and is unlicensed, which is correct."""
-    if app_id != DEFAULT_APP_ID:
-        return None
-    legacy = _legacy_licenses_table()
-    if legacy is None:
-        return None
-    try:
-        old = _from_decimal(legacy.get_item(Key={"userId": user_id}).get("Item"))
-    except Exception:  # noqa: BLE001
-        return None
-    if not old:
-        return None
-
-    adopted = {**old, "appId": app_id, "migratedAt": int(time.time())}
-    table = _licenses_table()
-    if table is not None:
-        try:
-            table.put_item(Item=adopted, ConditionExpression="attribute_not_exists(userId)")
-        except Exception:  # noqa: BLE001
-            existing = _from_decimal(table.get_item(Key=_license_key(user_id, app_id)).get("Item"))
-            if existing:
-                return existing
-    return adopted
-
-
 def _get_license_row(user_id: str, app_id: str) -> dict[str, Any] | None:
     table = _licenses_table()
     if table is None:
         return None
     resp = table.get_item(Key=_license_key(user_id, app_id))
-    row  = _from_decimal(resp.get("Item"))
-    return row if row is not None else _adopt_legacy_license(user_id, app_id)
+    return _from_decimal(resp.get("Item"))
 
 
 def _find_license_by_key(license_key: str) -> dict[str, Any] | None:
@@ -796,19 +749,6 @@ def _trials_table():  # noqa: ANN201
     return _ddb_table(os.environ.get("TRIALS_TABLE", ""))
 
 
-def _legacy_trials_table():  # noqa: ANN201
-    """The pre-Ticket-72 table, keyed by deviceId alone.
-
-    Read-through only, and only on a miss: a key schema cannot be altered in
-    place, so the appId dimension needs a new table, and a deploy that
-    switched to it cleanly would hand a second trial to every device that had
-    already spent one. Every read that misses in the current table looks here
-    and adopts what it finds under DEFAULT_APP_ID, which makes the migration
-    script a backfill rather than a cutover — correct whether it has run yet
-    or not. Unset once the backfill is verified and the old table is gone."""
-    return _ddb_table(os.environ.get("LEGACY_TRIALS_TABLE", ""))
-
-
 def _trial_key(app_id: str, device_id: str) -> dict[str, str]:
     """deviceId is the partition key and appId the sort key, not the other way
     round. With a handful of apps, appId as the partition key would funnel
@@ -856,53 +796,12 @@ def _apply_trial_duration_cap(trial: dict[str, Any]) -> dict[str, Any]:
     return {**trial, "trialEnd": capped_end}
 
 
-def _adopt_legacy_trial(app_id: str, device_id: str) -> dict[str, Any] | None:
-    """A pre-Ticket-72 record for this device, re-keyed under DEFAULT_APP_ID.
-
-    Only DEFAULT_APP_ID: the old table had no app dimension, and every record
-    in it was written by the app that value names. Adopting it for whichever
-    app happened to ask first would hand that app someone else's spent trial
-    and hand the real owner a fresh one — exactly backwards. So a request for
-    any other app sees no legacy record and starts its own trial, which is
-    the behaviour this ticket exists to produce.
-
-    The copy is written back so the next read is a plain hit; a write that
-    fails still returns the record, because being told the truth about a
-    spent trial matters more than the cache."""
-    if app_id != DEFAULT_APP_ID:
-        return None
-    legacy = _legacy_trials_table()
-    if legacy is None:
-        return None
-    try:
-        old = _from_decimal(legacy.get_item(Key={"deviceId": device_id}).get("Item"))
-    except Exception:  # noqa: BLE001
-        return None
-    if not old:
-        return None
-
-    adopted = {**old, "appId": app_id, "migratedAt": int(time.time())}
-    table = _trials_table()
-    if table is not None:
-        try:
-            # attribute_not_exists guards the race with a concurrent
-            # activation: whoever wrote first keeps their trialStart.
-            table.put_item(Item=adopted, ConditionExpression="attribute_not_exists(deviceId)")
-        except Exception:  # noqa: BLE001
-            existing = _from_decimal(table.get_item(Key=_trial_key(app_id, device_id)).get("Item"))
-            if existing:
-                return existing
-    return adopted
-
-
 def _get_trial(app_id: str, device_id: str) -> dict[str, Any] | None:
     table = _trials_table()
     if table is None:
         return None
     resp  = table.get_item(Key=_trial_key(app_id, device_id))
     trial = _from_decimal(resp.get("Item"))
-    if trial is None:
-        trial = _adopt_legacy_trial(app_id, device_id)
     if trial is None:
         return None
     return _apply_trial_duration_cap(trial)
