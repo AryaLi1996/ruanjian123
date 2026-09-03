@@ -185,7 +185,7 @@ Stack 名默认 `ruanjian-license`，区域 `us-east-1`，AWS 账号 `6416289811
   **POST 写进请求体、GET 拼进 query string**（工具函数在 `src/main/license-request.ts`）。
   因此上表里的每条路由——verify、`trial/*`、`create-order`、`order-status`、
   `payment-history`、`plans`、`payment-methods`——都自动带上 `appId`，新增路由无需再记得加。
-- 设备 ID 生成逻辑不变（`device-id.ts`）；试用记录仍按设备存储，由服务端按 `appId` 分区。
+- 设备 ID 生成逻辑见 §5.3（Ticket 76 改为优先用操作系统机器标识）；试用记录仍按设备存储，由服务端按 `appId` 分区。
 - 向后兼容：老 token 里没有 `appId` 字段，本地视为合法，服务端在下一次 verify 时补齐。
   只有明确标记为**别的** `appId` 的 token 才会被拒绝。
 - 不匹配时（服务端返回 `code: 'app_id_mismatch'` 或消息含 appId mismatch）：
@@ -365,9 +365,19 @@ webhook 且 metadata 无 `orderId` → `_generate_license_key()` 生成
 
 ### 5.3 免费试用（Ticket 33，时长 3 天 / Ticket 42）
 
-- 客户端用 `getDeviceId()` 生成设备指纹：
-  优先复用已落盘的 `.device_id`；否则由 **MAC 地址集合 + platform + arch**
-  做 SHA-256（重装后仍是同一个 id，防止反复白嫖）；无可用 MAC 时退回随机 UUID。
+- 客户端用 `getDeviceId()` 生成设备指纹，三级信号（Ticket 76 修订）：
+  1. **已落盘的 `.device_id`** —— 永远优先，所以既有安装的 id 绝不会变。
+  2. **操作系统自己的机器标识** —— Linux `/etc/machine-id`、macOS `IOPlatformUUID`、
+     Windows `MachineGuid`。装系统时写下、和这个应用的安装卸载无关，正是想要的性质。
+  3. **过滤后的 MAC 信号** + platform + arch，做 SHA-256。
+  4. 都拿不到时退回随机 UUID（不跨重装，但好过拒绝开试用）。
+
+  **Ticket 76 之前只有第 3 条，而且不过滤**——信号是「那一刻存在的每一块非回环网卡」：
+  Docker 网桥、VPN 的 tun、扩展坞的网口，以及决定性的 **Wi-Fi MAC 随机化**
+  （macOS / Windows 默认每个网络一个私有 MAC）。卸载和重装之间换过网络，集合就变了，
+  摘要就变了，服务端于是完全正确地判定这是一台没见过的机器——**这就是物理机重装后
+  试用期被重置的原因**。现在按「本地管理位」（首字节 bit 1）剔除随机/虚拟地址，
+  再按接口名剔除已知的虚拟网卡。
 - `POST /trial/activate`：`put_item(..., ConditionExpression="attribute_not_exists(deviceId)")`
   —— 第一次创建，之后每次调用都命中条件失败分支并**原样返回**已有记录，
   绝不重置 `trialStart/trialEnd`。
