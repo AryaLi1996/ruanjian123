@@ -232,7 +232,31 @@ base64url(header) . base64url(payload) . hex(HMAC-SHA256)
 
 因为一旦生产仍用它，任何人都能离线伪造有效 token。
 
-### 4.1 轮换签名密钥
+### 4.1 密钥怎么进到打包后的应用里
+
+**不是通过环境变量。** 打包后的 main 进程里，`process.env['LICENSE_SIGNING_SECRET']`
+是在**最终用户的机器上**、启动那一刻读的——那里什么都没设。把密钥传给发布 job 曾经
+什么也没做：**每一个打包出去的构建都在用 `license-config.ts` 里那个公开默认值校验
+授权**，无论 job 拿到了什么。
+
+`electron.vite.config.ts` 的 `main.define` 补上了这一环：构建时把这几个名字替换成
+字面量，塞进 main 的 bundle。
+
+| | |
+|---|---|
+| 替换的名字 | `LICENSE_SIGNING_SECRET`、`PREVIOUS_LICENSE_SIGNING_SECRET`、`LICENSE_URL`、`APP_ID`、`VITE_APP_ID` |
+| 构建没给值时 | **不替换**，`process.env['…'] ?? DEFAULT` 表达式原样保留，行为和今天一模一样——公开默认值，加上启动告警 |
+| 谁负责传 | `.github/workflows/build-*.yml` 的 `npx electron-vite build` 步骤，从仓库 secrets |
+| `npm run dev` | 不受影响，仍然读真实环境变量 |
+
+**一个值如果不在那个构建步骤的 env 里，它就到不了应用。** 传给 electron-builder
+那一步也没用——替换发生在 `electron-vite build`。
+
+密钥于是以明文躺在 bundle 里。这是「客户端持密钥做 HMAC 校验」的固有代价，§4 已经
+写明并指出 RSA 是解法。但发一个私有字符串不比发公开的那个更糟：区别在于「要从二进制
+里挖出来才能伪造」和「任何人照着公开仓库就能伪造」。
+
+### 4.2 轮换签名密钥
 
 轮换 HMAC 密钥和轮换密码不是一回事：**两端持有同一个字符串**，所以服务端一旦改用
 新密钥签发，**每一个已经发到用户手上的 token 都会立刻验不过**。客户端把这读作
@@ -243,7 +267,7 @@ base64url(header) . base64url(payload) . hex(HMAC-SHA256)
 
 | 步骤 | 做什么 |
 |---|---|
-| 1. 发一个两把都收的版本 | 构建环境里设 `PREVIOUS_LICENSE_SIGNING_SECRET=<当前密钥>`，`LICENSE_SIGNING_SECRET` 不动。此刻对任何人都毫无变化。 |
+| 1. 发一个两把都收的版本 | 在**构建 workflow 的 env** 里设 `PREVIOUS_LICENSE_SIGNING_SECRET=<当前密钥>`，`LICENSE_SIGNING_SECRET` 不动——由 §4.1 的 define 塞进 bundle。**设在那个构建步骤看不到的地方等于没设。** 此刻对任何人都毫无变化。 |
 | 2. 等 | 等到装机量里足够多的人升上来。没有办法加速，而**抢跑正是这整件事要避免的**。 |
 | 3. 服务端切换 | `sam deploy --parameter-overrides LicenseSigningSecret=<新密钥>`。新 token 用新密钥签，旧 token 在客户端仍然验得过。 |
 | 4. 等它自己收敛 | 每个客户端在下次启动时自行换掉手上的 token——见下。 |
@@ -618,7 +642,7 @@ Function URL 是 `AuthType: NONE`，即完全公开，所有输入都是攻击�
 | 环境变量 | SAM 参数 | 必需 | 说明 |
 |---|---|---|---|
 | `LICENSE_SIGNING_SECRET` | `LicenseSigningSecret` | ✅ | HMAC 密钥，≥32 字符，须与客户端一致 |
-| `PREVIOUS_LICENSE_SIGNING_SECRET` | — | | **仅客户端**。轮换期间额外接受的上一把密钥，从不用于签发——见 §4.1。Lambda 不读它 |
+| `PREVIOUS_LICENSE_SIGNING_SECRET` | — | | **仅客户端**。轮换期间额外接受的上一把密钥，从不用于签发——见 §4.2。Lambda 不读它 |
 | `MOCK_MODE` | `MockMode` | | `true` 时任何 key 都通过，仅 CI/演示 |
 | `PAYMENT_PROVIDER` | `PaymentProvider` | | `custom`(默认)/`stripe`/`lemonsqueezy`/`paddle` |
 | `EXPIRY_DAYS` | `ExpiryDays` | | 旧 key 流程签发的 token 有效期，默认 30 |
@@ -642,7 +666,7 @@ Function URL 是 `AuthType: NONE`，即完全公开，所有输入都是攻击�
 | `DISABLED_PAYMENT_METHODS` | — | | 逗号分隔，强制隐藏某些支付方式 |
 
 客户端侧：`LICENSE_URL`（main）/ `VITE_LICENSE_URL`（renderer）、
-`LICENSE_SIGNING_SECRET`、`PREVIOUS_LICENSE_SIGNING_SECRET`（见 §4.1）、
+`LICENSE_SIGNING_SECRET`、`PREVIOUS_LICENSE_SIGNING_SECRET`（见 §4.2）、
 `CHECKOUT_URL`、`LICENSE_PROVIDER`。`DEMO_LICENSE_KEY` 已随硬编码演示密钥一并移除。
 
 ---
