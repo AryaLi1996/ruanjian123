@@ -96,7 +96,19 @@ else
   execute_flag=(--no-confirm-changeset)
 fi
 
-if ! sam deploy \
+# `--no-fail-on-empty-changeset` covers an empty change-set on the apply path,
+# but *not* the plan path: with `--no-execute-changeset`, sam deploy prints
+# "Error: No changes to deploy" and exits 1 regardless of that flag. Which
+# means any push touching serverless/verify-license/** that does not alter the
+# deployed template — a doc, a test, migrate_app_id.py — fails the plan job
+# even though nothing is wrong. A deploy pipeline that goes red for a
+# no-op is a pipeline people learn to ignore, so the output is inspected and
+# that one case is reported as what it is.
+deploy_log=$(mktemp)
+trap 'rm -f "$deploy_log"' EXIT
+
+set +e
+sam deploy \
   --no-confirm-changeset \
   --no-fail-on-empty-changeset \
   --template-file .aws-sam/build/template.yaml \
@@ -105,7 +117,21 @@ if ! sam deploy \
   --resolve-s3 \
   --capabilities CAPABILITY_NAMED_IAM \
   "${execute_flag[@]}" \
-  --parameter-overrides "${overrides[@]}"; then
+  --parameter-overrides "${overrides[@]}" 2>&1 | tee "$deploy_log"
+deploy_status=${PIPESTATUS[0]}
+set -e
+
+# Matched on sam's own wording. Narrow on purpose: anything else that exits
+# non-zero is still a failure, and a future sam that stops emitting this
+# reverts to failing loudly rather than passing silently.
+no_changes=false
+if [[ $deploy_status -ne 0 ]] \
+   && grep -qiF "No changes to deploy" "$deploy_log"; then
+  no_changes=true
+  deploy_status=0
+fi
+
+if [[ $deploy_status -ne 0 ]]; then
   echo "Deployment failed. Recent CloudFormation events:" >&2
   aws cloudformation describe-stack-events \
     --stack-name "$STACK_NAME" \
@@ -114,6 +140,14 @@ if ! sam deploy \
     --query 'StackEvents[].{LogicalId:LogicalResourceId,Status:ResourceStatus,Reason:ResourceStatusReason}' \
     --output table >&2 || true
   exit 1
+fi
+
+if [[ "$no_changes" == "true" ]]; then
+  echo
+  echo "The deployed stack already matches this template — nothing to change."
+  echo "Treating an empty change-set as success: the commit that triggered this"
+  echo "run touched serverless/verify-license/** without altering the template."
+  exit 0
 fi
 
 # Nothing was applied in plan mode, so the stack outputs would describe the
