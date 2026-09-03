@@ -97,6 +97,8 @@ else
 fi
 
 if ! sam deploy \
+  --no-confirm-changeset \
+  --no-fail-on-empty-changeset \
   --template-file .aws-sam/build/template.yaml \
   --stack-name "$STACK_NAME" \
   --region "$AWS_REGION" \
