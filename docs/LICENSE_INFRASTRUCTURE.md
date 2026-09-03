@@ -786,3 +786,63 @@ workflow 读不到。两个 environment 都要把 Deployment branches 限定为
 | 换部署账号或 stack 名 | `scripts/deploy-license.sh` 的 `EXPECTED_ACCOUNT` / `STACK_NAME` |
 | 加新 API 路由 | `handler.py` 末尾 `handler()` 的路径分发链 + `subscription-monitor.ts` 的 `_request()` 调用 |
 | 改本应用的 `appId` | `license-config.ts` 的 `APP_ID`（或构建时 `VITE_APP_ID`），并同步服务端登记与本文档 §3.1 |
+
+---
+
+## 16. 生成测试激活码（`generate_test_license.py`）
+
+服务端没有任何一条路由会凭空发一个 licenseKey：密钥只在 Stripe webhook 和
+`_issue_or_extend_license()` 里诞生，两者都要先有付款。所以测试"输入激活码
+→ 解锁"这条链路，必须在带外造一个码，这就是
+`serverless/verify-license/generate_test_license.py` 的用途。
+
+它 **import handler.py** 而不是复述其中任何逻辑，因此生成的密钥格式、令牌
+声明、表记录三者与已部署函数天然一致——`_valid_license_key_format`、
+`create_token`、`_license_key` 都是同一份代码。
+
+### 两种模式
+
+| 模式 | 做什么 | 什么时候用 |
+|---|---|---|
+| 默认（离线） | 打印一个 `TEST-XXXX-XXXX-XXXX` 密钥和一枚用 `LICENSE_SIGNING_SECRET` 签名的令牌，**不写任何存储** | `MOCK_MODE=true` 或 `custom` provider 下任何合法格式的密钥都能通过；也可以把令牌直接塞给只验签名的客户端 |
+| `--write` | 额外按 `_issue_or_extend_license()` 的字段形状把记录写入 `LICENSES_TABLE`（键为 `(userId, appId)`） | 需要真实部署认这个码时——验证路由通过 licenseKey GSI 找到记录，读出它的 `appId` 和 `expiresAt` |
+
+`--write` 需要 boto3、AWS 凭证，以及 `LICENSES_TABLE` 指向已部署的表名；表
+没配置时报错而不是静默成功，避免把一个其实没人存过的码当成可用的码交出去。
+
+### 常用命令
+
+```bash
+cd serverless/verify-license
+
+# 给兄弟应用（去水印客户端，appId = shuyin）发一个年付测试码并写表
+LICENSES_TABLE=<已部署的表名> \
+  python3 generate_test_license.py --app-id shuyin --plan annual --write
+
+# 一次五个，JSON 输出，什么都不写
+python3 generate_test_license.py --count 5 --json
+
+# 已经过期的授权——这是有意走到客户端 expired / 宽限期状态的唯一办法
+python3 generate_test_license.py --days -1
+```
+
+| 参数 | 含义 |
+|---|---|
+| `--app-id` | 授权归属哪个应用，默认 `DEFAULT_APP_ID`（`smoothvoice`）；去水印客户端是 `shuyin` |
+| `--plan` | `monthly` / `quarterly` / `semi_annual` / `annual` / `demo`；`demo` 的长度取 `DEMO_DAYS` 而非套餐表 |
+| `--days` | 覆盖套餐长度，可以为负 |
+| `--user-id` | 默认按 `custom` provider 的同一套哈希从密钥推导，因此不写表的码也能验成同一个用户 |
+| `--key` | 用指定密钥而不是随机生成（隐含 `--count 1`） |
+| `--count` / `--prefix` / `--json` | 数量、密钥前缀、输出格式 |
+
+`--app-id` 不是可选的细节：写给 `smoothvoice` 的码在客户端以 `shuyin` 激活
+时会被验证路由以 `app_id_mismatch` 403 拒绝——这正是 §3.1 的隔离要生效的
+地方。
+
+单元测试在 `test_generate_test_license.py`，断言走的是 handler 自己的校验
+函数和 `handler()` 验证路由，而不是复检脚本刚生成的形状。CI 的 test job 现
+在用 `python3 -m unittest discover` 跑整个目录，新增测试文件不需要再改
+workflow。
+
+**这些码等同于一次购买**：对任何用同一把密钥签名的部署来说，它们与付费令牌
+无法区分。生产密钥下生成的码要按凭证对待。
