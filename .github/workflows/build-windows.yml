@@ -36,6 +36,14 @@ jobs:
         run: bash scripts/package-engine.sh --force
 
       - name: Build renderer + main
+        # Substituted into the main bundle by electron.vite.config.ts's define.
+        # process.env in a packaged main process is read on the end user's
+        # machine, so a secret that is not in scope *here* never reaches the
+        # app — it would silently fall back to the public default.
+        env:
+          LICENSE_SIGNING_SECRET: ${{ secrets.LICENSE_SIGNING_SECRET }}
+          PREVIOUS_LICENSE_SIGNING_SECRET: ${{ secrets.PREVIOUS_LICENSE_SIGNING_SECRET }}
+          LICENSE_URL: ${{ secrets.LICENSE_URL }}
         run: npx electron-vite build
 
       # `npx electron-builder ...` produced zero output (even with

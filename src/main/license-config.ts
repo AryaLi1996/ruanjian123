@@ -29,7 +29,13 @@ const DEFAULT_SIGNING_SECRET = 'ruanjian-dev-signing-secret-v1-change-in-product
 // expired, a later build drops this.
 //
 // Empty means "one secret", which is the normal state — this is set only
-// while a rotation is in flight. See docs/LICENSE_INFRASTRUCTURE.md §4.1.
+// while a rotation is in flight. See docs/LICENSE_INFRASTRUCTURE.md §4.2.
+//
+// In a packaged build this is not read from the environment at all: the main
+// bundle runs on the end user's machine, where nothing sets it. It is
+// substituted at build time by electron.vite.config.ts's main.define, from
+// the build workflow's env — see §4.1. A value the build step cannot see
+// never reaches the app.
 const PREVIOUS_SIGNING_SECRET = (process.env['PREVIOUS_LICENSE_SIGNING_SECRET'] ?? '').trim()
 
 // ── Multi-channel payment (Ticket 28) ─────────────────────────────────────────
