@@ -38,6 +38,11 @@ Usage:
     # Then, with --apply, actually write:
     python3 migrate_app_id.py ... --apply
 
+Pass --region when your shell and this script might resolve different ones —
+the AWS CLI reads --region/AWS_DEFAULT_REGION, boto3 falls back to
+~/.aws/config, and a mismatch shows up as ResourceNotFoundException on a table
+`aws dynamodb list-tables` just printed.
+
 The V2 table names come from the stack outputs:
 
     aws cloudformation describe-stacks --stack-name ruanjian-license \\
@@ -60,9 +65,23 @@ from typing import Any, Iterator
 DEFAULT_APP_ID = "smoothvoice"
 
 
+# Set once from --region, so every table this script touches is in the region
+# the caller named rather than whichever one the ambient profile happens to
+# resolve to. Getting that wrong is not a loud failure: listing the tables with
+# one region and scanning them with another comes back as
+# ResourceNotFoundException on a table you just saw.
+_REGION: str | None = None
+
+
 def _table(name: str):  # noqa: ANN201
     import boto3  # noqa: PLC0415
-    return boto3.resource("dynamodb").Table(name)
+    session = boto3.session.Session(**({"region_name": _REGION} if _REGION else {}))
+    if session.region_name is None:
+        raise SystemExit(
+            "No AWS region: pass --region, or set AWS_DEFAULT_REGION, or put one "
+            "in ~/.aws/config."
+        )
+    return session.resource("dynamodb").Table(name)
 
 
 def _scan_all(table, page_size: int = 500) -> Iterator[dict[str, Any]]:
@@ -124,9 +143,17 @@ def main() -> int:
     ap.add_argument("--licenses-to", help="LicensesV2Table name")
     ap.add_argument("--app-id", default=DEFAULT_APP_ID,
                     help=f"appId to stamp on every migrated row (default: {DEFAULT_APP_ID})")
+    ap.add_argument("--region",
+                    help="AWS region the tables live in. Defaults to AWS_DEFAULT_REGION / "
+                         "AWS_REGION / ~/.aws/config. Pass it explicitly when the shell "
+                         "listing the tables and this script might disagree — they must "
+                         "name the same region or a table that exists reads as missing.")
     ap.add_argument("--apply", action="store_true",
                     help="actually write. Without it this is a dry run and touches nothing.")
     args = ap.parse_args()
+
+    global _REGION  # noqa: PLW0603
+    _REGION = args.region
 
     if not (args.trials_from or args.licenses_from):
         ap.error("nothing to do: pass --trials-from and/or --licenses-from")
@@ -135,8 +162,16 @@ def main() -> int:
     if bool(args.licenses_from) != bool(args.licenses_to):
         ap.error("--licenses-from and --licenses-to go together")
 
+    # Resolved rather than echoed back: --region unset is the case worth
+    # showing, since that is when the two halves can silently disagree.
+    import boto3  # noqa: PLC0415
+    region = boto3.session.Session(
+        **({"region_name": _REGION} if _REGION else {})
+    ).region_name
+
     mode = "APPLY" if args.apply else "DRY RUN (nothing is written)"
-    print(f"Ticket 72 backfill — {mode}, stamping appId={args.app_id}\n")
+    print(f"Ticket 72 backfill — {mode}, stamping appId={args.app_id}")
+    print(f"Region: {region or '<unresolved>'}\n")
 
     total_copied = total_skipped = 0
     for label, src, dst, key_field in (
