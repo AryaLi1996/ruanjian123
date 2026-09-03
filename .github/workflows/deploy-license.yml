@@ -119,10 +119,13 @@ jobs:
 
       # Fails the run before anything touches AWS if the trial-duration cap
       # logic (or anything else handler.py's suite covers) is broken —
-      # see serverless/verify-license/test_handler.py.
+      # see serverless/verify-license/test_handler.py. Discovery rather than
+      # a named module, so a suite added next to it runs without this step
+      # having to be remembered — test_generate_test_license.py is the first
+      # to arrive that way.
       - name: Run handler.py unit tests
         working-directory: serverless/verify-license
-        run: python3 -m unittest test_handler -v
+        run: python3 -m unittest discover -p 'test_*.py' -v
 
   plan:
     name: Plan (change-set preview, cannot apply)
