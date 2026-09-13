@@ -398,6 +398,12 @@ def train_model(args):
     epochs     = int(params.get("epochs",  10))   # small default for quick CI smoke-test
     batch_size = int(params.get("batch",   16))
     lr         = float(params.get("lr",    1e-4))
+    # Vocal isolation runs before chunking on material the SNR estimate calls
+    # dirty (trainer.isolate_vocals). On by default — training on an
+    # un-isolated upload is what makes a model reproduce the backing track
+    # instead of the singer — but a caller that has already cleaned its audio
+    # can skip the pass.
+    isolate    = bool(params.get("isolate", True))
     data_dir   = Path(params.get("data_dir",
                                  str(_writable_dir() / "_test_data")))
 
@@ -426,6 +432,7 @@ def train_model(args):
         lr            = lr,
         device        = device,
         progress_path = output.parent / f"progress_{mode}.json",
+        isolate       = isolate,
     )
     return {k: (bool(v) if isinstance(v, (bool,)) else v) for k, v in result.items()}
 

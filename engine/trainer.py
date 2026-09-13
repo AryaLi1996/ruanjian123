@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import sys
 import time
 from pathlib import Path
@@ -214,6 +215,162 @@ def preprocess_vocals(
     return chunk_idx
 
 
+# ── Vocal isolation (pre-pass) ────────────────────────────────────────────────
+#
+# Why this step exists: preprocess_vocals() used to feed whatever the user
+# uploaded straight into the training loop after a resample and a loudness
+# normalise. A full song, or a vocal stem taken from the "standard"
+# separation path, carries backing track / room noise into every chunk, and
+# a LoRA fine-tune has no way to tell "the singer's timbre" from "everything
+# else that was in the room" — so the noise is learned as part of the voice
+# and comes back out of the trained model. That is the "result is noisy, the
+# human voice is hard to hear" report.
+#
+# The replacement is separation.isolate_lead_vocal() — the centre-channel
+# extraction in vocal_harmony_split.onnx. Neither of separate()'s two modes
+# can be used here: both put a 4 kHz high-pass residual (demucs_nano.onnx /
+# sep_main.onnx) in front, which discards the sung fundamental outright, and
+# "enhanced" runs its centre-channel split *after* that residual, so the
+# voice is already gone by the time it gets there. Correlation with a
+# synthetic centre-panned voice, measured in _test_vocal_isolation.py:
+#
+#     separate(mode="standard")  "vocals"        -0.09
+#     separate(mode="enhanced")  "lead_dry"      -0.09
+#     isolate_lead_vocal()                       +0.66
+#
+# Two honest caveats. These are stub models (README §6), so the centre
+# extraction is a modest gain — it cancels what is panned off centre and
+# leaves mono-summed noise alone. And the win here is mostly in what it
+# stops doing: a training path that reaches for separate() removes the
+# voice rather than cleaning it. The isolation step itself is what matters,
+# and it is the seam to hang a real model on once one exists.
+#
+# It runs automatically on material the SNR estimate calls dirty. Clean
+# uploads are left untouched — isolation is not free, and a studio-dry vocal
+# has nothing to gain from it.
+
+ISOLATION_STEM = "lead_dry"
+
+
+class IsolationReport(TypedDict):
+    """What the pre-pass did, so the caller can tell the user."""
+    enabled:        bool
+    n_files:        int
+    n_isolated:     int    # files routed through the enhanced chain
+    n_clean:        int    # files already above the SNR floor, used as-is
+    n_failed:       int    # files separation could not process (original used)
+    snr_before_db:  float | None
+    snr_after_db:   float | None
+    min_snr_db:     float
+    stem:           str
+    unavailable:    str | None   # why isolation was skipped entirely, if it was
+
+
+def _isolate_one(src: Path, out_dir: Path) -> Path | None:
+    """Run separation.isolate_lead_vocal() on one file and return the isolated
+    stem, or None if it could not be produced.
+
+    Imported lazily: separation pulls in onnx/onnxruntime and the device
+    detector, which a training run that needs no isolation should not pay for.
+    """
+    from separation import isolate_lead_vocal  # noqa: PLC0415
+
+    res = isolate_lead_vocal(src, output_dir=out_dir / src.stem)
+    out = Path(res["output_path"])
+    return out if out.exists() else None
+
+
+def _file_snr_db(path: Path) -> float | None:
+    try:
+        audio, _sr = sf.read(str(path), dtype="float32", always_2d=True)
+    except Exception:
+        return None
+    return estimate_snr_db(audio.mean(axis=1))
+
+
+def isolate_vocals(
+    input_dir:  Path,
+    work_dir:   Path,
+    min_snr_db: float = MIN_SNR_DB,
+    enabled:    bool  = True,
+) -> tuple[Path, IsolationReport]:
+    """
+    Isolate the singing voice in `input_dir` before it reaches the training
+    loop, and return (directory to train from, report).
+
+    Every readable file is SNR-checked. Files at or above `min_snr_db` are
+    already clean enough and are referenced as-is; files below it are run
+    through the enhanced separation chain and replaced by their lead_dry
+    stem. A file the chain cannot process falls back to the original — a
+    noisy model beats a failed run.
+
+    Returns `input_dir` unchanged when nothing needed isolating, so a clean
+    upload copies no audio at all.
+    """
+    exts  = {".wav", ".flac", ".ogg", ".mp3"}
+    files = ([f for f in sorted(input_dir.iterdir())
+              if f.is_file() and f.suffix.lower() in exts]
+             if input_dir.exists() else [])
+
+    report = IsolationReport(
+        enabled=enabled, n_files=len(files), n_isolated=0, n_clean=0, n_failed=0,
+        snr_before_db=None, snr_after_db=None, min_snr_db=min_snr_db,
+        stem=ISOLATION_STEM, unavailable=None,
+    )
+    if not enabled or not files:
+        if not enabled:
+            report["unavailable"] = "disabled by caller"
+        return input_dir, report
+
+    snr_before: list[float] = []
+    snr_after:  list[float] = []
+    plan: list[tuple[Path, bool]] = []   # (file, needs_isolation)
+
+    for f in files:
+        snr = _file_snr_db(f)
+        if snr is None:
+            continue           # unreadable: preprocess_vocals skips it too
+        snr_before.append(snr)
+        plan.append((f, snr < min_snr_db))
+
+    report["snr_before_db"] = round(float(np.mean(snr_before)), 2) if snr_before else None
+
+    if not any(needs for _f, needs in plan):
+        report["n_clean"]      = len(plan)
+        report["snr_after_db"] = report["snr_before_db"]
+        return input_dir, report
+
+    work_dir.mkdir(parents=True, exist_ok=True)
+    stems_dir = work_dir / "_stems"
+
+    for f, needs in plan:
+        if not needs:
+            report["n_clean"] += 1
+            dst = work_dir / f.name
+            if not dst.exists():
+                shutil.copyfile(f, dst)
+            snr_after.append(_file_snr_db(dst) or 0.0)
+            continue
+        try:
+            stem = _isolate_one(f, stems_dir)
+        except Exception as exc:   # noqa: BLE001 - never fail a run over this
+            stem = None
+            _diag(f"vocal isolation failed for {f.name}: {exc}")
+        if stem is None:
+            report["n_failed"] += 1
+            dst = work_dir / f.name
+            if not dst.exists():
+                shutil.copyfile(f, dst)
+        else:
+            report["n_isolated"] += 1
+            dst = work_dir / f"{f.stem}_{ISOLATION_STEM}.wav"
+            shutil.copyfile(stem, dst)
+        snr_after.append(_file_snr_db(dst) or 0.0)
+
+    report["snr_after_db"] = round(float(np.mean(snr_after)), 2) if snr_after else None
+    return work_dir, report
+
+
 def estimate_snr_db(audio: np.ndarray, frame_size: int = 1024) -> float:
     """
     Coarse SNR estimate from frame-RMS statistics: treats the quietest 10%
@@ -304,9 +461,10 @@ def validate_training_data(
     if snr_db is not None and not snr_ok:
         warnings.append(
             f"Training material's estimated SNR ({snr_db:.1f} dB) is low — "
-            "background noise or reverb in the source recordings may be "
-            "learned and reproduced by the model. Consider re-recording or "
-            "denoising the source audio, then retraining.")
+            "background noise or reverb in the source recordings would "
+            "otherwise be learned and reproduced by the model. The lead "
+            "vocal will be isolated automatically before training "
+            "(see isolate_vocals); re-recording still gives the best result.")
 
     return DataQualityReport(
         n_files=len(files),
@@ -686,6 +844,7 @@ def train(
     lora_plus_eta: float = 16.0,
     device:        str | None = None,
     progress_path: Path | None = None,
+    isolate:       bool = True,
 ) -> dict:
     """
     Full training entry point.
@@ -718,10 +877,29 @@ def train(
 
     opt = build_optimizer(model, lr, mode, lora_plus_eta, fused=(device == "cuda"))
 
-    # Preprocess raw data if needed; fall back to synthetic dataset if empty
+    # Isolate the singing voice before anything is chunked. Without this the
+    # loop trains on whatever came out of the uploader — backing track and
+    # room tone included — and reproduces it as part of the voice. Runs only
+    # on files the SNR estimate calls dirty; see isolate_vocals().
     proc_dir = data_dir / "_processed"
+    train_src = data_dir
+    isolation = IsolationReport(
+        enabled=isolate, n_files=0, n_isolated=0, n_clean=0, n_failed=0,
+        snr_before_db=None, snr_after_db=None, min_snr_db=MIN_SNR_DB,
+        stem=ISOLATION_STEM, unavailable=None if isolate else "disabled by caller",
+    )
     if not proc_dir.exists() or not any(proc_dir.glob("chunk_*.wav")):
-        n = preprocess_vocals(data_dir, proc_dir)
+        train_src, isolation = isolate_vocals(
+            data_dir, data_dir / "_isolated", MIN_SNR_DB, enabled=isolate)
+        if isolation["n_isolated"]:
+            _emit({"status": "training", "type": "notice", "code": "vocals_isolated",
+                   "message": (f"Isolated the lead vocal in {isolation['n_isolated']} "
+                               f"file(s) before training (SNR "
+                               f"{isolation['snr_before_db']} → "
+                               f"{isolation['snr_after_db']} dB)."),
+                   **dict(isolation)})
+
+        n = preprocess_vocals(train_src, proc_dir)
         if n == 0:
             proc_dir = data_dir   # VocalDataset will use dummy mode
 
@@ -866,7 +1044,14 @@ def train(
 
     quality_warning: str | None = None
     if quality_score < 0.4 or not data_quality["passed"]:
+        # Once the pre-pass has actually isolated something, "clean the audio
+        # up and retrain" is advice the run has already taken — point at the
+        # remaining lever (more material) instead of repeating it.
         quality_warning = (
+            "Model quality may be low due to insufficient training data. The "
+            "lead vocal was isolated before training, so adding more material "
+            "is the remaining lever."
+            if isolation["n_isolated"] else
             "Model quality may be low due to insufficient or noisy training "
             "data. Consider retraining with more (or cleaner) vocal recordings."
         )
@@ -886,6 +1071,7 @@ def train(
         "quality_snr_db":   round(quality_snr_db, 2),
         "quality_warning":  quality_warning,
         "data_quality":     dict(data_quality),
+        "vocal_isolation":  dict(isolation),
         # acceptance: standard ≤ 20 min CPU, professional ≤ 90 min CPU
         "passed":           elapsed <= (1200 if mode == "standard" else 5400),
     }

@@ -60,6 +60,10 @@ jobs:
         working-directory: engine
         run: python _test_security.py
 
+      - name: Run vocal isolation test suite (training-path audio quality)
+        working-directory: engine
+        run: python _test_vocal_isolation.py
+
       - name: Run benchmark (short duration)
         working-directory: engine
         run: |

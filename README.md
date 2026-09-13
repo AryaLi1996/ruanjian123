@@ -51,6 +51,7 @@ ruanjian/
 │   ├── _test_suite.py               # End-to-end test suite (T01–T10)
 │   ├── _bench.py                    # Multi-iteration performance benchmark
 │   ├── _test_security.py            # Security acceptance tests
+│   ├── _test_vocal_isolation.py     # Training-path vocal isolation tests
 │   ├── requirements.txt             # Python dependencies
 │   └── *.onnx                       # Stub models (auto-generated on first run)
 ├── scripts/
@@ -325,6 +326,41 @@ All ONNX models are **stub models** created programmatically on first run. Real 
 | `dereverb.onnx` | Enhanced separation stage 3 | `separation._build_dereverb()` |
 | `expression_encoder.onnx` | V2 cover LSTM encoder | `cover_synthesis._build_expression_encoder()` |
 | `watermark_embed.onnx` | Watermark embedding | `watermark.build_watermark_model()` |
+
+#### Picking a model to clean training material with
+
+`separate()` is **not** a vocal isolator and must not be used to prepare
+training data. Both of its front-end models (`demucs_nano.onnx` for standard,
+`sep_main.onnx` for enhanced stage 1) are built by the same
+`_build_fir_separator()` call: the "vocals" stem is `mix − lowpass(4 kHz)`,
+i.e. a 4 kHz **high-pass residual**. A sung fundamental and its first
+harmonics sit below that cutoff, so the stem keeps sibilance and cymbals and
+discards the voice. Enhanced mode does not rescue it — its centre-channel
+split (`vocal_harmony_split.onnx`, the one model here that does isolate a
+lead vocal) runs *downstream* of that residual, so the voice is already gone.
+
+Use `separation.isolate_lead_vocal()` instead, which runs the centre-channel
+extraction on the mix directly. Measured as voice-to-interference ratio
+against a synthetic centre-panned voice (see `_test_vocal_isolation.py`):
+
+| Candidate | VIR |
+|---|---|
+| One channel of the mix (no isolation) | −1.37 dB |
+| `separate(mode="standard")` → `vocals` | −71.70 dB |
+| `isolate_lead_vocal()` | −1.12 dB |
+| `isolate_lead_vocal(dereverb=True)` | −8.63 dB |
+
+These are stub models, so the gain is modest — the centre extraction only
+cancels what is panned off centre, and `dereverb.onnx` is pre-emphasis
+(`dry[n] = wet[n] − 0.8·wet[n−1]`), a high-pass that boosts hiss, which is
+why it is off by default. The result that matters is the second row.
+`trainer.isolate_vocals()` calls this before chunking, on files below
+`MIN_SNR_DB`; pass `isolate: false` to `train_model` to skip it. When real
+production models replace the stubs, this is the seam to swap them in behind.
+
+`separate()` itself is deliberately unchanged: its stems sum back to the mix
+exactly (the COLA property T04/T05 check), and Audio Tools, Cover and
+Playback depend on that.
 
 ---
 
@@ -616,6 +652,9 @@ python3 _bench.py --iters 3 --dur 30 --output bench.json
 
 # Security tests only
 python3 _test_security.py
+
+# Training-path vocal isolation (why separate() must not be used there)
+python3 _test_vocal_isolation.py
 ```
 
 ---
