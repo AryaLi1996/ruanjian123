@@ -22,6 +22,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 import numpy as np
 import soundfile as sf
 
+import vocal_isolation
 from trainer import ISOLATION_STEM, MIN_SNR_DB, isolate_vocals, preprocess_vocals
 from vocal_isolation import isolate_vocal
 
@@ -163,6 +164,54 @@ check("mono and stereo results agree (no stereo-only stage remains)",
       abs(sdr_db(mono_out, voice) - iso_sdr) < 0.5,
       f"mono {sdr_db(mono_out, voice):+.2f} dB vs stereo {iso_sdr:+.2f} dB")
 
+# ── 3b. Transients must survive ───────────────────────────────────────────────
+# The guard that rejected two tempting changes: a 8192-sample window and a
+# pitch-tracked comb mask both scored higher on SI-SDR while flattening the
+# attacks, which SI-SDR barely penalises because consonants are low-energy.
+# Onset-envelope correlation is what caught them, so it is asserted here.
+
+def onset_env(x, n_fft=1024, hop=256):
+    w = np.hanning(n_fft + 1)[:-1]
+    n_frames = max(1, 1 + (len(x) - n_fft) // hop)
+    idx = np.arange(n_fft)[None, :] + hop * np.arange(n_frames)[:, None]
+    mag = np.abs(np.fft.rfft(np.asarray(x, dtype=np.float64)[idx] * w, axis=-1))
+    return np.maximum(np.diff(mag, axis=0), 0.0).sum(axis=1)
+
+
+def onset_corr(est, ref):
+    n = min(len(est), len(ref))
+    a, b = onset_env(est[:n]), onset_env(ref[:n])
+    m = min(len(a), len(b))
+    a, b = a[:m] - a[:m].mean(), b[:m] - b[:m].mean()
+    return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-12))
+
+
+raw_onset = onset_corr(mono, voice)
+iso_onset = onset_corr(isolated, voice)
+check("isolation sharpens rather than smears attacks", iso_onset > raw_onset * 2.0,
+      f"onset correlation {raw_onset:.3f} (raw mix) → {iso_onset:.3f} (isolated)")
+# Absolute floor set from the measured 0.349 with room to move: the point is
+# to catch a change that flattens attacks (8192 fell to 0.351 on the wider
+# five-scene benchmark, against 0.458 for the shipped settings), not to pin
+# the exact value of a synthetic scene.
+check("attacks clear an absolute floor, not just the mix", iso_onset > 0.25,
+      f"{iso_onset:.3f}")
+
+# ── 3c. Tunables must actually be tunable ─────────────────────────────────────
+# N_FFT/HOP were once bound as default arguments, which froze them at import:
+# setting vocal_isolation.N_FFT changed nothing and a parameter sweep silently
+# measured one configuration five times.
+
+_saved = (vocal_isolation.N_FFT, vocal_isolation.HOP)
+try:
+    vocal_isolation.N_FFT, vocal_isolation.HOP = 1024, 256
+    small, _ = isolate_vocal(mix, SR)
+    check("changing N_FFT actually changes the result",
+          abs(sdr_db(small, voice) - iso_sdr) > 0.5,
+          f"{sdr_db(small, voice):+.2f} dB at 1024 vs {iso_sdr:+.2f} dB at {_saved[0]}")
+finally:
+    vocal_isolation.N_FFT, vocal_isolation.HOP = _saved
+
 # ── 4. Clean material must not be damaged ─────────────────────────────────────
 
 clean_out, _ = isolate_vocal(np.stack([voice, voice]), SR)
@@ -181,6 +230,35 @@ for name, sig in [("silence", np.zeros((2, SR))),
         check(f"{name} is handled", ok, f"len={len(out)}")
     except Exception as exc:                     # noqa: BLE001 - that is the check
         check(f"{name} is handled", False, f"raised {type(exc).__name__}: {exc}")
+
+# ── 5b. Memory must not scale with duration ───────────────────────────────────
+# The noise profile has to be global, but transforming the whole file at once
+# to get it cost 3.3 GB on a 10-minute upload — on a machine already fighting
+# the training run for RAM. It is sampled segment-wise instead, and this is
+# the guard that it stays that way.
+
+try:
+    import resource  # noqa: PLC0415 - Unix only; skip the guard where absent
+except ImportError:
+    resource = None
+
+if resource is not None:
+    long_sec = 120
+    t = np.arange(SR * long_sec) / SR
+    long_mix = np.stack([np.sin(2 * np.pi * 220 * t)
+                         + 0.1 * np.random.default_rng(5).standard_normal(len(t))] * 2)
+    before = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    isolate_vocal(long_mix, SR)
+    peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    # ru_maxrss is kB on Linux and bytes on Darwin — same split env_check.py's
+    # _peak_rss_gb() documents.
+    per_gb = 1024 ** 3 if sys.platform == "darwin" else 1024 ** 2
+    growth_gb = max(0, peak - before) / per_gb
+    input_gb = long_mix.nbytes / 1e9
+    check("peak memory stays within a few times the audio itself",
+          growth_gb < input_gb * 6,
+          f"+{growth_gb:.2f} GB peak for a {long_sec}s file ({input_gb:.2f} GB of samples)")
+    del long_mix
 
 # ── 6. Trainer integration ────────────────────────────────────────────────────
 
