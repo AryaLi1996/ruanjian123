@@ -226,28 +226,32 @@ def preprocess_vocals(
 # and comes back out of the trained model. That is the "result is noisy, the
 # human voice is hard to hear" report.
 #
-# The replacement is separation.isolate_lead_vocal() — the centre-channel
-# extraction in vocal_harmony_split.onnx. Neither of separate()'s two modes
-# can be used here: both put a 4 kHz high-pass residual (demucs_nano.onnx /
-# sep_main.onnx) in front, which discards the sung fundamental outright, and
-# "enhanced" runs its centre-channel split *after* that residual, so the
-# voice is already gone by the time it gets there. Correlation with a
-# synthetic centre-panned voice, measured in _test_vocal_isolation.py:
+# The replacement is separation.isolate_lead_vocal(), which runs the real
+# STFT masking chain in vocal_isolation.py: a Wiener denoise against a
+# measured noise profile, then HPSS harmonic extraction. Neither mode of
+# separate() can be used here — both are built on _build_fir_separator(),
+# whose "vocals" stem is `mix - lowpass(4 kHz)`, a high-pass residual that
+# discards the sung fundamental outright.
 #
-#     separate(mode="standard")  "vocals"        -0.09
-#     separate(mode="enhanced")  "lead_dry"      -0.09
-#     isolate_lead_vocal()                       +0.66
+# Scale-invariant SDR against the true voice in a full mix (voice, drums,
+# bass, panned guitars, hiss, mains hum, room reverb), measured in
+# _test_vocal_isolation.py:
 #
-# Two honest caveats. These are stub models (README §6), so the centre
-# extraction is a modest gain — it cancels what is panned off centre and
-# leaves mono-summed noise alone. And the win here is mostly in what it
-# stops doing: a training path that reaches for separate() removes the
-# voice rather than cleaning it. The isolation step itself is what matters,
-# and it is the seam to hang a real model on once one exists.
+#     raw mix, no isolation at all               -10.53 dB
+#     separate(mode="standard")  "vocals"        -43.82 dB
+#     time-domain centre channel                 -10.53 dB
+#     isolate_lead_vocal()                        +7.02 dB
 #
-# It runs automatically on material the SNR estimate calls dirty. Clean
-# uploads are left untouched — isolation is not free, and a studio-dry vocal
-# has nothing to gain from it.
+# That is the difference between a voice buried under the backing and a
+# voice that dominates what the loop sees: on that scene the SNR the trainer
+# gates on goes 0.6 dB -> 21.3 dB, clearing the 15 dB floor. Mono uploads
+# score identically — the chain has no stereo-only stage, so a phone or room
+# recording is cleaned up as well as a studio stereo mix.
+#
+# Isolation runs on material the SNR estimate calls dirty; clean uploads are
+# left alone. It is measured, not assumed: every run records the before and
+# after SNR, and verified=False when the result still has not cleared the
+# floor, so a run can never quietly train on material that is still noisy.
 
 ISOLATION_STEM = "lead_dry"
 
@@ -256,14 +260,22 @@ class IsolationReport(TypedDict):
     """What the pre-pass did, so the caller can tell the user."""
     enabled:        bool
     n_files:        int
-    n_isolated:     int    # files routed through the enhanced chain
+    n_isolated:     int    # files routed through the isolation chain
     n_clean:        int    # files already above the SNR floor, used as-is
-    n_failed:       int    # files separation could not process (original used)
+    n_failed:       int    # files isolation could not process (original used)
     snr_before_db:  float | None
     snr_after_db:   float | None
+    snr_gain_db:    float | None
     min_snr_db:     float
     stem:           str
     unavailable:    str | None   # why isolation was skipped entirely, if it was
+    # False when material reaching the loop is still below min_snr_db after
+    # isolation. The whole point of measuring: a run must never train on
+    # noisy material while reporting nothing about it.
+    verified:       bool
+    # Files still under the floor after isolation, by name — what the user
+    # would have to re-record or drop to get a clean model.
+    unverified_files: list[str]
 
 
 def _isolate_one(src: Path, out_dir: Path) -> Path | None:
@@ -300,9 +312,13 @@ def isolate_vocals(
 
     Every readable file is SNR-checked. Files at or above `min_snr_db` are
     already clean enough and are referenced as-is; files below it are run
-    through the enhanced separation chain and replaced by their lead_dry
-    stem. A file the chain cannot process falls back to the original — a
-    noisy model beats a failed run.
+    through the isolation chain. A file the chain cannot process falls back
+    to the original — a noisy model beats a failed run, but it is counted in
+    n_failed and its name is reported.
+
+    The result is verified, not assumed: each isolated file is re-measured,
+    and any still under the floor is named in unverified_files with
+    verified=False, so the caller can warn loudly or refuse outright.
 
     Returns `input_dir` unchanged when nothing needed isolating, so a clean
     upload copies no audio at all.
@@ -314,8 +330,9 @@ def isolate_vocals(
 
     report = IsolationReport(
         enabled=enabled, n_files=len(files), n_isolated=0, n_clean=0, n_failed=0,
-        snr_before_db=None, snr_after_db=None, min_snr_db=min_snr_db,
-        stem=ISOLATION_STEM, unavailable=None,
+        snr_before_db=None, snr_after_db=None, snr_gain_db=None,
+        min_snr_db=min_snr_db, stem=ISOLATION_STEM, unavailable=None,
+        verified=True, unverified_files=[],
     )
     if not enabled or not files:
         if not enabled:
@@ -338,6 +355,7 @@ def isolate_vocals(
     if not any(needs for _f, needs in plan):
         report["n_clean"]      = len(plan)
         report["snr_after_db"] = report["snr_before_db"]
+        report["snr_gain_db"]  = 0.0
         return input_dir, report
 
     work_dir.mkdir(parents=True, exist_ok=True)
@@ -349,25 +367,37 @@ def isolate_vocals(
             dst = work_dir / f.name
             if not dst.exists():
                 shutil.copyfile(f, dst)
-            snr_after.append(_file_snr_db(dst) or 0.0)
-            continue
-        try:
-            stem = _isolate_one(f, stems_dir)
-        except Exception as exc:   # noqa: BLE001 - never fail a run over this
-            stem = None
-            _diag(f"vocal isolation failed for {f.name}: {exc}")
-        if stem is None:
-            report["n_failed"] += 1
-            dst = work_dir / f.name
-            if not dst.exists():
-                shutil.copyfile(f, dst)
         else:
-            report["n_isolated"] += 1
-            dst = work_dir / f"{f.stem}_{ISOLATION_STEM}.wav"
-            shutil.copyfile(stem, dst)
-        snr_after.append(_file_snr_db(dst) or 0.0)
+            try:
+                stem = _isolate_one(f, stems_dir)
+            except Exception as exc:   # noqa: BLE001 - never fail a run over this
+                stem = None
+                _diag(f"vocal isolation failed for {f.name}: {exc}")
+            if stem is None:
+                report["n_failed"] += 1
+                dst = work_dir / f.name
+                if not dst.exists():
+                    shutil.copyfile(f, dst)
+            else:
+                report["n_isolated"] += 1
+                dst = work_dir / f"{f.stem}_{ISOLATION_STEM}.wav"
+                shutil.copyfile(stem, dst)
+
+        # Measure what actually landed in the training directory, whichever
+        # branch produced it. An isolated file that still reads dirty is the
+        # case this whole report exists to surface.
+        after = _file_snr_db(dst)
+        if after is None:
+            continue
+        snr_after.append(after)
+        if after < min_snr_db:
+            report["verified"] = False
+            report["unverified_files"].append(dst.name)
 
     report["snr_after_db"] = round(float(np.mean(snr_after)), 2) if snr_after else None
+    if report["snr_before_db"] is not None and report["snr_after_db"] is not None:
+        report["snr_gain_db"] = round(
+            report["snr_after_db"] - report["snr_before_db"], 2)
     return work_dir, report
 
 
@@ -463,8 +493,9 @@ def validate_training_data(
             f"Training material's estimated SNR ({snr_db:.1f} dB) is low — "
             "background noise or reverb in the source recordings would "
             "otherwise be learned and reproduced by the model. The lead "
-            "vocal will be isolated automatically before training "
-            "(see isolate_vocals); re-recording still gives the best result.")
+            "vocal is isolated automatically before training and the result "
+            "re-measured (see isolate_vocals); re-recording still gives the "
+            "best result.")
 
     return DataQualityReport(
         n_files=len(files),
@@ -845,6 +876,7 @@ def train(
     device:        str | None = None,
     progress_path: Path | None = None,
     isolate:       bool = True,
+    strict:        bool = False,
 ) -> dict:
     """
     Full training entry point.
@@ -885,8 +917,10 @@ def train(
     train_src = data_dir
     isolation = IsolationReport(
         enabled=isolate, n_files=0, n_isolated=0, n_clean=0, n_failed=0,
-        snr_before_db=None, snr_after_db=None, min_snr_db=MIN_SNR_DB,
-        stem=ISOLATION_STEM, unavailable=None if isolate else "disabled by caller",
+        snr_before_db=None, snr_after_db=None, snr_gain_db=None,
+        min_snr_db=MIN_SNR_DB, stem=ISOLATION_STEM,
+        unavailable=None if isolate else "disabled by caller",
+        verified=True, unverified_files=[],
     )
     if not proc_dir.exists() or not any(proc_dir.glob("chunk_*.wav")):
         train_src, isolation = isolate_vocals(
@@ -896,8 +930,29 @@ def train(
                    "message": (f"Isolated the lead vocal in {isolation['n_isolated']} "
                                f"file(s) before training (SNR "
                                f"{isolation['snr_before_db']} → "
-                               f"{isolation['snr_after_db']} dB)."),
+                               f"{isolation['snr_after_db']} dB, "
+                               f"{isolation['snr_gain_db']:+} dB)."),
                    **dict(isolation)})
+
+        # The guarantee: material that is still noisy after isolation never
+        # reaches the loop silently. strict=True refuses outright rather than
+        # spending an hour producing a model the user will report as noisy.
+        if not isolation["verified"]:
+            names = ", ".join(isolation["unverified_files"][:5])
+            more = (f" (+{len(isolation['unverified_files']) - 5} more)"
+                    if len(isolation["unverified_files"]) > 5 else "")
+            detail = (
+                f"{len(isolation['unverified_files'])} file(s) are still below "
+                f"{MIN_SNR_DB:g} dB SNR after isolation: {names}{more}. A model "
+                "trained on these will reproduce the remaining noise.")
+            if strict:
+                raise ValueError(
+                    f"Training refused — {detail} Re-record or remove them, or "
+                    "pass strict=false to train anyway.")
+            _emit({"status": "warning", "type": "notice",
+                   "code": "isolation_unverified", "message": detail,
+                   "files": isolation["unverified_files"]})
+            _diag(detail)
 
         n = preprocess_vocals(train_src, proc_dir)
         if n == 0:
@@ -1047,14 +1102,24 @@ def train(
         # Once the pre-pass has actually isolated something, "clean the audio
         # up and retrain" is advice the run has already taken — point at the
         # remaining lever (more material) instead of repeating it.
-        quality_warning = (
-            "Model quality may be low due to insufficient training data. The "
-            "lead vocal was isolated before training, so adding more material "
-            "is the remaining lever."
-            if isolation["n_isolated"] else
-            "Model quality may be low due to insufficient or noisy training "
-            "data. Consider retraining with more (or cleaner) vocal recordings."
-        )
+        if isolation["n_isolated"] and not isolation["verified"]:
+            quality_warning = (
+                "Training material was still below the noise floor after "
+                "isolation — the model has likely learned some of that noise. "
+                "Re-record or remove the files named in vocal_isolation."
+            )
+        elif isolation["n_isolated"]:
+            quality_warning = (
+                "Model quality may be low due to insufficient training data. "
+                "The lead vocal was isolated and verified clean, so adding "
+                "more material is the remaining lever."
+            )
+        else:
+            quality_warning = (
+                "Model quality may be low due to insufficient or noisy "
+                "training data. Consider retraining with more (or cleaner) "
+                "vocal recordings."
+            )
 
     final = {
         "status":           "done",

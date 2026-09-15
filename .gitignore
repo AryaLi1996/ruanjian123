@@ -29,3 +29,10 @@ tmp-test-audio/
 # out of sync with handler.py/template.yaml (it did — missing several
 # tickets' worth of changes) since nothing regenerates or reviews it.
 .aws-sam/
+
+# Engine test-run artifacts (_test_suite.py / _test_vocal_isolation.py)
+engine/_test_data/_isolated/
+engine/_test_data/_processed/
+engine/_test_data/sep_std_out_*/
+engine/_test_data/sep_enh_out_*/
+engine/model_t08_*.onnx

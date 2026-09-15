@@ -1,20 +1,20 @@
 #!/usr/bin/env python3
-"""Acceptance tests for the training-path vocal isolation pre-pass.
+"""Acceptance tests for training-path vocal isolation.
 
 Covers the reported defect: a model trained on un-isolated uploads learns the
-backing track along with the singer, so the result is noisy and the voice is
-hard to make out. trainer.isolate_vocals() puts separation.isolate_lead_vocal()
-(vocal_harmony_split → dereverb) in front of preprocess_vocals() for material
-the SNR estimate calls dirty.
+backing track and room noise along with the singer, so the result is noisy and
+the voice is hard to make out.
 
-The measurement tests record *why* that is the replacement rather than either
-separate() mode: demucs_nano.onnx and sep_main.onnx are both 4 kHz high-pass
-residuals, which discard the sung fundamental outright, and "enhanced" runs
-its centre-channel split downstream of one — so it inherits the same loss.
+The measurements run against a synthetic but full mix — voice with vibrato,
+consonant transients and rests, plus drums, bass, wide-panned guitars, hiss,
+mains hum and room reverb — scored as scale-invariant SDR against the known
+dry voice. That is a real separation metric, so these numbers say whether the
+chain works rather than whether it ran.
 """
 import shutil
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -22,8 +22,8 @@ sys.path.insert(0, str(Path(__file__).parent))
 import numpy as np
 import soundfile as sf
 
-from trainer import (ISOLATION_STEM, MIN_SNR_DB, isolate_vocals,
-                     preprocess_vocals)
+from trainer import ISOLATION_STEM, MIN_SNR_DB, isolate_vocals, preprocess_vocals
+from vocal_isolation import isolate_vocal
 
 SR = 44_100
 
@@ -32,144 +32,204 @@ results = []
 
 def check(name, condition, detail=""):
     results.append(bool(condition))
-    mark = "PASS" if condition else "FAIL"
-    print(f"[{mark}] {name}" + (f" — {detail}" if detail else ""))
+    print(f"[{'PASS' if condition else 'FAIL'}] {name}" + (f" — {detail}" if detail else ""))
 
 
-def _voice(dur=4.0, f0=220.0):
-    """Centre-panned harmonic 'voice': fundamental plus a falling harmonic series."""
-    t = np.arange(int(SR * dur)) / SR
-    return sum(0.6 / (k ** 1.2) * np.sin(2 * np.pi * f0 * k * t)
-               for k in range(1, 12)).astype(np.float32)
+# ── Synthetic scene ───────────────────────────────────────────────────────────
+
+def make_scene(dur=12.0, seed=0):
+    """Return (stereo mix [2, N], dry voice [N]) — a full band around a lead."""
+    rng = np.random.default_rng(seed)
+    n = int(SR * dur)
+    t = np.arange(n) / SR
+
+    notes = [220.0, 246.9, 261.6, 293.7, 329.6, 293.7, 261.6, 246.9]
+    f0 = np.zeros(n)
+    seg = n // len(notes)
+    for i, f in enumerate(notes):
+        f0[i * seg:(i + 1) * seg] = f
+    f0[len(notes) * seg:] = notes[-1]
+    f0 *= 1 + 0.006 * np.sin(2 * np.pi * 5.2 * t)              # vibrato
+    phase = 2 * np.pi * np.cumsum(f0) / SR
+    voice = sum((0.62 / (k ** 1.25)) * np.sin(k * phase + 0.3 * k) for k in range(1, 14))
+    for c in np.linspace(0.4, dur - 0.4, 22):                  # consonants
+        i0, w = int(c * SR), int(0.012 * SR)
+        voice[i0:i0 + w] += 0.35 * rng.standard_normal(w) * np.hanning(w)
+    env = np.ones(n)                                           # rests
+    for a, b in [(0.10, 0.16), (0.34, 0.40), (0.60, 0.66), (0.84, 0.90)]:
+        env[int(a * n):int(b * n)] = 0.0
+    k = np.hanning(2048) / np.sum(np.hanning(2048))
+    voice *= np.convolve(env, k, mode="same")
+    voice *= 0.5 / (np.max(np.abs(voice)) + 1e-9)
+
+    drums = np.zeros(n)
+    for b in np.arange(0, dur, 0.5):                           # kick
+        i0, L = int(b * SR), int(0.12 * SR)
+        if i0 + L < n:
+            drums[i0:i0 + L] += 0.6 * np.sin(2 * np.pi * 58 * np.arange(L) / SR) \
+                * np.exp(-np.arange(L) / (0.04 * SR))
+    for b in np.arange(0.25, dur, 0.5):                        # snare
+        i0, L = int(b * SR), int(0.10 * SR)
+        if i0 + L < n:
+            drums[i0:i0 + L] += 0.45 * rng.standard_normal(L) \
+                * np.exp(-np.arange(L) / (0.02 * SR))
+
+    bass = 0.45 * np.sin(2 * np.pi * 82.4 * t) + 0.2 * np.sin(2 * np.pi * 164.8 * t)
+    gtr_l = 0.30 * np.sin(2 * np.pi * 392 * t + 0.7) + 0.18 * np.sin(2 * np.pi * 587 * t + 1.9)
+    gtr_r = 0.30 * np.sin(2 * np.pi * 494 * t + 2.2) + 0.18 * np.sin(2 * np.pi * 740 * t + 0.4)
+    hum = 0.02 * np.sin(2 * np.pi * 50 * t) + 0.012 * np.sin(2 * np.pi * 150 * t)
+
+    ir = np.zeros(int(0.25 * SR))                              # room reverb
+    for _ in range(40):
+        idx = int(rng.uniform(0.005, 0.25) * SR)
+        if idx < len(ir):
+            ir[idx] += rng.standard_normal() * np.exp(-idx / (0.07 * SR))
+    ir[0] = 1.0
+    wet = np.convolve(voice, ir, mode="full")[:n]
+    wet *= np.max(np.abs(voice)) / (np.max(np.abs(wet)) + 1e-9)
+    voice_room = 0.85 * voice + 0.15 * wet
+
+    left = voice_room + 0.9 * drums + bass + gtr_l + 0.035 * rng.standard_normal(n) + hum
+    right = voice_room + 0.9 * drums + bass + gtr_r + 0.035 * rng.standard_normal(n) + hum
+    peak = max(np.max(np.abs(left)), np.max(np.abs(right))) * 1.05
+    return np.stack([left, right]) / peak, voice / peak
 
 
-def _noisy_mix(dur=4.0):
-    """Voice in the centre, wide-panned 'band' and hiss around it — the shape
-    of a real upload that has not been separated."""
-    t = np.arange(int(SR * dur)) / SR
-    rng = np.random.default_rng(0)
-    v = _voice(dur)
-    bass = 0.7 * np.sin(2 * np.pi * 90 * t)
-    # Per-channel, decorrelated: room tone and analogue hiss are not mono,
-    # which is what gives a centre-channel extraction something to cancel.
-    left = (v + bass + 0.4 * np.sin(2 * np.pi * 660 * t + 1.0)
-            + 0.25 * rng.standard_normal(len(t)))
-    right = (v + bass + 0.4 * np.sin(2 * np.pi * 880 * t + 2.0)
-             + 0.25 * rng.standard_normal(len(t)))
-    return np.stack([left, right], axis=1).astype(np.float32), v
+def sdr_db(est, ref):
+    """Scale-invariant SDR: the ref-aligned component against everything else."""
+    n = min(len(est), len(ref))
+    e = np.asarray(est[:n], dtype=np.float64) - np.mean(est[:n])
+    r = np.asarray(ref[:n], dtype=np.float64) - np.mean(ref[:n])
+    s = (np.dot(e, r) / (np.dot(r, r) + 1e-12)) * r
+    return float(10 * np.log10((np.sum(s ** 2) + 1e-12) / (np.sum((e - s) ** 2) + 1e-12)))
 
 
-def _vir_db(x, ref):
-    """Voice-to-interference ratio: project x onto the true voice signal and
-    compare the aligned component against everything else in x. Higher is a
-    cleaner vocal; this is the number the training loop ultimately cares about.
-    """
-    n = min(len(x), len(ref))
-    x = np.asarray(x[:n], dtype=np.float64); r = np.asarray(ref[:n], dtype=np.float64)
-    aligned = (np.dot(x, r) / np.dot(r, r)) * r
-    resid = x - aligned
-    return float(10.0 * np.log10(np.sum(aligned ** 2) / (np.sum(resid ** 2) + 1e-12)))
-
-
-def _corr(a, b):
-    n = min(len(a), len(b))
-    a = np.asarray(a[:n], dtype=np.float64); b = np.asarray(b[:n], dtype=np.float64)
-    a = a - a.mean(); b = b - b.mean()
-    return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-12))
-
-
-tmp = Path(tempfile.mkdtemp(prefix="isolation_test_"))
-data_dir = tmp / "data"; data_dir.mkdir()
-
-# ── 1. A dirty upload gets isolated ────────────────────────────────────────
-mix, voice_ref = _noisy_mix()
-sf.write(str(data_dir / "take01.wav"), mix, SR, subtype="PCM_16")
-
-src_dir, report = isolate_vocals(data_dir, tmp / "_isolated")
-
-check("dirty upload is routed through isolation", report["n_isolated"] == 1,
-      f"n_isolated={report['n_isolated']} n_clean={report['n_clean']} "
-      f"n_failed={report['n_failed']}")
-check("isolation reports the lead_dry stem",
-      report["stem"] == ISOLATION_STEM, report["stem"])
-check("training reads from the isolated directory", src_dir != data_dir, str(src_dir))
-
-isolated = sorted(src_dir.glob("*.wav"))
-check("one isolated file written", len(isolated) == 1,
-      ", ".join(p.name for p in isolated))
-
-if isolated:
-    iso, _sr = sf.read(str(isolated[0]), dtype="float32", always_2d=True)
-    iso_mono = iso.mean(axis=1)
-    mix_mono = mix.mean(axis=1)
-    c_before, c_after = _corr(mix_mono, voice_ref), _corr(iso_mono, voice_ref)
-    check("isolated audio still tracks the true voice",
-          c_after > 0.3, f"corr {c_before:+.3f} (raw mix) → {c_after:+.3f} (isolated)")
-
-    # The whole point of the fix: what reaches the training loop is no worse
-    # than the raw upload, and nothing like what separate() would have done
-    # to it. These are stub models, so the gain is modest by design — the
-    # regression this guards against is the catastrophic one below.
-    vir_raw, vir_iso = _vir_db(mix[:, 0], voice_ref), _vir_db(iso_mono, voice_ref)
-    check("isolation does not degrade the voice-to-interference ratio",
-          vir_iso >= vir_raw - 0.5,
-          f"{vir_raw:+.2f} dB (raw upload) → {vir_iso:+.2f} dB (isolated)")
-
-    check("isolated output feeds preprocess_vocals",
-          preprocess_vocals(src_dir, tmp / "_processed") > 0)
-
-# ── 2. Clean material is left alone ────────────────────────────────────────
-clean_dir = tmp / "clean"; clean_dir.mkdir()
-dry = _voice(6.0)
-# A dry vocal with real silences: the SNR estimate compares the quiet 10% of
-# frames against the median, so a gapless tone reads as *low* SNR.
-dry[: len(dry) // 4] *= 0.0005
-sf.write(str(clean_dir / "dry.wav"), np.stack([dry, dry], axis=1), SR, subtype="PCM_16")
-
-clean_src, clean_report = isolate_vocals(clean_dir, tmp / "_isolated_clean")
-check("clean upload skips separation", clean_report["n_isolated"] == 0,
-      f"snr={clean_report['snr_before_db']} dB, floor={MIN_SNR_DB} dB")
-check("clean upload is trained from in place", clean_src == clean_dir)
-
-# ── 3. Opting out, and an empty directory ──────────────────────────────────
-off_src, off_report = isolate_vocals(data_dir, tmp / "_off", enabled=False)
-check("isolate=False is a no-op", off_src == data_dir and off_report["n_isolated"] == 0)
-check("opting out is reported", off_report["unavailable"] == "disabled by caller")
-
-empty = tmp / "empty"; empty.mkdir()
-empty_src, empty_report = isolate_vocals(empty, tmp / "_empty")
-check("empty directory is handled", empty_src == empty and empty_report["n_files"] == 0)
-
-# ── 4. Why enhanced, not standard ──────────────────────────────────────────
-# demucs_nano.onnx computes vocals = mix − lowpass(4 kHz). Reproduced here in
-# numpy so the claim is checked rather than asserted in a comment.
-def _sinc_lp(fc, n=127):
+def fir_lowpass(fc, n=127):
     k = np.arange(n) - (n - 1) / 2.0
     f = fc / SR
     with np.errstate(divide="ignore", invalid="ignore"):
         h = np.where(k == 0, 2 * f, np.sin(2 * np.pi * f * k) / (np.pi * k))
     h *= np.hamming(n)
-    return (h / h.sum()).astype(np.float32)
+    return h / h.sum()
 
 
-_h = _sinc_lp(4_000.0)
-std_l = mix[:, 0] - np.convolve(mix[:, 0], _h, mode="same")
-std_r = mix[:, 1] - np.convolve(mix[:, 1], _h, mode="same")
-std_vocals = std_l
-mid = (mix[:, 0] + mix[:, 1]) / 2.0     # what isolate_lead_vocal() starts from
+tmp = Path(tempfile.mkdtemp(prefix="isolation_test_"))
+mix, voice = make_scene()
+mono = mix.mean(axis=0)
 
-# ...and "enhanced" runs its centre-channel split on that residual, so it
-# inherits the loss instead of undoing it.
-chained = (std_l + std_r) / 2.0
+# ── 1. The chain beats every alternative in the repo ──────────────────────────
 
-check("standard demucs_nano path loses the voice",
-      abs(_corr(std_vocals, voice_ref)) < 0.2,
-      f"corr {_corr(std_vocals, voice_ref):+.3f}, "
-      f"VIR {_vir_db(std_vocals, voice_ref):+.1f} dB")
-check("enhanced mode inherits that loss (stage 2 runs after stage 1)",
-      abs(_corr(chained, voice_ref)) < 0.2, f"corr {_corr(chained, voice_ref):+.3f}")
-check("centre channel taken from the mix keeps the voice",
-      _corr(mid, voice_ref) > 0.5, f"corr {_corr(mid, voice_ref):+.3f}")
+raw_sdr = sdr_db(mono, voice)
+t0 = time.perf_counter()
+isolated, metrics = isolate_vocal(mix, SR)
+elapsed = time.perf_counter() - t0
+iso_sdr = sdr_db(isolated, voice)
+
+# separate(mode="standard") is `mix - lowpass(4 kHz)`: a high-pass residual.
+stub_sdr = sdr_db(mono - np.convolve(mono, fir_lowpass(4_000.0), mode="same"), voice)
+# A time-domain centre channel keeps the mono sum of everything panned.
+centre_sdr = sdr_db((mix[0] + mix[1]) / 2.0, voice)
+
+check("isolation beats the raw mix by a wide margin", iso_sdr - raw_sdr > 8.0,
+      f"{raw_sdr:+.2f} dB → {iso_sdr:+.2f} dB ({iso_sdr - raw_sdr:+.2f} dB)")
+check("isolation recovers a voice-dominant signal", iso_sdr > 0.0, f"{iso_sdr:+.2f} dB")
+check("the FIR stub destroys the voice", stub_sdr < raw_sdr - 20.0,
+      f"stub {stub_sdr:+.2f} dB vs raw {raw_sdr:+.2f} dB")
+check("isolation beats the FIR stub", iso_sdr > stub_sdr + 20.0,
+      f"{iso_sdr:+.2f} dB vs {stub_sdr:+.2f} dB")
+check("isolation beats a time-domain centre channel", iso_sdr > centre_sdr + 8.0,
+      f"{iso_sdr:+.2f} dB vs {centre_sdr:+.2f} dB")
+check("reported SNR gain is real and positive", metrics["snr_gain_db"] > 5.0,
+      f"SNR {metrics['snr_before_db']} → {metrics['snr_after_db']} dB")
+check("isolation runs faster than real time", elapsed < 12.0,
+      f"{elapsed:.2f}s for 12s audio (RT {elapsed / 12.0:.3f})")
+
+# ── 2. Every stage earns its place ────────────────────────────────────────────
+
+for stage in ("denoise", "harmonic"):
+    partial, _ = isolate_vocal(mix, SR, **{stage: False})
+    check(f"disabling {stage} measurably hurts", sdr_db(partial, voice) < iso_sdr - 0.5,
+          f"{sdr_db(partial, voice):+.2f} dB vs {iso_sdr:+.2f} dB with it")
+
+# ── 3. Mono uploads — no stereo information to exploit ────────────────────────
+# A phone or room recording is the common bad upload and has no stereo cues,
+# so it must be carried by the denoise stage alone.
+
+mono_out, mono_metrics = isolate_vocal(mono[None, :], SR)
+check("mono uploads are still cleaned up", sdr_db(mono_out, voice) - raw_sdr > 8.0,
+      f"{raw_sdr:+.2f} dB → {sdr_db(mono_out, voice):+.2f} dB")
+check("mono input is reported as mono", not mono_metrics["stereo"])
+check("mono and stereo results agree (no stereo-only stage remains)",
+      abs(sdr_db(mono_out, voice) - iso_sdr) < 0.5,
+      f"mono {sdr_db(mono_out, voice):+.2f} dB vs stereo {iso_sdr:+.2f} dB")
+
+# ── 4. Clean material must not be damaged ─────────────────────────────────────
+
+clean_out, _ = isolate_vocal(np.stack([voice, voice]), SR)
+check("a clean vocal survives isolation intact", sdr_db(clean_out, voice) > 15.0,
+      f"{sdr_db(clean_out, voice):+.2f} dB")
+
+# ── 5. Degenerate input must not crash or produce NaN ─────────────────────────
+
+for name, sig in [("silence", np.zeros((2, SR))),
+                  ("shorter than one FFT frame", np.full((2, 100), 0.1)),
+                  ("DC only", np.full((2, SR), 0.3)),
+                  ("a single sample", np.array([[0.5], [0.5]]))]:
+    try:
+        out, _m = isolate_vocal(sig, SR)
+        ok = len(out) == sig.shape[1] and bool(np.all(np.isfinite(out)))
+        check(f"{name} is handled", ok, f"len={len(out)}")
+    except Exception as exc:                     # noqa: BLE001 - that is the check
+        check(f"{name} is handled", False, f"raised {type(exc).__name__}: {exc}")
+
+# ── 6. Trainer integration ────────────────────────────────────────────────────
+
+data_dir = tmp / "data"
+data_dir.mkdir()
+sf.write(str(data_dir / "take01.wav"), mix.T, SR, subtype="PCM_16")
+
+src_dir, report = isolate_vocals(data_dir, tmp / "_isolated")
+check("a dirty upload is routed through isolation", report["n_isolated"] == 1,
+      f"isolated={report['n_isolated']} clean={report['n_clean']} failed={report['n_failed']}")
+check("training reads from the isolated directory", src_dir != data_dir)
+check("the report carries a measured SNR gain", (report["snr_gain_db"] or 0) > 0,
+      f"{report['snr_before_db']} → {report['snr_after_db']} dB")
+check("the isolated stem is named for what it is",
+      any(ISOLATION_STEM in p.name for p in src_dir.glob("*.wav")))
+check("isolated output feeds preprocess_vocals",
+      preprocess_vocals(src_dir, tmp / "_processed") > 0)
+
+# Verification: material that stays noisy is named, not waved through.
+noisy_dir = tmp / "noisy"
+noisy_dir.mkdir()
+rng = np.random.default_rng(7)
+hopeless = 0.5 * rng.standard_normal((SR * 6, 2)).astype(np.float32)   # pure noise
+sf.write(str(noisy_dir / "hopeless.wav"), hopeless, SR, subtype="PCM_16")
+_src, noisy_report = isolate_vocals(noisy_dir, tmp / "_isolated_noisy")
+check("material that stays noisy is reported unverified",
+      not noisy_report["verified"] and noisy_report["unverified_files"],
+      f"verified={noisy_report['verified']} files={noisy_report['unverified_files']}")
+
+# Clean material skips isolation entirely.
+clean_dir = tmp / "clean"
+clean_dir.mkdir()
+dry = voice.copy()
+dry[:len(dry) // 4] *= 0.0005            # real silence, so the SNR proxy reads high
+sf.write(str(clean_dir / "dry.wav"), np.stack([dry, dry], axis=1), SR, subtype="PCM_16")
+clean_src, clean_report = isolate_vocals(clean_dir, tmp / "_isolated_clean")
+check("a clean upload skips isolation", clean_report["n_isolated"] == 0,
+      f"snr={clean_report['snr_before_db']} dB, floor={MIN_SNR_DB} dB")
+check("a clean upload is trained from in place", clean_src == clean_dir)
+check("a clean upload verifies", clean_report["verified"])
+
+off_src, off_report = isolate_vocals(data_dir, tmp / "_off", enabled=False)
+check("isolate=False is a no-op", off_src == data_dir and off_report["n_isolated"] == 0)
+check("opting out is reported", off_report["unavailable"] == "disabled by caller")
+
+empty = tmp / "empty"
+empty.mkdir()
+empty_src, empty_report = isolate_vocals(empty, tmp / "_empty")
+check("an empty directory is handled", empty_src == empty and empty_report["n_files"] == 0)
 
 shutil.rmtree(tmp, ignore_errors=True)
 
