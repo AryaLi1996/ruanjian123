@@ -360,26 +360,40 @@ hum and room reverb (`_test_vocal_isolation.py`):
 | Raw mix, no isolation | −10.53 dB |
 | `separate(mode="standard")` → `vocals` | −43.82 dB |
 | Time-domain centre channel | −10.53 dB |
-| **`isolate_lead_vocal()`** | **+7.02 dB** |
+| **`isolate_lead_vocal()`** | **+8.71 dB** |
 
-That is a **+17.6 dB** improvement, taking the SNR the trainer gates on from
-0.6 dB to 21.3 dB — from a voice buried under the backing to one that
+That is a **+19.2 dB** improvement, taking the SNR the trainer gates on from
+0.6 dB to 20.2 dB — from a voice buried under the backing to one that
 dominates. Mono uploads score identically: the chain has no stereo-only
 stage, so a phone or room recording is cleaned up as well as a studio mix.
 
-There is deliberately **no centre-channel mask**. One was written, measured
-and removed — on four mixes it scored worse than a plain mono downmix at
-every setting tried, because panned accompaniment overlaps the voice in most
-energetic bins and attenuating them costs more voice than it removes
-interference.
+Cost, measured on a 10-minute upload: **41 s** (0.07× real time) and **1.5 GB**
+peak RSS, against 115 s and 3.3 GB for the first version of this chain. The
+noise profile is sampled segment-wise rather than taken from a spectrogram of
+the whole file, which is where most of that memory went.
 
-Parameters were tuned against three metrics, not just separation: SI-SDR,
-how much of a clean vocal survives untouched, and how much energy above
-4 kHz is kept relative to a perfect result. The last one guards against a
-lisping model — consonants are low-energy and an SI-SDR-only tuning eats
-them. The shipped settings land 0.17 dB from ideal on high frequencies;
-SI-SDR-optimal settings scored 0.36 dB better on separation but 6.8 dB below
-ideal on high frequencies.
+Parameters are tuned against four metrics, not just separation: SI-SDR over
+five scenes (band, sustained pad, second singer, noisy room, dense
+production), clean-vocal transparency, energy above 4 kHz relative to a
+perfect result, and onset-envelope correlation. The last two guard against a
+lisping, smeared model — consonants and attacks are low-energy, so an
+SI-SDR-only tuning eats them and the score goes *up*.
+
+**Things that were built, measured and rejected.** Each scored higher on
+SI-SDR; each is not in the code:
+
+| Rejected | SI-SDR | What it cost |
+|---|---|---|
+| Per-bin centre/side mask | −0.10 to −0.69 dB | worse than a mono downmix at every setting |
+| 8192-sample window | +1.3 dB | onsets fell to 0.351 vs 0.458 (unprocessed mix: 0.327) |
+| Pitch-tracked comb mask | +0.06 dB safe, +0.28 dB aggressive | −6.7 dB transparency, −3.3 dB HF, ⅕ of the onset score |
+| Two-pass noise re-estimation | +0.20 dB | −3.05 dB HF error |
+| Temporal mask smoothing | +0.12 dB | worse transients at every width |
+
+The pattern is worth stating plainly: past the shipped settings, on this
+architecture, extra SI-SDR is bought out of consonants and attacks rather
+than earned. A materially better result needs a learned separator, not more
+tuning here.
 
 **Verification.** Isolation is measured, not assumed. Each isolated file is
 re-measured afterwards; anything still below `MIN_SNR_DB` is named in

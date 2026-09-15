@@ -429,7 +429,7 @@ def isolate_lead_vocal(
         raw mix, no isolation at all               -10.53 dB
         separate(mode="standard") "vocals"         -43.82 dB
         time-domain centre channel (mid)           -10.53 dB
-        isolate_lead_vocal()                        +7.02 dB
+        isolate_lead_vocal()                        +8.71 dB
 
     separate() stays as it is: its two stems sum back to the mix exactly (the
     COLA property T04/T05 check), and Audio Tools, Cover and Playback depend

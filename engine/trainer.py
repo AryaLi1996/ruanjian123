@@ -240,11 +240,11 @@ def preprocess_vocals(
 #     raw mix, no isolation at all               -10.53 dB
 #     separate(mode="standard")  "vocals"        -43.82 dB
 #     time-domain centre channel                 -10.53 dB
-#     isolate_lead_vocal()                        +7.02 dB
+#     isolate_lead_vocal()                        +8.71 dB
 #
 # That is the difference between a voice buried under the backing and a
 # voice that dominates what the loop sees: on that scene the SNR the trainer
-# gates on goes 0.6 dB -> 21.3 dB, clearing the 15 dB floor. Mono uploads
+# gates on goes 0.6 dB -> 20.2 dB, clearing the 15 dB floor. Mono uploads
 # score identically — the chain has no stereo-only stage, so a phone or room
 # recording is cleaned up as well as a studio stereo mix.
 #
