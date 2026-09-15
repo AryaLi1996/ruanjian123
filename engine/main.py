@@ -404,6 +404,11 @@ def train_model(args):
     # instead of the singer — but a caller that has already cleaned its audio
     # can skip the pass.
     isolate    = bool(params.get("isolate", True))
+    # Refuse to train on material that is still below the SNR floor after
+    # isolation. Defaults on for the app: an hour of training that produces a
+    # model the user reports as noisy is worse than a message naming the
+    # files to re-record. The UI can pass strict=false to train anyway.
+    strict     = bool(params.get("strict", True))
     data_dir   = Path(params.get("data_dir",
                                  str(_writable_dir() / "_test_data")))
 
@@ -433,6 +438,7 @@ def train_model(args):
         device        = device,
         progress_path = output.parent / f"progress_{mode}.json",
         isolate       = isolate,
+        strict        = strict,
     )
     return {k: (bool(v) if isinstance(v, (bool,)) else v) for k, v in result.items()}
 

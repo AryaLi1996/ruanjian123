@@ -42,6 +42,25 @@ describe('classifyTrainingFailure', () => {
     ).kind).toBe('timeout')
   })
 
+  it('recognises the strict gate refusing material that is still noisy', () => {
+    const raw = 'Training refused — 2 file(s) are still below 15 dB SNR after '
+      + 'isolation: take01_lead_dry.wav, take02_lead_dry.wav. A model trained on '
+      + 'these will reproduce the remaining noise. Re-record or remove them, or '
+      + 'pass strict=false to train anyway.'
+    const failure = classifyTrainingFailure(raw)
+    expect(failure.kind).toBe('noisyMaterial')
+    expect(failure.messageKey).toBe('training.error.noisyMaterial')
+    // The offending file names are the actionable part, so they must survive
+    // into the detail panel rather than being swallowed by the friendly text.
+    expect(failure.detail).toContain('take01_lead_dry.wav')
+  })
+
+  it('does not mistake an ordinary isolation notice for the refusal', () => {
+    expect(classifyTrainingFailure(
+      'Isolated the lead vocal in 3 file(s) before training (SNR 4.1 → 19.8 dB)'
+    ).kind).toBe('unknown')
+  })
+
   it('leaves anything else to the generic message, keeping the raw text', () => {
     const failure = classifyTrainingFailure('Python engine is missing from this installation')
     expect(failure.kind).toBe('unknown')

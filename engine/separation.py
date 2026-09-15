@@ -398,113 +398,75 @@ def separate(
 # ── lead-vocal isolation (training material) ──────────────────────────────────
 
 class IsolationResult(TypedDict):
-    output_path:  str
-    elapsed_sec:  float
-    sample_rate:  int
-    duration_sec: float
+    output_path:   str
+    elapsed_sec:   float
+    sample_rate:   int
+    duration_sec:  float
+    snr_before_db: float
+    snr_after_db:  float
+    snr_gain_db:   float
+    stereo:        bool
 
 
 def isolate_lead_vocal(
     input_path: str | Path,
     output_dir: str | Path | None = None,
-    dereverb:   bool = False,
     progress_cb: Callable[[float, str], None] | None = None,
 ) -> IsolationResult:
     """
-    Isolate the lead (centre-panned) vocal from a mix, for training material.
+    Isolate the lead vocal from a mix, for training material.
 
-    Chain: vocal_harmony_split.onnx (mid/centre channel) → dereverb.onnx.
+    Delegates to vocal_isolation.isolate_vocal() — a real STFT masking chain
+    (Wiener denoise against a measured noise profile, then HPSS harmonic
+    extraction), not the FIR stubs in this module.
 
-    Why not separate(): both of separate()'s front-end models are the same
-    FIR construction — vocals = mix − lowpass(4 kHz), i.e. a 4 kHz HIGH-PASS
-    residual. A sung fundamental and its first harmonics live below that
-    cutoff, so that stem keeps sibilance and cymbals and discards the voice.
-    "enhanced" mode does not escape it either: its stage 2 mid/side split runs
-    on stage 1's output, so the voice is already gone by the time the
-    centre-channel extraction — the one part of the pipeline that actually
-    isolates a lead vocal — gets to run.
+    Why not separate(): both of its modes are built on _build_fir_separator(),
+    where the "vocals" stem is `mix - lowpass(4 kHz)` — a high-pass residual
+    that discards the sung fundamental. Measured as scale-invariant SDR
+    against the true voice in a full mix (voice, drums, bass, panned guitars,
+    hiss, hum, room reverb), see _test_vocal_isolation.py:
 
-    Measured on a synthetic mix (centre-panned voice, wide-panned guitars,
-    bass, decorrelated per-channel hiss) as voice-to-interference ratio —
-    the true voice's aligned component against everything else in the stem:
+        raw mix, no isolation at all               -10.53 dB
+        separate(mode="standard") "vocals"         -43.82 dB
+        time-domain centre channel (mid)           -10.53 dB
+        isolate_lead_vocal()                        +7.02 dB
 
-        one channel of the mix, i.e. no isolation     -1.37 dB
-        separate(mode="standard")  "vocals"          -71.70 dB
-        isolate_lead_vocal(dereverb=False)            -1.12 dB
-        isolate_lead_vocal(dereverb=True)             -8.63 dB
-
-    Two things to read out of that. The centre-channel extraction is a modest
-    gain, not a miracle — these are stub models (see README §6), and it only
-    cancels what is panned away from centre, so bass and mono-summed noise
-    survive. And the dereverb pass is pre-emphasis (dry[n] = wet[n] −
-    0.8·wet[n−1]), a high-pass that boosts broadband hiss along with the
-    consonants, which is why it is off by default here: on the hissy material
-    this function exists to clean up, it costs more than it recovers.
-
-    The real result is the second row. Routing training material through
-    separate() does not merely fail to help, it removes the voice, so the
-    point of this function is to give the training path an isolation step
-    that cannot do that. When the stubs are replaced by real production
-    models this is the seam to swap them in behind.
-
-    separate() is deliberately left alone: its two stems sum back to the mix
-    exactly (the COLA property the test suite's T04/T05 check), and Audio
-    Tools, Cover and Playback all depend on that behaviour.
-
-    Parameters
-    ----------
-    input_path:  Any libsndfile-readable audio file.
-    output_dir:  Directory for the isolated WAV (default: <input_stem>_isolated/).
-    dereverb:    Run the dereverb pass. Off by default (see above); worth
-                 enabling for genuinely reverberant, low-hiss material.
-    progress_cb: Optional (percent 0-100, stage name) callback.
+    separate() stays as it is: its two stems sum back to the mix exactly (the
+    COLA property T04/T05 check), and Audio Tools, Cover and Playback depend
+    on that. Isolation is a different job and does not need to be invertible.
     """
+    from vocal_isolation import isolate_vocal  # noqa: PLC0415
+
     input_path = Path(input_path)
     if output_dir is None:
         output_dir = input_path.parent / f"{input_path.stem}_isolated"
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    audio, sr = sf.read(str(input_path), dtype="float32", always_2d=True)
-    audio = audio.T
-    if audio.shape[0] == 1:
-        audio = np.repeat(audio, 2, axis=0)   # mono → fake stereo; mid == the input
-    elif audio.shape[0] > 2:
-        audio = audio[:2]
-
-    providers = ordered_providers_for_ep(detect_device()["provider"])
-    engine    = Path(__file__).parent
-
     def _report(percent: float, stage: str) -> None:
         if progress_cb is not None:
             progress_cb(round(min(100.0, max(0.0, percent)), 1), stage)
 
-    def _stage(offset: float, weight: float, stage: str) -> Callable[[float], None] | None:
-        if progress_cb is None:
-            return None
-        return lambda frac: _report(offset + frac * weight, stage)
-
     t0 = time.perf_counter()
     _report(0.0, "loading")
 
-    split_sess, _ = _make_session(
-        engine / "vocal_harmony_split.onnx", _build_vocal_harmony_split, providers)
-    lead = OLAProcessor(split_sess, input_name="vocals").run(
-        audio, _stage(0.0, 60.0 if dereverb else 90.0, "isolating_lead"))[0]
+    audio, sr = sf.read(str(input_path), dtype="float32", always_2d=True)
 
-    if dereverb:
-        dere_sess, _ = _make_session(engine / "dereverb.onnx", _build_dereverb, providers)
-        lead = OLAProcessor(dere_sess, input_name="wet").run(
-            lead, _stage(60.0, 30.0, "dereverb"))[0]
+    _report(10.0, "isolating")
+    isolated, metrics = isolate_vocal(audio.T, sr)
 
     _report(95.0, "writing")
     out_file = output_dir / f"{input_path.stem}_lead_dry.wav"
-    sf.write(str(out_file), lead.T, sr, subtype="PCM_16")
+    sf.write(str(out_file), isolated, sr, subtype="PCM_16")
     _report(100.0, "done")
 
     return IsolationResult(
         output_path=str(out_file),
         elapsed_sec=round(time.perf_counter() - t0, 3),
         sample_rate=sr,
-        duration_sec=round(audio.shape[1] / sr, 3),
+        duration_sec=metrics["duration_sec"],
+        snr_before_db=metrics["snr_before_db"],
+        snr_after_db=metrics["snr_after_db"],
+        snr_gain_db=metrics["snr_gain_db"],
+        stereo=metrics["stereo"],
     )

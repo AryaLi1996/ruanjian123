@@ -48,6 +48,7 @@ ruanjian/
 │   ├── watermark.py                 # Blind watermark embed + verify
 │   ├── model_crypto.py              # AES-256-GCM model file encryption
 │   ├── sandbox.py                   # Python network sandbox (socket patching)
+│   ├── vocal_isolation.py           # STFT vocal isolation for training material
 │   ├── _test_suite.py               # End-to-end test suite (T01–T10)
 │   ├── _bench.py                    # Multi-iteration performance benchmark
 │   ├── _test_security.py            # Security acceptance tests
@@ -327,7 +328,7 @@ All ONNX models are **stub models** created programmatically on first run. Real 
 | `expression_encoder.onnx` | V2 cover LSTM encoder | `cover_synthesis._build_expression_encoder()` |
 | `watermark_embed.onnx` | Watermark embedding | `watermark.build_watermark_model()` |
 
-#### Picking a model to clean training material with
+#### Cleaning training material
 
 `separate()` is **not** a vocal isolator and must not be used to prepare
 training data. Both of its front-end models (`demucs_nano.onnx` for standard,
@@ -335,32 +336,61 @@ training data. Both of its front-end models (`demucs_nano.onnx` for standard,
 `_build_fir_separator()` call: the "vocals" stem is `mix − lowpass(4 kHz)`,
 i.e. a 4 kHz **high-pass residual**. A sung fundamental and its first
 harmonics sit below that cutoff, so the stem keeps sibilance and cymbals and
-discards the voice. Enhanced mode does not rescue it — its centre-channel
-split (`vocal_harmony_split.onnx`, the one model here that does isolate a
-lead vocal) runs *downstream* of that residual, so the voice is already gone.
+discards the voice.
 
-Use `separation.isolate_lead_vocal()` instead, which runs the centre-channel
-extraction on the mix directly. Measured as voice-to-interference ratio
-against a synthetic centre-panned voice (see `_test_vocal_isolation.py`):
+Training material goes through `engine/vocal_isolation.py` instead — a real
+STFT masking chain, not a stub:
 
-| Candidate | VIR |
+1. **Noise suppression** — Wiener gain against a noise magnitude spectrum
+   estimated as the 25th percentile over time, per frequency bin. Removes
+   hiss, room tone, mains hum and air conditioning.
+2. **Harmonic extraction** — HPSS median filtering (time vs. frequency).
+   Removes drums and plucked accompaniment; the voice is harmonic and stays.
+
+No pretrained weights, so nothing downloads at runtime (`sandbox.py` blocks
+outbound sockets anyway), nothing extra ships in the installer, and there is
+no model licence to audit against a commercial product.
+
+Scale-invariant SDR against the true voice in a full mix — voice with
+vibrato, consonants and rests, plus drums, bass, panned guitars, hiss, mains
+hum and room reverb (`_test_vocal_isolation.py`):
+
+| Candidate | SI-SDR |
 |---|---|
-| One channel of the mix (no isolation) | −1.37 dB |
-| `separate(mode="standard")` → `vocals` | −71.70 dB |
-| `isolate_lead_vocal()` | −1.12 dB |
-| `isolate_lead_vocal(dereverb=True)` | −8.63 dB |
+| Raw mix, no isolation | −10.53 dB |
+| `separate(mode="standard")` → `vocals` | −43.82 dB |
+| Time-domain centre channel | −10.53 dB |
+| **`isolate_lead_vocal()`** | **+7.02 dB** |
 
-These are stub models, so the gain is modest — the centre extraction only
-cancels what is panned off centre, and `dereverb.onnx` is pre-emphasis
-(`dry[n] = wet[n] − 0.8·wet[n−1]`), a high-pass that boosts hiss, which is
-why it is off by default. The result that matters is the second row.
-`trainer.isolate_vocals()` calls this before chunking, on files below
-`MIN_SNR_DB`; pass `isolate: false` to `train_model` to skip it. When real
-production models replace the stubs, this is the seam to swap them in behind.
+That is a **+17.6 dB** improvement, taking the SNR the trainer gates on from
+0.6 dB to 21.3 dB — from a voice buried under the backing to one that
+dominates. Mono uploads score identically: the chain has no stereo-only
+stage, so a phone or room recording is cleaned up as well as a studio mix.
 
-`separate()` itself is deliberately unchanged: its stems sum back to the mix
-exactly (the COLA property T04/T05 check), and Audio Tools, Cover and
-Playback depend on that.
+There is deliberately **no centre-channel mask**. One was written, measured
+and removed — on four mixes it scored worse than a plain mono downmix at
+every setting tried, because panned accompaniment overlaps the voice in most
+energetic bins and attenuating them costs more voice than it removes
+interference.
+
+Parameters were tuned against three metrics, not just separation: SI-SDR,
+how much of a clean vocal survives untouched, and how much energy above
+4 kHz is kept relative to a perfect result. The last one guards against a
+lisping model — consonants are low-energy and an SI-SDR-only tuning eats
+them. The shipped settings land 0.17 dB from ideal on high frequencies;
+SI-SDR-optimal settings scored 0.36 dB better on separation but 6.8 dB below
+ideal on high frequencies.
+
+**Verification.** Isolation is measured, not assumed. Each isolated file is
+re-measured afterwards; anything still below `MIN_SNR_DB` is named in
+`vocal_isolation.unverified_files` with `verified: false`. The `train_model`
+IPC call defaults to `strict: true` and refuses such a run outright rather
+than spending an hour producing a model the user will report as noisy — pass
+`strict: false` to train anyway, or `isolate: false` to skip the pass.
+
+`separate()` itself is unchanged: its stems sum back to the mix exactly (the
+COLA property T04/T05 check), and Audio Tools, Cover and Playback depend on
+that.
 
 ---
 

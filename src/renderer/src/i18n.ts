@@ -123,6 +123,7 @@ const resources = {
           timeout: '训练超时：引擎每轮才上报一次进度，素材较多时 CPU 处理时间超过了等待上限，运行被判定为卡死并中止。建议把训练素材控制在 15 分钟以内，或改用标准模式、改用 GPU 训练。',
           oom: '内存不足：系统或 PyTorch 在训练途中终止了引擎进程。请关闭其他占用内存的程序、减少训练素材数量，或改用标准模式后重试。',
           dataLoader: '数据加载失败：引擎无法读取预处理后的训练数据。请检查素材文件是否损坏（可先单独试听），必要时重新导出为 WAV 后重试。',
+          noisyMaterial: '素材降噪后仍然过吵：引擎已自动分离人声，但下列文件的信噪比仍低于训练要求，继续训练只会把噪声学进模型。请重录或移除这些文件后重试（详情见下方文件名）。',
           showDetail: '查看详细日志',
         },
         // Ticket T2：设备选择与 CPU 降级提示。
@@ -660,6 +661,7 @@ const resources = {
           timeout: 'Training timed out: the engine reports progress only once per epoch, and on the CPU this much material stayed silent past the limit, so the run was treated as hung and stopped. Keep the material under about 15 minutes, switch to standard mode, or train on a GPU.',
           oom: 'Out of memory: the system or PyTorch killed the engine mid-run. Close other memory-hungry apps, use fewer files, or switch to standard mode and try again.',
           dataLoader: 'Data loading failed: the engine could not read the preprocessed training data. Check whether any source file is corrupt (try playing it), and re-export to WAV if needed.',
+          noisyMaterial: 'Material is still too noisy after cleanup: the engine isolated the lead vocal, but the files below are still under the signal-to-noise bar for training, and training on them would teach the model that noise. Re-record or remove them and try again (the file names are in the details below).',
           showDetail: 'Show engine details',
         },
         stepsLabel: 'Steps', dateLabel: 'Trained', lossShort: 'Loss',

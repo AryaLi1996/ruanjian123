@@ -18,11 +18,14 @@
  *  - out of memory: the OS or PyTorch killed the run. A SIGKILL from the
  *    Linux/macOS OOM killer surfaces as exit code -9 or 137 with nothing on
  *    stderr, so the exit code is part of the signature;
- *  - DataLoader worker crash: a corrupt chunk, or not enough memory to fork.
+ *  - DataLoader worker crash: a corrupt chunk, or not enough memory to fork;
+ *  - material still noisy after isolation: the engine refused to start rather
+ *    than spend an hour producing a model that reproduces the noise. This one
+ *    is a deliberate refusal, not a crash, and the fix is in the material.
  */
 export const STALL_TIMEOUT_MARKER = 'ENGINE_STALL_TIMEOUT'
 
-export type TrainingFailureKind = 'timeout' | 'oom' | 'dataLoader' | 'unknown'
+export type TrainingFailureKind = 'timeout' | 'oom' | 'dataLoader' | 'noisyMaterial' | 'unknown'
 
 export interface TrainingFailure {
   kind: TrainingFailureKind
@@ -53,6 +56,12 @@ export function classifyTrainingFailure(message: string): TrainingFailure {
   }
   if (/DataLoader worker/i.test(detail) || /worker \(pid \d+\) exited/i.test(detail)) {
     return { kind: 'dataLoader', messageKey: 'training.error.dataLoader', detail }
+  }
+  // engine/trainer.py's strict gate: "Training refused — N file(s) are still
+  // below X dB SNR after isolation: …". The file names matter, so they stay
+  // visible in `detail` rather than being replaced wholesale.
+  if (/Training refused/i.test(detail) && /after isolation/i.test(detail)) {
+    return { kind: 'noisyMaterial', messageKey: 'training.error.noisyMaterial', detail }
   }
   return { kind: 'unknown', messageKey: null, detail }
 }
