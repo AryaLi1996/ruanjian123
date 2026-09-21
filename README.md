@@ -49,6 +49,7 @@ ruanjian/
 │   ├── model_crypto.py              # AES-256-GCM model file encryption
 │   ├── sandbox.py                   # Python network sandbox (socket patching)
 │   ├── vocal_isolation.py           # STFT vocal isolation for training material
+│   ├── mdx_separation.py            # MDX-Net song separation (real model)
 │   ├── _test_suite.py               # End-to-end test suite (T01–T10)
 │   ├── _bench.py                    # Multi-iteration performance benchmark
 │   ├── _test_security.py            # Security acceptance tests
@@ -327,6 +328,42 @@ All ONNX models are **stub models** created programmatically on first run. Real 
 | `dereverb.onnx` | Enhanced separation stage 3 | `separation._build_dereverb()` |
 | `expression_encoder.onnx` | V2 cover LSTM encoder | `cover_synthesis._build_expression_encoder()` |
 | `watermark_embed.onnx` | Watermark embedding | `watermark.build_watermark_model()` |
+
+#### Song separation (`separate()`)
+
+`separate()` runs **MDX-Net** (`UVR-MDX-NET-Inst_HQ_3.onnx`, 66 MB) when the
+weights are installed. The model predicts the instrumental; the vocal is the
+residual, so the two stems still sum back to the mix exactly and T04/T05's
+reconstruction check is unaffected.
+
+The weights are **not in git**. `scripts/fetch-models.sh` downloads and
+checksum-verifies them, `scripts/package-engine.sh` calls it before
+PyInstaller, and electron-builder ships the file inside the installer. It has
+to ship rather than download on demand, because `sandbox.py` blocks outbound
+sockets at runtime — the packaged app can never fetch it itself.
+
+Without the file, separation falls back to the old FIR placeholder and sets
+`separator: "stub"` / `degraded: true` in its result; the Cover view shows a
+warning rather than presenting hiss as a finished separation. **The
+placeholder's "vocals" stem contains no voice** — measured on a real song it
+sits 77 dB below the mix in the 120–1000 Hz band a voice occupies, with +55 dB
+of its energy in 4–11 kHz hiss. That hiss is what users reported as an
+electrical noise.
+
+Vocal stem quality on a real song, as the correlation between the vocal stem
+and the accompaniment (how much backing is left behind — lower is cleaner):
+
+| Separator | Bleed |
+|---|---|
+| FIR placeholder | — (no voice in the stem at all) |
+| Repeating-structure (REPET-SIM) | 0.567 |
+| **MDX-Net** | **0.135** |
+
+Cost: **+66 MB** installer size, and roughly **150 s for a 4-minute song** on a
+4-core CPU (RT 0.64; thread count tracks the core count, capped at 8). GPU
+execution providers are selected by `device_detector` as usual and will be
+faster, but those figures are not measured here. T04/T05 pick their timing
+budget from the `separator` field, so a stub run keeps the original target.
 
 #### Cleaning training material
 
@@ -699,6 +736,9 @@ python3 _test_security.py
 
 # Training-path vocal isolation (why separate() must not be used there)
 python3 _test_vocal_isolation.py
+
+# Real separator (skips itself when the weights are not installed)
+python3 _test_mdx_separation.py
 ```
 
 ---

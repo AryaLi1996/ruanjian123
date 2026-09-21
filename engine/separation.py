@@ -14,6 +14,7 @@ stem1 + stem2 == mix exactly (zero crosstalk for LTI models).
 """
 from __future__ import annotations
 
+import sys
 import tempfile
 import time
 from pathlib import Path
@@ -26,6 +27,7 @@ import onnxruntime as ort
 import soundfile as sf
 from onnx import TensorProto, helper, numpy_helper
 
+import mdx_separation
 from device_detector import detect_device, ordered_providers_for_ep
 
 SAMPLE_RATE: int   = 44_100
@@ -244,6 +246,12 @@ SeparationMode = Literal["standard", "enhanced"]
 class SeparationResult(TypedDict):
     mode:            str
     stems:           dict[str, str]   # stem_name → absolute file path
+    # Which separator actually ran. "mdx" is the real model; "stub" means the
+    # weights were not installed and the FIR placeholder ran instead, whose
+    # "vocals" stem contains no voice. Callers must not present a stub result
+    # to a user as a separation — see engine/mdx_separation.py.
+    separator:       str
+    degraded:        bool             # True when separator == "stub"
     elapsed_sec:     float
     model_load_sec:  float           # portion of elapsed_sec spent creating ONNX
                                       # sessions — a one-time cost that does NOT
@@ -324,25 +332,54 @@ def separate(
 
     _report(0.0, "loading")
 
+    # The real separator when its weights are installed; the FIR stub only as a
+    # labelled fallback. The stub's "vocals" stem measures 77 dB below the mix
+    # in the sung-fundamental band on a real song — it is high-frequency hiss,
+    # not a voice — so a result produced by it is flagged degraded rather than
+    # handed back as if it were a separation.
+    use_mdx = mdx_separation.is_available(engine)
+    separator = "mdx" if use_mdx else "stub"
+    if not use_mdx:
+        print(f"[separation] {mdx_separation.MODEL_NAME} not installed — falling back "
+              "to the FIR placeholder, whose vocal stem contains no voice. "
+              "Run scripts/fetch-models.sh.", file=sys.stderr, flush=True)
+
+    def _mdx_split(sig, offset, weight, stage):
+        nonlocal model_load_sec
+        acc_, voc_, load_sec = mdx_separation.separate_stems(
+            sig, providers=providers, engine_dir=engine,
+            progress_cb=(lambda f: _report(offset + f * weight, stage))
+            if progress_cb else None)
+        model_load_sec += load_sec
+        return acc_, voc_
+
     if mode == "standard":
-        proc = OLAProcessor(
-            _session(
-                "demucs_nano.onnx",
-                lambda: _build_fir_separator("demucs_nano", 4_000.0, "accompaniment", "vocals"),
+        if use_mdx:
+            acc, voc = _mdx_split(audio, 0.0, 95.0, "separating")
+        else:
+            proc = OLAProcessor(
+                _session(
+                    "demucs_nano.onnx",
+                    lambda: _build_fir_separator("demucs_nano", 4_000.0,
+                                                 "accompaniment", "vocals"),
+                )
             )
-        )
-        acc, voc = proc.run(audio, _stage(0.0, 95.0, "separating"))
+            acc, voc = proc.run(audio, _stage(0.0, 95.0, "separating"))
         stems = {"accompaniment": acc, "vocals": voc}
 
     elif mode == "enhanced":
-        # Stage 1 – coarse vocal/accompaniment split
-        s1 = OLAProcessor(
-            _session(
-                "sep_main.onnx",
-                lambda: _build_fir_separator("sep_main", 4_000.0, "accompaniment", "vocals"),
+        # Stage 1 – vocal/accompaniment split
+        if use_mdx:
+            acc, voc = _mdx_split(audio, 0.0, 45.0, "separating")
+        else:
+            s1 = OLAProcessor(
+                _session(
+                    "sep_main.onnx",
+                    lambda: _build_fir_separator("sep_main", 4_000.0,
+                                                 "accompaniment", "vocals"),
+                )
             )
-        )
-        acc, voc = s1.run(audio, _stage(0.0, 45.0, "separating"))
+            acc, voc = s1.run(audio, _stage(0.0, 45.0, "separating"))
 
         # Stage 2 – mid-side lead / harmony split
         s2 = OLAProcessor(
@@ -387,6 +424,8 @@ def separate(
     return SeparationResult(
         mode=mode,
         stems=stem_paths,
+        separator=separator,
+        degraded=not use_mdx,
         elapsed_sec=round(elapsed, 3),
         model_load_sec=round(model_load_sec, 3),
         sample_rate=SAMPLE_RATE,

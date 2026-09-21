@@ -32,6 +32,11 @@ const STEP_LABEL_KEYS: Record<number, string> = {
 
 interface SeparationResult {
   mode: string; stems: Record<string, string>; elapsed_sec: number; duration_sec: number
+  // Which separator the engine actually ran. `degraded` means the MDX-Net
+  // weights were not installed and the FIR placeholder ran instead — its
+  // "vocals" stem contains no voice, only high-frequency hiss, so the result
+  // must not be presented as a finished separation.
+  separator?: string; degraded?: boolean
 }
 interface CoverResult {
   output_path: string; ai_vocal_path: string; mode: string; duration_sec: number; elapsed_sec: number
@@ -178,6 +183,12 @@ export function CoverView(): JSX.Element {
       setSepPercent(100)
       setSepJustDone(true)
       await collectAssets(res, originalPath)
+      if (res.degraded) {
+        // Say so loudly rather than letting the user listen to hiss and
+        // conclude the product is broken — which is exactly what happened
+        // while the placeholder was the only separator.
+        setSepError(t('cover.separatorDegraded'))
+      }
       // Marks step ① done (unlocking ②) without navigating away from it:
       // the stems, the pitch-analysis panel and FC-05's "分离完成！" all live
       // on this step and were previously replaced the instant separation

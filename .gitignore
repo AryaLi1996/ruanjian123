@@ -36,3 +36,6 @@ engine/_test_data/_processed/
 engine/_test_data/sep_std_out_*/
 engine/_test_data/sep_enh_out_*/
 engine/model_t08_*.onnx
+
+# Pretrained separation weights — 66 MB, fetched by scripts/fetch-models.sh
+engine/UVR-MDX-NET-*.onnx

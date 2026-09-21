@@ -227,6 +227,11 @@ if ! "${PY[@]}" -m PyInstaller --version >/dev/null 2>&1; then
 fi
 
 echo "[package-engine] Building standalone engine bundle..."
+# The separation weights are not in git (66 MB) and the spec below lists the
+# file in `datas`, so PyInstaller fails without it. Fetch it first; the script
+# no-ops when the file is already present and verified.
+bash "$ROOT/scripts/fetch-models.sh"
+
 cd "$ENGINE_DIR"
 
 # Collect all .onnx files as data assets

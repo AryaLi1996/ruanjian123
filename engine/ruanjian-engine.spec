@@ -5,7 +5,7 @@ a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=[],
-    datas=[('demucs_nano.onnx', '.'), ('dereverb.onnx', '.'), ('expression_encoder.onnx', '.'), ('model.onnx', '.'), ('model_professional.onnx', '.'), ('model_standard.onnx', '.'), ('sep_main.onnx', '.'), ('vocal_harmony_split.onnx', '.'), ('watermark_embed.onnx', '.'), ('*.py', '.')],
+    datas=[('demucs_nano.onnx', '.'), ('dereverb.onnx', '.'), ('expression_encoder.onnx', '.'), ('model.onnx', '.'), ('model_professional.onnx', '.'), ('model_standard.onnx', '.'), ('sep_main.onnx', '.'), ('vocal_harmony_split.onnx', '.'), ('watermark_embed.onnx', '.'), ('UVR-MDX-NET-Inst_HQ_3.onnx', '.'), ('*.py', '.')],
     hiddenimports=['soundfile', 'onnxruntime', 'numpy', 'cryptography', 'torch', 'paths', 'device_detector', 'env_check'],
     hookspath=[],
     hooksconfig={},
