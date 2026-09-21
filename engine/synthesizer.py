@@ -83,9 +83,21 @@ def build_stub_model(hop: int = HOP_SIZE) -> bytes:
 
     Weights are seeded near-identity so audio_frames pass through largely
     unchanged; phoneme_cond adds ~5% formant coloring.
+
+    The symmetry-breaking noise is scaled by 1/sqrt(hop), which is what makes
+    "near-identity" true. Each output sample is a row of W dotted with the
+    frame, so it accumulates `hop - 1` off-diagonal terms: drawing them at a
+    flat 0.01 gives a perturbation of 0.01·sqrt(255) ≈ 0.16 — 16% of the
+    signal, not the 1% the figure reads as. That measured 12.3 dB SNR on a
+    pure tone through this graph, i.e. audible broadband hash on everything
+    the synthesiser produced. Dividing by sqrt(hop) makes the per-row
+    perturbation the intended 1% and takes the same measurement to 33.9 dB.
     """
     rng = np.random.default_rng(0)
-    noise = lambda: rng.standard_normal((hop, hop)).astype(np.float32) * 0.01
+    # float32 throughout: a float64 scale silently promotes the weights and
+    # ONNX rejects the graph for binding MatMul's T to two different types.
+    scale = np.float32(0.01 / np.sqrt(hop))
+    noise = lambda: (rng.standard_normal((hop, hop)) * scale).astype(np.float32)
     W1 = np.eye(hop, dtype=np.float32) * 0.98 + noise()
     W2 = np.eye(hop, dtype=np.float32) * 0.98 + noise()
     b1 = np.zeros(hop, dtype=np.float32)

@@ -54,6 +54,7 @@ ruanjian/
 │   ├── _bench.py                    # Multi-iteration performance benchmark
 │   ├── _test_security.py            # Security acceptance tests
 │   ├── _test_vocal_isolation.py     # Training-path vocal isolation tests
+│   ├── _test_synth_noise.py         # Synthesiser weight-init regression guard
 │   ├── requirements.txt             # Python dependencies
 │   └── *.onnx                       # Stub models (auto-generated on first run)
 ├── scripts/
@@ -739,6 +740,9 @@ python3 _test_vocal_isolation.py
 
 # Real separator (skips itself when the weights are not installed)
 python3 _test_mdx_separation.py
+
+# Synthesiser weight initialisation
+python3 _test_synth_noise.py
 ```
 
 ---
