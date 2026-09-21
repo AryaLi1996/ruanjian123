@@ -72,6 +72,13 @@ jobs:
         working-directory: engine
         run: python _test_mdx_separation.py
 
+      # Pins the synthesiser's weight initialisation: the noise must stay
+      # scaled by 1/sqrt(hop), stay float32, and the committed model.onnx must
+      # carry the fix rather than being a stale file from before it.
+      - name: Run synthesis noise test suite
+        working-directory: engine
+        run: python _test_synth_noise.py
+
       - name: Run benchmark (short duration)
         working-directory: engine
         run: |

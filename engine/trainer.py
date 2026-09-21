@@ -77,12 +77,22 @@ class MicroVITSModel(nn.Module):
         self._init_near_identity()
 
     def _init_near_identity(self) -> None:
-        """Match stub ONNX initialisation (near-identity + tiny noise)."""
+        """Match stub ONNX initialisation (near-identity + tiny noise).
+
+        The noise is scaled by 1/sqrt(HOP) for the reason spelled out in
+        synthesizer.build_stub_model(): a flat 0.01 on a HOP x HOP matrix is
+        1% per element but 16% per output sample, because each one sums
+        HOP - 1 of them. Unscaled, this model reproduced a pure tone at
+        13.1 dB SNR — and standard mode only adapts 2048 LoRA parameters on
+        layer1, so training could never move it. Both of these must stay in
+        step: export_to_onnx() builds the same graph the stub does.
+        """
         rng = np.random.default_rng(0)
+        scale = 0.01 / np.sqrt(self.HOP)
         with torch.no_grad():
             for layer in (self.layer1, self.layer2):
-                w = (torch.eye(self.HOP) * 0.98
-                     + torch.from_numpy(rng.standard_normal((self.HOP, self.HOP)).astype(np.float32)) * 0.01)
+                noise = rng.standard_normal((self.HOP, self.HOP)).astype(np.float32)
+                w = torch.eye(self.HOP) * 0.98 + torch.from_numpy(noise) * scale
                 layer.weight.data.copy_(w)
                 layer.bias.data.zero_()
 
