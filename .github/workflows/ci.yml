@@ -64,6 +64,14 @@ jobs:
         working-directory: engine
         run: python _test_vocal_isolation.py
 
+      # Self-skips its model-dependent checks when the weights are absent,
+      # which is the case in CI: fetch-models.sh is a build step, and a 66 MB
+      # download per matrix job is not worth it. What it still verifies here
+      # is that a missing model degrades loudly and the stems reconstruct.
+      - name: Run separator test suite
+        working-directory: engine
+        run: python _test_mdx_separation.py
+
       - name: Run benchmark (short duration)
         working-directory: engine
         run: |

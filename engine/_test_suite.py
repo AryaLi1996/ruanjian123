@@ -57,7 +57,13 @@ PERF_TARGETS: dict[str, dict[str, float]] = {
     "cpu": {
         "inference_ms":         1.0,
         "synthesis_rt_ratio":   0.30,
-        "sep_standard_sec_4m":  10.0,   # 4-minute song ≤ 10 s
+        "sep_standard_sec_4m":  10.0,   # 4-minute song ≤ 10 s (stub separator)
+        # The real MDX-Net separator is a 66 MB network, not a 127-tap FIR.
+        # Measured on a 4-core CPU container: RT 0.64, i.e. ~153 s for a
+        # 4-minute song. The budget below carries ~3x headroom for slower and
+        # shared CI runners. README §6 always said these numbers would have to
+        # be re-set once real models replaced the stubs; this is that.
+        "sep_standard_sec_4m_mdx": 480.0,
         "sep_enhanced_sec_4m":  60.0,
         "sep_crosstalk_db":    -40.0,   # stem reconstruction error threshold
         "cover_v1_rt_ratio":    0.10,
@@ -71,6 +77,7 @@ PERF_TARGETS: dict[str, dict[str, float]] = {
         "inference_ms":         0.5,
         "synthesis_rt_ratio":   0.05,
         "sep_standard_sec_4m":  4.0,    # was 3.0 — see PERF_TARGETS comment above
+        "sep_standard_sec_4m_mdx": 300.0,   # GPU EPs; unmeasured here
         "sep_enhanced_sec_4m":  15.0,
         "sep_crosstalk_db":    -40.0,
         "cover_v1_rt_ratio":    0.03,   # was 0.02 — see PERF_TARGETS comment above
@@ -84,6 +91,7 @@ PERF_TARGETS: dict[str, dict[str, float]] = {
         "inference_ms":         0.1,
         "synthesis_rt_ratio":   0.02,
         "sep_standard_sec_4m":  2.0,
+        "sep_standard_sec_4m_mdx": 300.0,   # GPU EPs; unmeasured here
         "sep_enhanced_sec_4m":  8.0,
         "sep_crosstalk_db":    -40.0,
         "cover_v1_rt_ratio":    0.01,
@@ -97,6 +105,7 @@ PERF_TARGETS: dict[str, dict[str, float]] = {
         "inference_ms":         0.2,
         "synthesis_rt_ratio":   0.05,
         "sep_standard_sec_4m":  3.0,
+        "sep_standard_sec_4m_mdx": 300.0,   # GPU EPs; unmeasured here
         "sep_enhanced_sec_4m":  12.0,
         "sep_crosstalk_db":    -40.0,
         "cover_v1_rt_ratio":    0.02,
@@ -334,14 +343,21 @@ def test_t04_separation_standard(duration: float, targets: dict, n_trials: int =
             "stems":           list(res["stems"].keys()),
             "n_trials":        n_trials,
         }
+        # The budget depends on which separator actually ran: the FIR stub is
+        # a 127-tap filter, the real model is a 66 MB network. A checkout
+        # without scripts/fetch-models.sh measures the stub, so CI keeps the
+        # original target; a release build measures the real one.
+        budget_key = ("sep_standard_sec_4m_mdx" if res.get("separator") == "mdx"
+                      else "sep_standard_sec_4m")
+        budget = targets[budget_key]
+        r["metrics"]["separator"] = res.get("separator", "stub")
         r["targets"] = {
-            "sep_standard_sec_4m": targets["sep_standard_sec_4m"],
-            "sep_crosstalk_db":    targets["sep_crosstalk_db"],
+            budget_key:         budget,
+            "sep_crosstalk_db": targets["sep_crosstalk_db"],
         }
-        r["passed"] = (equiv_4m <= targets["sep_standard_sec_4m"]
-                       and recon_db >= targets["sep_crosstalk_db"])
-        if equiv_4m > targets["sep_standard_sec_4m"]:
-            r["errors"].append(f"4-min equiv {equiv_4m:.1f}s > {targets['sep_standard_sec_4m']}s (best of {n_trials})")
+        r["passed"] = (equiv_4m <= budget and recon_db >= targets["sep_crosstalk_db"])
+        if equiv_4m > budget:
+            r["errors"].append(f"4-min equiv {equiv_4m:.1f}s > {budget}s (best of {n_trials})")
         if recon_db < targets["sep_crosstalk_db"]:
             r["errors"].append(f"Reconstruction {recon_db:.1f} dB < {targets['sep_crosstalk_db']} dB")
     except Exception as e:
@@ -388,11 +404,17 @@ def test_t05_separation_enhanced(duration: float, targets: dict, n_trials: int =
             "n_stems":       len(res["stems"]),
             "n_trials":      n_trials,
         }
-        r["targets"] = {"sep_enhanced_sec_4m": targets["sep_enhanced_sec_4m"]}
-        r["passed"]  = (equiv_4m <= targets["sep_enhanced_sec_4m"]
+        # Same split as T04: the enhanced chain's first stage is the real
+        # separator when its weights are installed, so it cannot be held to a
+        # budget set for a 127-tap FIR.
+        budget_key = ("sep_standard_sec_4m_mdx" if res.get("separator") == "mdx"
+                      else "sep_enhanced_sec_4m")
+        r["metrics"]["separator"] = res.get("separator", "stub")
+        r["targets"] = {budget_key: targets[budget_key]}
+        r["passed"]  = (equiv_4m <= targets[budget_key]
                         and len(res["stems"]) == 3)
-        if equiv_4m > targets["sep_enhanced_sec_4m"]:
-            r["errors"].append(f"4-min equiv {equiv_4m:.1f}s > {targets['sep_enhanced_sec_4m']}s (best of {n_trials})")
+        if equiv_4m > targets[budget_key]:
+            r["errors"].append(f"4-min equiv {equiv_4m:.1f}s > {targets[budget_key]}s (best of {n_trials})")
         if len(res["stems"]) != 3:
             r["errors"].append(f"Expected 3 stems, got {len(res['stems'])}")
     except Exception as e:
