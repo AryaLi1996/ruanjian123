@@ -219,8 +219,10 @@ with tempfile.TemporaryDirectory() as tmp:
         trainer.export_to_onnx(trainer.MicroVITSModel(), path,
                                extra_arrays=vm.decoder_state_to_arrays(vm.build_torch_decoder()))
         loaded = _load_decoder(path)
+        # Six weight arrays plus the content-format tag.
         check("a trained decoder survives the ONNX round-trip",
-              loaded is not None and len(loaded) == 6)
+              loaded is not None and len(loaded) == 7
+              and vm.CONTENT_VERSION_KEY in loaded)
     except ImportError:
         pass
 
@@ -278,6 +280,51 @@ kept = vm.resample_for_content(np.sin(2 * np.pi * 440 * np.arange(sr_hi) / sr_hi
 check("and preserves the level of what it keeps",
       abs(float(np.max(np.abs(kept))) - 0.5) < 0.02,
       f"peak {float(np.max(np.abs(kept))):.3f} for a 0.5 input")
+
+
+# ── a decoder is only usable with the features it was trained on ────────────
+
+try:
+    import torch  # noqa: F811
+
+    tagged = vm.decoder_state_to_arrays(vm.build_torch_decoder())
+    check("stored weights carry the content format they were trained on",
+          vm.CONTENT_VERSION_KEY in tagged
+          and int(tagged[vm.CONTENT_VERSION_KEY][0]) == vm.CONTENT_VERSION)
+    check("this build's own decoder is usable", vm.decoder_is_usable(tagged))
+
+    future = dict(tagged)
+    future[vm.CONTENT_VERSION_KEY] = np.array([vm.CONTENT_VERSION + 1], dtype=np.float32)
+    check("a decoder trained on a different content format is refused",
+          not vm.decoder_is_usable(future))
+
+    # Models exported before the tag existed must keep working: they are
+    # already in users' libraries and their features are this format.
+    legacy = {k: v for k, v in tagged.items() if k != vm.CONTENT_VERSION_KEY}
+    check("an untagged decoder of the right width is still accepted",
+          vm.decoder_is_usable(legacy))
+
+    wrong_width = dict(legacy)
+    wrong_width[f"{vm.WEIGHT_PREFIX}0.weight"] = np.zeros((4, 768, vm.KERNEL), dtype=np.float32)
+    check("an untagged decoder of the wrong width is refused",
+          not vm.decoder_is_usable(wrong_width))
+
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "future.onnx"
+        trainer.export_to_onnx(trainer.MicroVITSModel(), path, extra_arrays=future)
+        check("a cover reads no decoder out of a future-format model, "
+              "so it falls back rather than failing",
+              _load_decoder(path) is None)
+
+    # And the guard behind it, for anyone who reaches predict_envelope anyway.
+    try:
+        vm.predict_envelope(tagged, np.zeros((768, 10), dtype=np.float32))
+        check("predict_envelope rejects content of the wrong width", False)
+    except ValueError as exc:
+        check("predict_envelope rejects content of the wrong width",
+              "trained on" in str(exc))
+except ImportError:
+    pass
 
 
 passed = sum(1 for r in results if r)
