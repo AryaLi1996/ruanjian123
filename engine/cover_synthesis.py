@@ -391,6 +391,88 @@ def _load_timbre(model_path: "str | Path") -> np.ndarray | None:
     return None
 
 
+def _load_decoder(model_path: "str | Path") -> "dict[str, np.ndarray] | None":
+    """Read the trained per-frame timbre decoder out of a .onnx.
+
+    None for a model trained before the decoder existed, or for the stub — in
+    which case the caller falls back to the static average envelope, and then
+    to leaving the reference alone.
+    """
+    import voice_model  # noqa: PLC0415
+
+    try:
+        graph = onnx.load(str(model_path))
+    except Exception:
+        return None
+    weights = {init.name: numpy_helper.to_array(init).astype(np.float32)
+               for init in graph.graph.initializer
+               if init.name.startswith(voice_model.WEIGHT_PREFIX)}
+    expected = {f"{voice_model.WEIGHT_PREFIX}{i}.{w}"
+                for i in (0, 2, 4) for w in ("weight", "bias")}
+    return weights if expected <= set(weights) else None
+
+
+def _apply_decoder(ref_mono: np.ndarray, weights: dict, strength: float = 1.0) -> np.ndarray:
+    """Re-colour `ref_mono` with an envelope predicted per frame.
+
+    The decoder was trained at voice_model.SR (22.05 kHz) and the cover runs
+    at 44.1 kHz. Content is extracted from a downsampled copy, but the
+    envelope is applied to the *full-band* spectrum: mel band centres are
+    absolute frequencies, so mel_envelope_to_linear places them correctly at
+    any rate, and nothing above 11 kHz has to be thrown away to use a model
+    trained below it.
+
+    The two hops are chosen so the frame rates already agree — 22050/256 and
+    44100/512 are both 86.13 fps — so the predicted envelope lines up with
+    the cover's frames without resampling in time. Padding still leaves the
+    counts off by a frame or two at the ends, which is interpolated.
+    """
+    import voice_model  # noqa: PLC0415
+    from timbre import cepstrum_order, spectral_envelope  # noqa: PLC0415
+
+    ref_mono = np.asarray(ref_mono, dtype=np.float64)
+    if len(ref_mono) < N_FFT:
+        return ref_mono.astype(np.float32)
+
+    window = np.hanning(N_FFT + 1)[:-1]
+    pad = N_FFT // 2
+    padded = np.pad(ref_mono, (pad, pad), mode="reflect")
+    n_frames = 1 + (len(padded) - N_FFT) // HOP
+    idx = np.arange(N_FFT)[None, :] + HOP * np.arange(n_frames)[:, None]
+    spec = np.fft.rfft(padded[idx] * window, axis=-1).T
+    mag = np.abs(spec)
+
+    # Band-limited, not _resample_mono: see voice_model.resample_for_content
+    # for what linear interpolation's aliasing costs here.
+    content = voice_model.content_features(
+        voice_model.resample_for_content(ref_mono, SR, voice_model.SR))
+    mel_env = voice_model.predict_envelope(weights, content)      # [80, T']
+    if mel_env.shape[1] != n_frames:
+        src = np.linspace(0.0, 1.0, mel_env.shape[1])
+        dst = np.linspace(0.0, 1.0, n_frames)
+        mel_env = np.stack([np.interp(dst, src, row) for row in mel_env])
+
+    target_lin = voice_model.mel_envelope_to_linear(mel_env, mag.shape[0], SR)
+
+    source_log = np.log(spectral_envelope(mag, cepstrum_order(SR)) + 1e-8)
+    # The decoder predicts colour with level removed, so hand the source's own
+    # per-frame level back before blending: the reference's dynamics are its
+    # own and the conversion has no business flattening them.
+    target_log = target_lin + source_log.mean(axis=0, keepdims=True)
+    new_mag = (mag / (np.exp(source_log) + 1e-8)) * np.exp(
+        source_log + strength * (target_log - source_log))
+
+    out_spec = new_mag * np.exp(1j * np.angle(spec))
+    frames = np.fft.irfft(out_spec.T, n=N_FFT, axis=-1) * window
+    acc = np.zeros((n_frames - 1) * HOP + N_FFT)
+    wsum = np.zeros_like(acc)
+    for i in range(n_frames):
+        acc[i * HOP: i * HOP + N_FFT] += frames[i]
+        wsum[i * HOP: i * HOP + N_FFT] += window ** 2
+    acc /= np.maximum(wsum, 1e-10)
+    return acc[pad: pad + len(ref_mono)].astype(np.float32)
+
+
 def _apply_timbre(ref_mono: np.ndarray, target_env: "np.ndarray | None",
                   strength: float = 0.75) -> np.ndarray:
     """Re-colour `ref_mono` towards `target_env`, keeping its excitation.
@@ -554,6 +636,10 @@ class CoverResult(TypedDict):
     rt_ratio:        float
     vibrato_depth:   float
     noise_reduction_db: float  # Ticket 48 §4: dB of hiss removed by postprocess_chain
+    timbre_source:   str    # "decoder" | "average_envelope" | "none" — which
+                             # of the three timbre paths ran, so a support
+                             # question about a cover that sounds untouched
+                             # can be answered from the result alone.
     timbre_applied:  bool   # False when the model carries no learned envelope
                              # (a stub, or one trained before envelopes
                              # existed). The cover is then the reference voice
@@ -620,10 +706,30 @@ def synthesize_cover(
     # engine/timbre.py for what that costs in resemblance.
 
     _tload = time.perf_counter()
-    target_env = _load_timbre(ai_model)
+    decoder = _load_decoder(ai_model)
+    target_env = None if decoder is not None else _load_timbre(ai_model)
     model_load_sec = time.perf_counter() - _tload
 
-    ai_mono = _apply_timbre(ref_mono, target_env)
+    # Best available, in order. The decoder predicts an envelope per frame
+    # from that frame's content, so vowels stay distinct; the static average
+    # is one colour for the whole singer and flattens them (62% of the
+    # reference's vowel movement against the decoder's 86%, with the decoder
+    # also closer to the target: 0.56 against 0.65). With neither, the
+    # reference keeps its own voice rather than being given a guessed one.
+    #
+    # A model only carries a decoder when training measured it beating the
+    # average envelope on content warped away from the singer — see
+    # trainer._decoder_beats_envelope — so this order is a preference, not a
+    # gamble on the learned path being better this time.
+    if decoder is not None:
+        ai_mono = _apply_decoder(ref_mono, decoder)
+        timbre_source = "decoder"
+    elif target_env is not None:
+        ai_mono = _apply_timbre(ref_mono, target_env)
+        timbre_source = "average_envelope"
+    else:
+        ai_mono = np.asarray(ref_mono, dtype=np.float32)
+        timbre_source = "none"
 
     # ── Mode-specific processing ──────────────────────────────────────────────
 
@@ -726,6 +832,7 @@ def synthesize_cover(
         rt_ratio=round(rt_ratio, 4),
         vibrato_depth=round(vib_depth, 6),
         noise_reduction_db=round(noise_reduction_db, 2),
-        timbre_applied=target_env is not None,
+        timbre_applied=timbre_source != "none",
+        timbre_source=timbre_source,
         passed=bool(rt_ratio <= rt_limit),
     )

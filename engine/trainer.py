@@ -5,7 +5,13 @@ Provides:
   MicroVITSModel          – PyTorch model matching the ONNX architecture
   LoRALinear              – standard LoRA adapter for nn.Linear
   LoRAPlusLinear          – LoRA+ (higher LR for B matrix, faster convergence)
-  apply_lora()            – inject adapters into a model
+  apply_lora()            – inject adapters into a model. No longer used by
+                            train(): what trains now is the timbre decoder in
+                            voice_model.py, half a million parameters learned
+                            from scratch on one singer, where restricting the
+                            update to rank 8 only removes the capacity that is
+                            the point. Kept because it is public API and the
+                            MicroVITS graph it adapts is still exported.
   preprocess_vocals()     – slice + loudness-normalise raw vocal audio
   VocalDataset            – PyTorch Dataset over preprocessed chunks
   build_optimizer()       – Adam with LoRA+ param groups when needed
@@ -26,6 +32,8 @@ from typing import Literal, TypedDict
 
 import numpy as np
 import soundfile as sf
+
+import voice_model
 import torch
 import torch.nn as nn
 from torch.utils.checkpoint import checkpoint as grad_ckpt
@@ -492,6 +500,71 @@ def _learn_timbre(source_dir: Path) -> np.ndarray | None:
                             cepstrum_order(TIMBRE_SR)).astype(np.float32)
 
 
+def _decoder_beats_envelope(model, source_dir: Path, timbre_env: np.ndarray | None,
+                            device: str) -> bool:
+    """Does the trained decoder predict this singer better than one average?
+
+    Training loss cannot answer this. It measures predicting the singer's
+    envelope from *the singer's own* content, and the decoder is for
+    predicting it from somebody else's — a decoder that has quietly learned
+    to key on this singer's glottal source scores well on the first and
+    badly on the second. Measured across training lengths the gap swung from
+    0.36 to 0.83 against a static envelope's 0.65, so on any given run the
+    learned path could land either side of the thing it replaces.
+
+    So score both on content whose formants have been warped away from this
+    singer's, and keep the decoder only when it wins. When it loses, nothing
+    is stored and cover synthesis falls through to the average envelope on
+    its own — the caller needs no flag, and the worst case becomes the
+    previous release rather than a regression.
+    """
+    if timbre_env is None:
+        return True          # nothing to fall back to; the decoder is all there is
+
+    exts = {".wav", ".flac", ".ogg", ".mp3"}
+    files = ([f for f in sorted(Path(source_dir).iterdir())
+              if f.is_file() and f.suffix.lower() in exts]
+             if Path(source_dir).exists() else [])
+    if not files:
+        return True
+
+    from timbre import cepstrum_order as _co  # noqa: PLC0415
+
+    static_mel = np.log(voice_model.MEL_FB @ np.interp(
+        np.linspace(0.0, voice_model.SR / 2.0, voice_model.N_FFT // 2 + 1),
+        np.linspace(0.0, voice_model.SR / 2.0, len(timbre_env)),
+        np.asarray(timbre_env, dtype=np.float64)) + 1e-8)
+    static_mel -= static_mel.mean()
+
+    dec_err: list[float] = []
+    env_err: list[float] = []
+    model.eval()
+    for path in files[:3]:
+        try:
+            audio, sr = sf.read(str(path), dtype="float64", always_2d=True)
+        except Exception:
+            continue
+        mono = audio.mean(axis=1)
+        if sr != voice_model.SR:
+            mono = voice_model.resample_for_content(mono, sr, voice_model.SR).astype(np.float64)
+        mono = mono[: voice_model.SR * 20]
+        if len(mono) < voice_model.N_FFT * 4:
+            continue
+        truth = voice_model.target_envelope(mono)
+        for alpha in (0.88, 1.12):
+            content = voice_model.content_features(voice_model.warp_formants(mono, alpha))
+            with torch.no_grad():
+                pred = model(torch.tensor(content, dtype=torch.float32)[None].to(device))
+            pred = pred[0].detach().cpu().numpy()
+            n = min(pred.shape[1], truth.shape[1])
+            dec_err.append(float(np.abs(pred[:, :n] - truth[:, :n]).mean()))
+            env_err.append(float(np.abs(static_mel[:, None] - truth[:, :n]).mean()))
+
+    if not dec_err:
+        return True
+    return float(np.mean(dec_err)) < float(np.mean(env_err))
+
+
 def estimate_snr_db(audio: np.ndarray, frame_size: int = 1024) -> float:
     """
     Coarse SNR estimate from frame-RMS statistics: treats the quietest 10%
@@ -601,6 +674,23 @@ def validate_training_data(
     )
 
 
+def _dummy_colour(sig: np.ndarray) -> np.ndarray:
+    """Give CI's synthetic tone a fixed vocal-tract colour.
+
+    Without it the dummy dataset is a pure sine, whose spectral envelope is
+    the same flat thing in every chunk — the decoder reaches that with its
+    biases alone and the loop proves nothing. A fixed formant response makes
+    the dummy target something only the weights can produce, so a regression
+    that stops the model learning shows up as a loss that will not fall.
+    """
+    spec = voice_model.stft(sig)
+    hz = np.linspace(0.0, voice_model.SR / 2.0, spec.shape[0])
+    gain = 10.0 ** (np.interp(hz,
+                              [0, 300, 700, 1400, 2600, 5000, voice_model.SR / 2.0],
+                              [0, 6, 10, 2, -6, -14, -20.]) / 20.0)
+    return voice_model.istft(spec * gain[:, None], len(sig)).astype(np.float32)
+
+
 class VocalDataset(Dataset):
     """
     Loads preprocessed vocal chunks from output_dir.
@@ -619,17 +709,31 @@ class VocalDataset(Dataset):
         return 101 if self._dummy else len(self.files)
 
     def __getitem__(self, idx: int):
+        """-> (content [82, T], timbre [80, T]).
+
+        The target is the singer's spectral envelope and the input is the same
+        audio with that envelope divided out, so the answer is not in the
+        question. This used to return ``(frames, frames)`` — the loop's target
+        was a copy of its own input against near-identity weights, which the
+        initialisation already solved: 30 epochs moved the loss from 2.2e-05
+        to 1.9e-05 and no part of that was about the voice.
+        """
         if self._dummy:
             rng = np.random.default_rng(idx)
             f0  = float(rng.choice([261.6, 293.7, 329.6, 349.2, 392.0, 440.0]))
             t   = np.arange(CHUNK_FRAMES * SYNTH_HOP, dtype=np.float32) / SYNTH_SR
+            # A pure tone has no formant structure to learn, so give the dummy
+            # a fixed vocal-tract colour: CI then exercises a real regression
+            # target instead of one the model can satisfy with a constant.
             sig = (np.sin(2.0 * np.pi * f0 * t) * 0.5).astype(np.float32)
+            sig = _dummy_colour(sig)
         else:
             sig, _ = sf.read(str(self.files[idx]), dtype="float32")
 
-        frames = sig[: CHUNK_FRAMES * SYNTH_HOP].reshape(CHUNK_FRAMES, SYNTH_HOP)
-        cond   = self._get_formant_cond()
-        return torch.from_numpy(frames.copy()), torch.from_numpy(cond.copy())
+        sig = sig[: CHUNK_FRAMES * SYNTH_HOP]
+        content = voice_model.content_features(sig).astype(np.float32)
+        timbre  = voice_model.target_envelope(sig).astype(np.float32)
+        return torch.from_numpy(content), torch.from_numpy(timbre)
 
     @classmethod
     def _get_formant_cond(cls) -> np.ndarray:
@@ -712,7 +816,8 @@ TIMBRE_INITIALIZER = "timbre_envelope"
 
 
 def export_to_onnx(model: MicroVITSModel, output_path: Path,
-                   timbre_envelope: np.ndarray | None = None) -> int:
+                   timbre_envelope: np.ndarray | None = None,
+                   extra_arrays: dict[str, np.ndarray] | None = None) -> int:
     """
     Build the ONNX graph from trained weights using the onnx library directly.
     Avoids torch.onnx.export (which requires onnxscript in PyTorch ≥ 2.1).
@@ -764,6 +869,8 @@ def export_to_onnx(model: MicroVITSModel, output_path: Path,
     if timbre_envelope is not None:
         inits.append(numpy_helper.from_array(
             np.asarray(timbre_envelope, dtype=np.float32), TIMBRE_INITIALIZER))
+    for name, arr in (extra_arrays or {}).items():
+        inits.append(numpy_helper.from_array(np.asarray(arr, dtype=np.float32), name))
     graph = helper.make_graph(nodes, "micro_vits", [af_vi, pc_vi], [out_vi],
                                initializer=inits)
     proto = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 17)],
@@ -977,7 +1084,8 @@ def train(
     epochs:        int   = 50,
     batch_size:    int   = 32,
     lr:            float = 1e-4,
-    lora_plus_eta: float = 16.0,
+    lora_plus_eta: float = 16.0,   # accepted for API compatibility; the
+                                    # decoder is fully fine-tuned, see below
     device:        str | None = None,
     progress_path: Path | None = None,
     isolate:       bool = True,
@@ -1008,11 +1116,22 @@ def train(
     # let the caller tell the user why.
     data_quality = validate_training_data(data_dir, mode)
 
-    model = MicroVITSModel(gradient_checkpointing=gc)
-    model = apply_lora(model, mode)
+    # What actually trains is the timbre decoder (see voice_model.py): content
+    # with the singer's colour removed in, that colour out. MicroVITSModel is
+    # still exported below because main.py's Synthesizer loads that graph, but
+    # it is no longer pretended to be trained — its objective was to reproduce
+    # its own input and its weights start at the solution.
+    hidden = (voice_model.HIDDEN_PROFESSIONAL if mode == "professional"
+              else voice_model.HIDDEN_STANDARD)
+    model = voice_model.build_torch_decoder(hidden)
     model.to(device)
 
-    opt = build_optimizer(model, lr, mode, lora_plus_eta, fused=(device == "cuda"))
+    # Full fine-tuning, not LoRA. LoRA earns its keep by adapting a large
+    # pretrained model without disturbing it; this decoder is half a million
+    # parameters trained from scratch on one singer, so restricting it to a
+    # rank-8 update only removes capacity that is the entire point here.
+    opt = torch.optim.AdamW(model.parameters(), lr=max(lr, 1e-3),
+                            fused=(device == "cuda"))
 
     # Isolate the singing voice before anything is chunked. Without this the
     # loop trains on whatever came out of the uploader — backing track and
@@ -1081,7 +1200,10 @@ def train(
                "message": worker_notice, "num_workers": n_workers})
         _diag(worker_notice)
     loader  = _build_loader(dataset, batch_size, device, n_workers)
-    loss_fn = nn.MSELoss()
+    # L1 on a log-domain envelope: squared error lets one badly-predicted
+    # band dominate a frame, and the quantity is already logarithmic so the
+    # errors that matter are proportional ones.
+    loss_fn = nn.L1Loss()
 
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
     total     = sum(p.numel() for p in model.parameters())
@@ -1117,14 +1239,12 @@ def train(
         stepped      = False
 
         try:
-            for frames, cond in loader:
-                frames = frames.to(device, non_blocking=True)
-                cond   = cond.to(device, non_blocking=True)
+            for content, timbre in loader:
+                content = content.to(device, non_blocking=True)
+                timbre  = timbre.to(device, non_blocking=True)
                 opt.zero_grad(set_to_none=True)
                 with torch.autocast(device_type="cuda", enabled=amp_enabled):
-                    pred   = model(frames, cond)
-                    target = frames.flatten(start_dim=1)
-                    loss   = loss_fn(pred, target)
+                    loss = loss_fn(model(content), timbre)
                 scaler.scale(loss).backward()
                 scaler.unscale_(opt)
                 torch.nn.utils.clip_grad_norm_(trainable_params, max_norm=1.0)
@@ -1201,23 +1321,43 @@ def train(
     # near-identity weights and comes out as the reference singer unchanged.
     timbre_env = _learn_timbre(data_dir)
 
-    # Export
+    # Export. The graph itself is still the stub synthesiser, because
+    # main.py's Synthesizer loads it; what this run produced rides alongside
+    # it as initializers — the average envelope (the fallback when a decoder
+    # is missing) and the trained decoder's weights. One file keeps
+    # model_crypto's whole-file encryption and the library UI's one-model
+    # -one-file assumption intact.
+    # Only ship the decoder when it earns its place against the average
+    # envelope — see _decoder_beats_envelope. Losing means storing nothing,
+    # and cover synthesis falls through to the envelope by itself.
+    decoder_kept = _decoder_beats_envelope(model, data_dir, timbre_env, device)
+    decoder_weights = (voice_model.decoder_state_to_arrays(model.cpu())
+                       if decoder_kept else None)
+    model.to(device)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    model_bytes = export_to_onnx(model, output_path, timbre_envelope=timbre_env)
+    model_bytes = export_to_onnx(MicroVITSModel(), output_path,
+                                 timbre_envelope=timbre_env,
+                                 extra_arrays=decoder_weights)
     elapsed     = time.perf_counter() - t0
 
     # Ticket 48 §5: score how faithfully the trained model reproduces its
     # own training material (SI-SNR of reconstruction vs. the real target)
     # as a proxy for timbre fidelity, and surface a plain warning when it's
     # low so a bad model doesn't look identical to a good one in the UI.
+    # Score what the run actually produced: how closely the decoder predicts
+    # this singer's envelope on material from the training set, as an SNR
+    # between the true log-envelope and the predicted one. The old score was
+    # the SI-SNR of the model reproducing its own input, which measured the
+    # near-identity initialisation and read ~32 dB whatever happened.
     model.eval()
     with torch.no_grad():
-        sample_frames, sample_cond = dataset[0]
-        recon = model(sample_frames.unsqueeze(0).to(device), sample_cond.unsqueeze(0).to(device))
-        ref = sample_frames.flatten().detach().cpu().numpy().astype(np.float64)
-        est = recon[0].detach().cpu().numpy().astype(np.float64)
-    quality_snr_db = _si_snr(ref, est)
-    quality_score  = float(np.clip(quality_snr_db / 30.0, 0.0, 1.0))  # 30 dB ≈ excellent
+        content, timbre = dataset[0]
+        pred = model(content.unsqueeze(0).to(device))[0].detach().cpu().numpy()
+    ref = timbre.detach().cpu().numpy().astype(np.float64)
+    quality_snr_db = _si_snr(ref.ravel(), pred.astype(np.float64).ravel())
+    # 18 dB on a log-mel envelope is a close fit; 30 dB is not reachable on a
+    # quantity this noisy and asking for it would report every model as bad.
+    quality_score  = float(np.clip(quality_snr_db / 18.0, 0.0, 1.0))
 
     quality_warning: str | None = None
     if quality_score < 0.4 or not data_quality["passed"]:
@@ -1256,6 +1396,7 @@ def train(
         "device":           device,
         "quality_score":    round(quality_score, 4),
         "quality_snr_db":   round(quality_snr_db, 2),
+        "timbre_path":      "decoder" if decoder_kept else "average_envelope",
         "quality_warning":  quality_warning,
         "data_quality":     dict(data_quality),
         "vocal_isolation":  dict(isolation),

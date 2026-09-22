@@ -506,7 +506,7 @@ def test_t07_cover_v2(duration: float, targets: dict) -> TestResult:
 
 
 def test_t08_training_standard(targets: dict) -> TestResult:
-    r = _make_result("T08", "Standard LoRA training (synthetic data)")
+    r = _make_result("T08", "Standard timbre-decoder training (synthetic data)")
     try:
         import torch  # noqa: PLC0415
         from trainer import train  # noqa: PLC0415

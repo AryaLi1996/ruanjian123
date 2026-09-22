@@ -43,6 +43,7 @@ ruanjian/
 │   ├── separation.py                # Overlap-add source separation
 │   ├── cover_synthesis.py           # envelope-transfer (V1) and LSTM expression (V2) cover
 │   ├── timbre.py                    # spectral-envelope voice conversion
+│   ├── voice_model.py               # learned per-frame timbre decoder
 │   ├── trainer.py                   # PyTorch LoRA/LoRA+ training utilities
 │   ├── train_standard.py            # CLI: standard training
 │   ├── train_professional.py        # CLI: professional training
@@ -510,7 +511,7 @@ synthesize           →  {duration_sec, elapsed_ms, ep, n_frames, sample_rate, 
                         (+ audio: float[] when include_audio=true)
 benchmark_synthesis  →  {target_duration_sec, actual_duration_sec, elapsed_sec, real_time_ratio, passed}
 separate             →  {mode, stems: {name: path}, elapsed_sec, duration_sec, rt_ratio, crosstalk_db, passed}
-synthesize_cover     →  {output_path, ai_vocal_path, mode, duration_sec, elapsed_sec, rt_ratio, vibrato_depth, timbre_applied, passed}
+synthesize_cover     →  {output_path, ai_vocal_path, mode, duration_sec, elapsed_sec, rt_ratio, vibrato_depth, timbre_source, timbre_applied, passed}
 export_audio         →  {output_path, size_bytes, format, duration_sec}
 train_model          →  streaming: {epoch, loss, ...} lines  +  final {status, output_path, best_loss, ...}
 watermark_embed      →  {audio: float[], uid, timestamp, snr_db, samples}

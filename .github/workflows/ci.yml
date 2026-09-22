@@ -88,6 +88,14 @@ jobs:
         working-directory: engine
         run: python _test_timbre.py
 
+      # Pins the learned per-frame timbre decoder and, above all, the shape of
+      # its training task: the objective used to be "reproduce your own input"
+      # against near-identity weights, which no amount of training or GPU
+      # could make mean anything.
+      - name: Run voice model test suite
+        working-directory: engine
+        run: python _test_voice_model.py
+
       - name: Run benchmark (short duration)
         working-directory: engine
         run: |
