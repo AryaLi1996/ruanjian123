@@ -153,7 +153,25 @@ def transfer(
     # between the two envelopes, which keeps the result a plausible envelope
     # instead of the ringing a linear mix of two log-spectra produces.
     blended = source ** (1.0 - strength) * target ** strength
-    return excitation * blended
+
+    # Both envelopes above are normalised to a geometric mean of one, so the
+    # blend carries colour and no level at all. Hand the source's own
+    # per-frame level back, or the result is a signal whose every frame is
+    # equally loud: at strength 1 that peaked at 20.8 against a 0.5 input, and
+    # at 0.75 it raised the level to the power 0.25, which is the dynamics
+    # flattening that showed up as this path keeping only 62% of the
+    # reference's vowel movement.
+    level = np.exp(np.mean(np.log(source_env + _EPS), axis=0, keepdims=True))
+
+    # Bound how far any one bin can move. The blend is a ratio of two
+    # normalised envelopes, so a bin where the source is quiet and the target
+    # is loud can ask for an enormous gain — and above the rate the target was
+    # learned at there is no measurement behind it at all, only the last band
+    # held flat (see resample_envelope), against a source envelope that keeps
+    # moving. 20 dB is far more than any vocal tract asks for and well short
+    # of the three orders of magnitude a mismatch can produce.
+    ratio = np.clip(blended / (_normalise(source_env) + _EPS), 10 ** -1.0, 10 ** 1.0)
+    return excitation * _normalise(source_env) * ratio * level
 
 
 def envelope_from_audio(

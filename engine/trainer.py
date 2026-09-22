@@ -500,71 +500,6 @@ def _learn_timbre(source_dir: Path) -> np.ndarray | None:
                             cepstrum_order(TIMBRE_SR)).astype(np.float32)
 
 
-def _decoder_beats_envelope(model, source_dir: Path, timbre_env: np.ndarray | None,
-                            device: str) -> bool:
-    """Does the trained decoder predict this singer better than one average?
-
-    Training loss cannot answer this. It measures predicting the singer's
-    envelope from *the singer's own* content, and the decoder is for
-    predicting it from somebody else's — a decoder that has quietly learned
-    to key on this singer's glottal source scores well on the first and
-    badly on the second. Measured across training lengths the gap swung from
-    0.36 to 0.83 against a static envelope's 0.65, so on any given run the
-    learned path could land either side of the thing it replaces.
-
-    So score both on content whose formants have been warped away from this
-    singer's, and keep the decoder only when it wins. When it loses, nothing
-    is stored and cover synthesis falls through to the average envelope on
-    its own — the caller needs no flag, and the worst case becomes the
-    previous release rather than a regression.
-    """
-    if timbre_env is None:
-        return True          # nothing to fall back to; the decoder is all there is
-
-    exts = {".wav", ".flac", ".ogg", ".mp3"}
-    files = ([f for f in sorted(Path(source_dir).iterdir())
-              if f.is_file() and f.suffix.lower() in exts]
-             if Path(source_dir).exists() else [])
-    if not files:
-        return True
-
-    from timbre import cepstrum_order as _co  # noqa: PLC0415
-
-    static_mel = np.log(voice_model.MEL_FB @ np.interp(
-        np.linspace(0.0, voice_model.SR / 2.0, voice_model.N_FFT // 2 + 1),
-        np.linspace(0.0, voice_model.SR / 2.0, len(timbre_env)),
-        np.asarray(timbre_env, dtype=np.float64)) + 1e-8)
-    static_mel -= static_mel.mean()
-
-    dec_err: list[float] = []
-    env_err: list[float] = []
-    model.eval()
-    for path in files[:3]:
-        try:
-            audio, sr = sf.read(str(path), dtype="float64", always_2d=True)
-        except Exception:
-            continue
-        mono = audio.mean(axis=1)
-        if sr != voice_model.SR:
-            mono = voice_model.resample_for_content(mono, sr, voice_model.SR).astype(np.float64)
-        mono = mono[: voice_model.SR * 20]
-        if len(mono) < voice_model.N_FFT * 4:
-            continue
-        truth = voice_model.target_envelope(mono)
-        for alpha in (0.88, 1.12):
-            content = voice_model.content_features(voice_model.warp_formants(mono, alpha))
-            with torch.no_grad():
-                pred = model(torch.tensor(content, dtype=torch.float32)[None].to(device))
-            pred = pred[0].detach().cpu().numpy()
-            n = min(pred.shape[1], truth.shape[1])
-            dec_err.append(float(np.abs(pred[:, :n] - truth[:, :n]).mean()))
-            env_err.append(float(np.abs(static_mel[:, None] - truth[:, :n]).mean()))
-
-    if not dec_err:
-        return True
-    return float(np.mean(dec_err)) < float(np.mean(env_err))
-
-
 def estimate_snr_db(audio: np.ndarray, frame_size: int = 1024) -> float:
     """
     Coarse SNR estimate from frame-RMS statistics: treats the quietest 10%
@@ -730,10 +665,52 @@ class VocalDataset(Dataset):
         else:
             sig, _ = sf.read(str(self.files[idx]), dtype="float32")
 
+        cache = self._cache_path(idx)
+        if cache is not None and cache.exists():
+            with np.load(cache) as z:
+                return torch.from_numpy(z["content"]), torch.from_numpy(z["timbre"])
+
         sig = sig[: CHUNK_FRAMES * SYNTH_HOP]
         content = voice_model.content_features(sig).astype(np.float32)
         timbre  = voice_model.target_envelope(sig).astype(np.float32)
+        if cache is not None:
+            np.savez(cache, content=content, timbre=timbre)
         return torch.from_numpy(content), torch.from_numpy(timbre)
+
+    def _cache_path(self, idx: int) -> Path | None:
+        """Where this chunk's features live, or None for the dummy dataset.
+
+        The content version is in the name. Without it, a library that once
+        trained on excitation content would hand those cached 82-row arrays to
+        a decoder built for ContentVec's 770, and the mismatch would surface
+        as a shape error inside the training loop.
+        """
+        if self._dummy:
+            return None
+        f = self.files[idx]
+        return f.with_name(f"{f.stem}.v{voice_model.current_content_version()}.npz")
+
+    def prepare(self, progress_cb=None) -> None:
+        """Compute and cache every chunk's features once, before training.
+
+        Without this the features are recomputed on every access, so a
+        60-epoch run encodes the same audio 60 times — and with the ContentVec
+        encoder that is a 198 MB ONNX session doing real work, not a cheap
+        STFT. Worse, DataLoader workers each build their own session, so four
+        workers held four copies of it.
+
+        Caching to disk beside the chunks fixes both: the encoder runs once in
+        this process, and the workers only ever np.load.
+        """
+        if self._dummy:
+            return
+        total = len(self.files)
+        for i in range(total):
+            cache = self._cache_path(i)
+            if cache is not None and not cache.exists():
+                self[i]
+            if progress_cb is not None:
+                progress_cb(i + 1, total)
 
     @classmethod
     def _get_formant_cond(cls) -> np.ndarray:
@@ -1123,15 +1100,12 @@ def train(
     # its own input and its weights start at the solution.
     hidden = (voice_model.HIDDEN_PROFESSIONAL if mode == "professional"
               else voice_model.HIDDEN_STANDARD)
-    model = voice_model.build_torch_decoder(hidden)
-    model.to(device)
-
-    # Full fine-tuning, not LoRA. LoRA earns its keep by adapting a large
-    # pretrained model without disturbing it; this decoder is half a million
-    # parameters trained from scratch on one singer, so restricting it to a
-    # rank-8 update only removes capacity that is the entire point here.
-    opt = torch.optim.AdamW(model.parameters(), lr=max(lr, 1e-3),
-                            fused=(device == "cuda"))
+    # Built below, once the dataset exists: its first sample says how wide the
+    # content actually is, and asking voice_model separately would let the two
+    # disagree — which surfaces as a conv1d channel mismatch partway into
+    # training rather than as anything a user could act on.
+    model = None
+    opt = None
 
     # Isolate the singing voice before anything is chunked. Without this the
     # loop trains on whatever came out of the uploader — backing track and
@@ -1194,6 +1168,27 @@ def train(
             proc_dir = data_dir   # VocalDataset will use dummy mode
 
     dataset = VocalDataset(proc_dir)
+    # Features once, not once per epoch — see VocalDataset.prepare. With the
+    # ContentVec encoder this is real work on a long upload, so it reports.
+    def _feature_progress(done: int, total: int) -> None:
+        if done != total and done % 20:
+            return
+        _emit({"status": "training", "type": "progress",
+               "code": "extracting_features",
+               "message": f"Extracting voice features: {done}/{total}",
+               "done": done, "total": total, "percent": 0.0}, progress_path)
+
+    dataset.prepare(_feature_progress)
+
+    model = voice_model.build_torch_decoder(hidden, c_in=dataset[0][0].shape[0])
+    model.to(device)
+    # Full fine-tuning, not LoRA. LoRA earns its keep by adapting a large
+    # pretrained model without disturbing it; this decoder is half a million
+    # parameters trained from scratch on one singer, so restricting it to a
+    # rank-8 update only removes capacity that is the entire point here.
+    opt = torch.optim.AdamW(model.parameters(), lr=max(lr, 1e-3),
+                            fused=(device == "cuda"))
+
     n_workers, worker_notice = _plan_workers(dataset)
     if worker_notice:
         _emit({"status": "warning", "type": "notice", "code": "dataloader_low_memory",
@@ -1327,12 +1322,14 @@ def train(
     # is missing) and the trained decoder's weights. One file keeps
     # model_crypto's whole-file encryption and the library UI's one-model
     # -one-file assumption intact.
-    # Only ship the decoder when it earns its place against the average
-    # envelope — see _decoder_beats_envelope. Losing means storing nothing,
-    # and cover synthesis falls through to the envelope by itself.
-    decoder_kept = _decoder_beats_envelope(model, data_dir, timbre_env, device)
-    decoder_weights = (voice_model.decoder_state_to_arrays(model.cpu())
-                       if decoder_kept else None)
+    # The decoder always ships now. Deciding here whether it is worth using
+    # meant scoring it on the only voice available — the singer's own, with
+    # its formants warped — and that test cannot see the thing the decoder is
+    # for: with ContentVec content it passes every time, including on material
+    # it then converts worse than doing nothing. Cover synthesis picks between
+    # the decoder and the average envelope per cover instead, where the
+    # reference vocal exists to measure against.
+    decoder_weights = voice_model.decoder_state_to_arrays(model.cpu())
     model.to(device)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     model_bytes = export_to_onnx(MicroVITSModel(), output_path,
@@ -1396,7 +1393,6 @@ def train(
         "device":           device,
         "quality_score":    round(quality_score, 4),
         "quality_snr_db":   round(quality_snr_db, 2),
-        "timbre_path":      "decoder" if decoder_kept else "average_envelope",
         "quality_warning":  quality_warning,
         "data_quality":     dict(data_quality),
         "vocal_isolation":  dict(isolation),

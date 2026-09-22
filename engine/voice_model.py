@@ -49,11 +49,13 @@ real singers differ in glottal source too and the gap will be larger. The
 fix is a content encoder trained to be speaker-invariant (ContentVec and the
 RVC family, both MIT-licensed) in place of `content_features` here. The
 feature contract is kept narrow for that swap: everything downstream takes
-[C, T] and does not care how it was produced, and CONTENT_VERSION below makes
-the swap safe for models trained before it.
+[C, T] and does not care how it was produced, and CONTENT_VERSION_* below
+makes the swap safe for models trained before it. That swap has since
+happened: see content_encoder, which supplies the content whenever its
+weights are installed.
 
-Three cheaper substitutes were measured and none of them works, so that
-encoder is not optional. Against a baseline of 0.28 / 0.39 / 0.28 (at 100,
+Three cheaper substitutes were measured first and none of them works, which
+is why the encoder is not optional. Against a baseline of 0.28 / 0.39 / 0.28 (at 100,
 400 and 1000 epochs; a static average envelope scores 0.52 on the same
 fixture and the measurement floor is 0.20):
 
@@ -199,12 +201,14 @@ def resample_for_content(audio: np.ndarray, sr_in: int, sr_out: int = SR) -> np.
     return out.astype(np.float32)
 
 
-def content_features(audio: np.ndarray) -> np.ndarray:
-    """Speaker-independent-ish content of a mono signal, as [N_CONTENT, T].
+def _excitation_content(audio: np.ndarray) -> np.ndarray:
+    """Content as mel(log excitation) + log f0 + voiced, [N_CONTENT, T].
 
     The excitation — magnitude divided by its own cepstral envelope — is what
-    is left of a voice once its timbre is taken away. See the module docstring
-    for how far "speaker-independent" actually goes and what replaces this.
+    is left of a voice once its timbre is taken away. Only approximately, and
+    the approximation is the whole problem: between two real speakers this
+    carries enough of the source that a decoder driven by it converts almost
+    nothing. See content_encoder for the measurements and the replacement.
     """
     spec = stft(audio)
     mag = np.abs(spec)
@@ -218,6 +222,46 @@ def content_features(audio: np.ndarray) -> np.ndarray:
     ], axis=0)
 
 
+def _resample_rows(rows: np.ndarray, n: int) -> np.ndarray:
+    """Stretch [C, T] onto [C, n] along time."""
+    if rows.shape[1] == n:
+        return rows
+    src = np.linspace(0.0, 1.0, rows.shape[1])
+    dst = np.linspace(0.0, 1.0, n)
+    return np.stack([np.interp(dst, src, row) for row in rows])
+
+
+def content_features(audio: np.ndarray, engine_dir=None) -> np.ndarray:
+    """Speaker-independent content of a mono signal at SR, as [C, T].
+
+    ContentVec when its weights are installed, excitation otherwise, with the
+    pitch appended either way — the encoder is trained to discard exactly the
+    information that says which note is being sung, and the decoder needs it
+    back to know which register the vocal tract is in.
+
+    The two paths emit different widths, which is safe because
+    current_content_version() moves with them and a decoder is only loaded
+    against the format it was trained on.
+
+    ContentVec runs at 50 frames per second and the envelope this drives is at
+    SR/HOP (86.13); the features are stretched onto that grid rather than the
+    decoder being rebuilt around the encoder's rate, so one decoder
+    architecture serves both content paths.
+    """
+    import content_encoder  # noqa: PLC0415
+
+    spec = stft(audio)
+    mag = np.abs(spec)
+    if not content_encoder.is_available(engine_dir):
+        return _excitation_content(audio)
+
+    f0, voiced = estimate_f0(mag)
+    cv = content_encoder.encode(audio, SR, engine_dir)
+    pitch = np.stack([np.log(f0 + 1.0), voiced])
+    n = mag.shape[1]
+    return np.concatenate([_resample_rows(cv, n), _resample_rows(pitch, n)], axis=0)
+
+
 def target_envelope(audio: np.ndarray) -> np.ndarray:
     """The singer's timbre, as a level-free log-mel envelope [N_MEL, T].
 
@@ -228,27 +272,6 @@ def target_envelope(audio: np.ndarray) -> np.ndarray:
     env = spectral_envelope(np.abs(stft(audio)), cepstrum_order(SR))
     mel = np.log(MEL_FB @ env + _EPS)
     return mel - mel.mean(axis=0, keepdims=True)
-
-
-def warp_formants(audio: np.ndarray, alpha: float) -> np.ndarray:
-    """Stretch the spectral envelope's frequency axis, leaving pitch alone.
-
-    A cheap stand-in for "somebody else sang this": it moves the formants,
-    which is most of what distinguishes one voice from another, while the
-    harmonics — the notes and the words — stay where they were. Used to build
-    a validation set that measures the thing the decoder is actually for,
-    predicting this singer's timbre from *another* singer's content, which
-    training loss on its own material cannot see.
-    """
-    spec = stft(audio)
-    mag = np.abs(spec)
-    env = spectral_envelope(mag, cepstrum_order(SR))
-    hz = np.linspace(0.0, SR / 2.0, mag.shape[0])
-    log_env = np.log(env + _EPS)
-    warped = np.stack([np.interp(hz, hz * alpha, log_env[:, t])
-                       for t in range(log_env.shape[1])], axis=1)
-    new_mag = (mag / (env + _EPS)) * np.exp(warped)
-    return istft(new_mag * np.exp(1j * np.angle(spec)), len(audio))
 
 
 # ── the decoder ───────────────────────────────────────────────────────────────
@@ -283,17 +306,49 @@ WEIGHT_PREFIX = "timbre_decoder."
 #
 # Bump this whenever content_features changes what it emits: the dimensions,
 # their order, their scaling, the mel band layout, or the f0 encoding.
-CONTENT_VERSION: int = 1
+CONTENT_VERSION_EXCITATION: int = 1   # mel(log excitation) + log f0 + voiced
+CONTENT_VERSION_CONTENTVEC: int = 2   # ContentVec + log f0 + voiced
+
 CONTENT_VERSION_KEY = WEIGHT_PREFIX + "content_version"
 
 
-def build_torch_decoder(hidden: int = HIDDEN_STANDARD):
+def current_content_version(engine_dir=None) -> int:
+    """Which content format this build produces right now.
+
+    Not a constant, because it depends on whether the encoder weights are
+    installed: with them content_features returns ContentVec, without them
+    excitation. A decoder trained against one is meaningless driven by the
+    other, so this is what decoder_is_usable compares against — a model
+    trained on a machine with the encoder simply reads as "no decoder" on one
+    without it, and cover synthesis falls back to the average envelope.
+    """
+    import content_encoder  # noqa: PLC0415
+
+    return (CONTENT_VERSION_CONTENTVEC if content_encoder.is_available(engine_dir)
+            else CONTENT_VERSION_EXCITATION)
+
+
+def content_width(engine_dir=None) -> int:
+    """Rows content_features emits for this build."""
+    import content_encoder  # noqa: PLC0415
+
+    return ((content_encoder.DIM + 2) if content_encoder.is_available(engine_dir)
+            else N_CONTENT)
+
+
+def build_torch_decoder(hidden: int = HIDDEN_STANDARD, c_in: int | None = None):
     """The PyTorch module trained in trainer.py. Imported lazily: inference
-    never needs torch, and the packaged app ships without it."""
+    never needs torch, and the packaged app ships without it.
+
+    `c_in` defaults to whatever content_features emits for this build, which
+    is 770 with the ContentVec encoder installed and 82 without it.
+    """
     import torch.nn as nn  # noqa: PLC0415
 
+    if c_in is None:
+        c_in = content_width()
     return nn.Sequential(
-        nn.Conv1d(N_CONTENT, hidden, KERNEL, padding=KERNEL // 2), nn.GELU(),
+        nn.Conv1d(c_in, hidden, KERNEL, padding=KERNEL // 2), nn.GELU(),
         nn.Conv1d(hidden, hidden, KERNEL, padding=KERNEL // 2), nn.GELU(),
         nn.Conv1d(hidden, N_MEL, 1),
     )
@@ -302,12 +357,12 @@ def build_torch_decoder(hidden: int = HIDDEN_STANDARD):
 def decoder_state_to_arrays(module) -> dict[str, np.ndarray]:
     """Trained weights as plain arrays, named for storage in the .onnx.
 
-    Carries CONTENT_VERSION with them, because weights without the feature
-    format they were trained on cannot be used safely.
+    Carries the content format with them, because weights without the
+    features they were trained on cannot be used safely.
     """
     arrays = {f"{WEIGHT_PREFIX}{k}": v.detach().cpu().numpy().astype(np.float32)
               for k, v in module.state_dict().items()}
-    arrays[CONTENT_VERSION_KEY] = np.array([CONTENT_VERSION], dtype=np.float32)
+    arrays[CONTENT_VERSION_KEY] = np.array([current_content_version()], dtype=np.float32)
     return arrays
 
 
@@ -316,7 +371,7 @@ def decoder_is_usable(weights: dict[str, np.ndarray]) -> bool:
 
     Two ways to be sure, because models exist that predate the version tag:
 
-      * the tag, when present, must match CONTENT_VERSION exactly;
+      * the tag, when present, must match current_content_version() exactly;
       * failing that, the first layer's input width must be N_CONTENT.
 
     The shape check is what covers models trained before this tag existed. It
@@ -328,9 +383,12 @@ def decoder_is_usable(weights: dict[str, np.ndarray]) -> bool:
         return False
     tagged = weights.get(CONTENT_VERSION_KEY)
     if tagged is not None:
-        return int(np.asarray(tagged).ravel()[0]) == CONTENT_VERSION
+        return int(np.asarray(tagged).ravel()[0]) == current_content_version()
+    # Untagged models predate the tag and are all excitation-format, so they
+    # are usable only while this build is producing that format too.
     first = weights[f"{WEIGHT_PREFIX}0.weight"]
-    return first.ndim == 3 and first.shape[1] == N_CONTENT
+    return (current_content_version() == CONTENT_VERSION_EXCITATION
+            and first.ndim == 3 and first.shape[1] == N_CONTENT)
 
 
 def _conv1d(x: np.ndarray, w: np.ndarray, b: np.ndarray) -> np.ndarray:

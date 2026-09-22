@@ -92,6 +92,9 @@ jobs:
       # its training task: the objective used to be "reproduce your own input"
       # against near-identity weights, which no amount of training or GPU
       # could make mean anything.
+      # Runs without the ContentVec encoder, which is a build-time download:
+      # that exercises the excitation content path and the refusal to load a
+      # decoder trained against the other one.
       - name: Run voice model test suite
         working-directory: engine
         run: python _test_voice_model.py

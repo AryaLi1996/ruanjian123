@@ -44,6 +44,7 @@ ruanjian/
 │   ├── cover_synthesis.py           # envelope-transfer (V1) and LSTM expression (V2) cover
 │   ├── timbre.py                    # spectral-envelope voice conversion
 │   ├── voice_model.py               # learned per-frame timbre decoder
+│   ├── content_encoder.py           # ContentVec speaker-invariant content
 │   ├── trainer.py                   # PyTorch LoRA/LoRA+ training utilities
 │   ├── train_standard.py            # CLI: standard training
 │   ├── train_professional.py        # CLI: professional training
@@ -330,6 +331,7 @@ All ONNX models are **stub models** created programmatically on first run. Real 
 | `vocal_harmony_split.onnx` | Enhanced separation stage 2 | `separation._build_vocal_harmony_split()` |
 | `dereverb.onnx` | Enhanced separation stage 3 | `separation._build_dereverb()` |
 | `expression_encoder.onnx` | V2 cover LSTM encoder | `cover_synthesis._build_expression_encoder()` |
+| `contentvec-base-L6.onnx` | Speaker-invariant content encoder (198 MB, not in git) | `scripts/fetch-models.sh` |
 | `watermark_embed.onnx` | Watermark embedding | `watermark.build_watermark_model()` |
 
 #### Song separation (`separate()`)
