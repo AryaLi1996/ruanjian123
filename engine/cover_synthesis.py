@@ -407,9 +407,12 @@ def _load_decoder(model_path: "str | Path") -> "dict[str, np.ndarray] | None":
     weights = {init.name: numpy_helper.to_array(init).astype(np.float32)
                for init in graph.graph.initializer
                if init.name.startswith(voice_model.WEIGHT_PREFIX)}
-    expected = {f"{voice_model.WEIGHT_PREFIX}{i}.{w}"
-                for i in (0, 2, 4) for w in ("weight", "bias")}
-    return weights if expected <= set(weights) else None
+    # A decoder trained against a different content format is not a decoder
+    # for this build — see voice_model.decoder_is_usable. Returning None here
+    # sends the caller to the average envelope stored beside it, which is a
+    # spectrum and does not care how content is computed, instead of letting
+    # the mismatch surface as a reshape error in the middle of a cover.
+    return weights if voice_model.decoder_is_usable(weights) else None
 
 
 def _apply_decoder(ref_mono: np.ndarray, weights: dict, strength: float = 1.0) -> np.ndarray:

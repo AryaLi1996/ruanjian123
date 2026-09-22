@@ -49,7 +49,25 @@ real singers differ in glottal source too and the gap will be larger. The
 fix is a content encoder trained to be speaker-invariant (ContentVec and the
 RVC family, both MIT-licensed) in place of `content_features` here. The
 feature contract is kept narrow for that swap: everything downstream takes
-[C, T] and does not care how it was produced.
+[C, T] and does not care how it was produced, and CONTENT_VERSION below makes
+the swap safe for models trained before it.
+
+Three cheaper substitutes were measured and none of them works, so that
+encoder is not optional. Against a baseline of 0.28 / 0.39 / 0.28 (at 100,
+400 and 1000 epochs; a static average envelope scores 0.52 on the same
+fixture and the measurement floor is 0.20):
+
+    formant-warp augmentation of the content   0.39 / 0.29 / 0.76
+    cepstral mean normalisation (CMN)          0.51 / 0.54 / 0.46
+    mean + variance normalisation (CMVN)       0.39 / 0.36 / 0.37
+
+CMVN is the interesting failure. Measured directly — one performance coloured
+as two different singers — it cuts what leaks into the content fivefold, from
+0.046 of the timbre difference to 0.009, and it visibly steadies the result
+across training lengths. It still loses, because per-dimension normalisation
+removes more of the content than it removes of the singer. Speaker-invariance
+that keeps the content is what ContentVec was trained to do, and it does not
+fall out of a normalisation.
 
 Inference runs in numpy rather than ONNX Runtime. Three convolutions over a
 few thousand frames is under a millisecond, and keeping it out of the graph
@@ -247,6 +265,27 @@ N_LAYERS: int = 3
 
 WEIGHT_PREFIX = "timbre_decoder."
 
+# Which content-feature format a stored decoder was trained against.
+#
+# A decoder is only meaningful with the features it learned from, and those
+# are going to change: content_features here is excitation with the envelope
+# lifted off, which is only approximately speaker-independent, and the plan is
+# to replace it with an encoder trained to be speaker-invariant (ContentVec
+# and the RVC family). The day that lands, every model already in a user's
+# library was trained against this format.
+#
+# Without a tag the mismatch surfaces as a ValueError from a reshape deep in
+# predict_envelope, i.e. the cover feature breaking with no explanation on a
+# model that used to work. With one, cover synthesis recognises the model as
+# older, falls back to the average envelope stored beside the decoder — which
+# is just a spectrum and does not care how content is computed — and says so
+# in CoverResult.timbre_source.
+#
+# Bump this whenever content_features changes what it emits: the dimensions,
+# their order, their scaling, the mel band layout, or the f0 encoding.
+CONTENT_VERSION: int = 1
+CONTENT_VERSION_KEY = WEIGHT_PREFIX + "content_version"
+
 
 def build_torch_decoder(hidden: int = HIDDEN_STANDARD):
     """The PyTorch module trained in trainer.py. Imported lazily: inference
@@ -261,9 +300,37 @@ def build_torch_decoder(hidden: int = HIDDEN_STANDARD):
 
 
 def decoder_state_to_arrays(module) -> dict[str, np.ndarray]:
-    """Trained weights as plain arrays, named for storage in the .onnx."""
-    return {f"{WEIGHT_PREFIX}{k}": v.detach().cpu().numpy().astype(np.float32)
-            for k, v in module.state_dict().items()}
+    """Trained weights as plain arrays, named for storage in the .onnx.
+
+    Carries CONTENT_VERSION with them, because weights without the feature
+    format they were trained on cannot be used safely.
+    """
+    arrays = {f"{WEIGHT_PREFIX}{k}": v.detach().cpu().numpy().astype(np.float32)
+              for k, v in module.state_dict().items()}
+    arrays[CONTENT_VERSION_KEY] = np.array([CONTENT_VERSION], dtype=np.float32)
+    return arrays
+
+
+def decoder_is_usable(weights: dict[str, np.ndarray]) -> bool:
+    """Can this build's content features drive these stored weights?
+
+    Two ways to be sure, because models exist that predate the version tag:
+
+      * the tag, when present, must match CONTENT_VERSION exactly;
+      * failing that, the first layer's input width must be N_CONTENT.
+
+    The shape check is what covers models trained before this tag existed. It
+    is weaker — two formats can share a width — which is why the tag is
+    written now, so the next change has something exact to compare against.
+    """
+    required = {f"{WEIGHT_PREFIX}{i}.{w}" for i in (0, 2, 4) for w in ("weight", "bias")}
+    if not required <= set(weights):
+        return False
+    tagged = weights.get(CONTENT_VERSION_KEY)
+    if tagged is not None:
+        return int(np.asarray(tagged).ravel()[0]) == CONTENT_VERSION
+    first = weights[f"{WEIGHT_PREFIX}0.weight"]
+    return first.ndim == 3 and first.shape[1] == N_CONTENT
 
 
 def _conv1d(x: np.ndarray, w: np.ndarray, b: np.ndarray) -> np.ndarray:
@@ -316,6 +383,11 @@ def _erf(x: np.ndarray) -> np.ndarray:
 def predict_envelope(weights: dict[str, np.ndarray], content: np.ndarray) -> np.ndarray:
     """Run the decoder in numpy: content [N_CONTENT, T] -> log-mel envelope."""
     x = np.asarray(content, dtype=np.float32)
+    if x.shape[0] != weights[f"{WEIGHT_PREFIX}0.weight"].shape[1]:
+        raise ValueError(
+            f"content has {x.shape[0]} rows but this decoder was trained on "
+            f"{weights[f'{WEIGHT_PREFIX}0.weight'].shape[1]}. Callers should "
+            f"screen with decoder_is_usable() rather than reach this.")
     # state_dict keys are "0.weight", "2.weight", "4.weight" — the GELUs at
     # indices 1 and 3 carry no parameters.
     for i, layer in enumerate((0, 2, 4)):
