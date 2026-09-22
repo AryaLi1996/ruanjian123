@@ -1,9 +1,23 @@
 """
 Dual-version cover synthesis.
 
-V1 (efficiency):   F0/energy extraction  →  DTW alignment  →  WSOLA retiming
+The AI voice is the *reference vocal recoloured towards the trained singer* —
+see engine/timbre.py. It used to be synthesised from nothing: a sine at the
+reference's f0 through near-identity weights, with the phoneme sequence
+hardcoded to a single vowel, so a whole song came back as one sustained drone
+and thirty minutes of training could not change it. Keeping the reference as
+the excitation means the words, consonants, phrasing and timing are real, and
+the training run actually reaches the output.
+
+V1 (efficiency):   envelope transfer  →  level match  →  post-process chain
 V2 (precision):    mel extraction  →  LSTM expression encoder  →  expression-
                    conditioned synthesis (vibrato, breath, dynamics injection)
+
+V1 no longer runs DTW/WSOLA. Those existed to drag a from-scratch drone onto
+the reference's timing; the AI voice is now derived from that same reference,
+so it is already sample-aligned and retiming it against itself would only add
+WSOLA seams. dtw_warp/wsola/_v1_cover remain for callers that align two
+genuinely different recordings.
 
 Both accept real WAV files or auto-generate synthetic test material.
 All heavy computation uses vectorised NumPy; no librosa dependency.
@@ -23,11 +37,14 @@ from onnx import TensorProto, helper, numpy_helper
 
 from device_detector import detect_device, ordered_providers_for_ep
 from postprocess import postprocess_chain
-from synthesizer import Synthesizer, SAMPLE_RATE as SYNTH_SR, HOP_SIZE as SYNTH_HOP
 
 # ── Module constants ──────────────────────────────────────────────────────────
 
 SR      = 44_100          # cover-synthesis sample rate
+# Rate the timbre envelope was learned at (trainer.SYNTH_SR). Needed because a
+# stored envelope only means something together with its Nyquist — see
+# timbre.resample_envelope.
+TIMBRE_SR = 22_050
 HOP     = 512             # feature-extraction hop (≈ 11.6 ms)
 N_FFT   = 2048
 N_MELS  = 80
@@ -357,6 +374,64 @@ def _resample_mono(audio: np.ndarray, sr_in: int, sr_out: int) -> np.ndarray:
                      np.arange(len(audio)), audio).astype(np.float32)
 
 
+def _load_timbre(model_path: "str | Path") -> np.ndarray | None:
+    """Read the singer's average spectral envelope out of a trained .onnx.
+
+    Returns None for a model exported before envelopes existed, or for the
+    generic stub — in which case cover synthesis leaves the reference's timbre
+    alone rather than inventing one.
+    """
+    try:
+        graph = onnx.load(str(model_path))
+    except Exception:
+        return None
+    for init in graph.graph.initializer:
+        if init.name == "timbre_envelope":
+            return numpy_helper.to_array(init).astype(np.float64)
+    return None
+
+
+def _apply_timbre(ref_mono: np.ndarray, target_env: "np.ndarray | None",
+                  strength: float = 0.75) -> np.ndarray:
+    """Re-colour `ref_mono` towards `target_env`, keeping its excitation.
+
+    With no envelope this is the identity: the honest result for a model that
+    never learned a timbre is the reference voice, not a guess.
+    """
+    ref_mono = np.asarray(ref_mono, dtype=np.float64)
+    if target_env is None or len(ref_mono) < N_FFT:
+        return ref_mono.astype(np.float32)
+
+    from timbre import cepstrum_order, resample_envelope, transfer  # noqa: PLC0415
+
+    window = np.hanning(N_FFT + 1)[:-1]
+    pad = N_FFT // 2
+    padded = np.pad(ref_mono, (pad, pad), mode="reflect")
+    n_frames = 1 + (len(padded) - N_FFT) // HOP
+    idx = np.arange(N_FFT)[None, :] + HOP * np.arange(n_frames)[:, None]
+    spec = np.fft.rfft(padded[idx] * window, axis=-1).T        # [bins, frames]
+
+    # TIMBRE_SR is the rate the envelope was learned at; SR is the cover rate.
+    env = resample_envelope(target_env, spec.shape[0], TIMBRE_SR, SR)
+    # The lifter order is derived from SR, not inherited: the envelope was
+    # learned at TIMBRE_SR, and the source envelope transfer() divides out has
+    # to be smoothed to the same quefrency or the two do not cancel.
+    new_mag = transfer(np.abs(spec), env, strength=strength,
+                       n_cepstrum=cepstrum_order(SR))
+
+    # Reference phase is kept: it carries the timing and the consonant
+    # structure, and re-estimating it would undo the point of the exercise.
+    out_spec = new_mag * np.exp(1j * np.angle(spec))
+    frames = np.fft.irfft(out_spec.T, n=N_FFT, axis=-1) * window
+    acc = np.zeros((n_frames - 1) * HOP + N_FFT)
+    wsum = np.zeros_like(acc)
+    for i in range(n_frames):
+        acc[i * HOP: i * HOP + N_FFT] += frames[i]
+        wsum[i * HOP: i * HOP + N_FFT] += window ** 2
+    acc /= np.maximum(wsum, 1e-10)
+    return acc[pad: pad + len(ref_mono)].astype(np.float32)
+
+
 def _v1_cover(
     ai_voice: np.ndarray,       # [N_ai] mono at SR, pre-synthesised AI voice
     ref_voice: np.ndarray,      # [N_ref] mono at SR, reference vocal
@@ -471,14 +546,19 @@ class CoverResult(TypedDict):
     mode:            str
     duration_sec:    float
     elapsed_sec:     float
-    model_load_sec:  float  # time spent constructing the Synthesizer's ONNX
-                             # session — one-time cost, doesn't scale with
-                             # audio duration. Not included in elapsed_sec
-                             # (which already only covers mode-specific
-                             # alignment/synthesis) — see synthesize_cover().
+    model_load_sec:  float  # time spent reading the trained model to get the
+                             # singer's envelope out of it — one-time cost,
+                             # doesn't scale with audio duration. Not included
+                             # in elapsed_sec (which already only covers
+                             # mode-specific work) — see synthesize_cover().
     rt_ratio:        float
     vibrato_depth:   float
     noise_reduction_db: float  # Ticket 48 §4: dB of hiss removed by postprocess_chain
+    timbre_applied:  bool   # False when the model carries no learned envelope
+                             # (a stub, or one trained before envelopes
+                             # existed). The cover is then the reference voice
+                             # with its own timbre — worth saying rather than
+                             # letting a user wonder why it sounds untouched.
     passed:          bool
 
 
@@ -526,33 +606,24 @@ def synthesize_cover(
         acc_stereo = np.stack([_resample_mono(acc_stereo[c], acc_sr, SR)
                                for c in range(2)])
 
-    # ── Generate AI voice from reference F0 contour ───────────────────────────
-
-    ref_f0_feat = extract_features(ref_mono)["f0"]                    # [T] Hz
-
-    # Build a simple phoneme sequence from the voiced F0 frames
-    frames_per_phoneme = max(1, round(SR / HOP * 0.25))               # 0.25 s per phoneme
-    voiced_f0 = ref_f0_feat[ref_f0_feat > 0]
-    if len(voiced_f0) == 0:
-        voiced_f0 = np.array([440.0])
-
-    # Aggregate into phoneme-length segments
-    n_phon = max(1, len(ref_f0_feat) // frames_per_phoneme)
-    seg_f0 = [float(ref_f0_feat[i * frames_per_phoneme:
-                                (i + 1) * frames_per_phoneme].mean())
-              for i in range(n_phon)]
-    seg_f0 = [f if f > 0 else float(voiced_f0.mean()) for f in seg_f0]
-    phonemes  = ["a", "e", "i", "o", "u"][0:1] * n_phon              # simple vowel sequence
-    durations = [0.25] * n_phon
+    # ── Produce the AI voice by re-colouring the reference ────────────────────
+    #
+    # This used to synthesise from nothing: a pure sine at the reference's f0
+    # through the model, with the phoneme sequence hardcoded to a single vowel
+    # (`["a","e","i","o","u"][0:1] * n_phon`). A whole song came back as one
+    # sustained "aaaa" drone over the backing, which is what users reported as
+    # noise — and thirty minutes of training could not change it, because the
+    # phonemes were fixed and the excitation was a sine.
+    #
+    # Now the reference vocal *is* the excitation and only its timbre moves,
+    # so the words, consonants, phrasing and timing are real. See
+    # engine/timbre.py for what that costs in resemblance.
 
     _tload = time.perf_counter()
-    synth = Synthesizer(ai_model)
+    target_env = _load_timbre(ai_model)
     model_load_sec = time.perf_counter() - _tload
-    synth_result = synth.synthesize(phonemes, seg_f0, durations)
-    ai_audio_raw = np.array(synth_result["audio"], dtype=np.float32)  # at SYNTH_SR, mono
 
-    # Resample to cover SR
-    ai_mono = _resample_mono(ai_audio_raw, SYNTH_SR, SR)
+    ai_mono = _apply_timbre(ref_mono, target_env)
 
     # ── Mode-specific processing ──────────────────────────────────────────────
 
@@ -562,29 +633,19 @@ def synthesize_cover(
     ai_voice_stereo: np.ndarray  # [2, N] at SR — set in each branch below
 
     if mode == "v1":
-        ai_feat  = extract_features(ai_mono)
-        ref_feat = extract_features(ref_mono)
+        # No DTW/WSOLA any more. Those existed to drag a from-scratch "aaaa"
+        # drone onto the reference's timing; the AI voice is now derived from
+        # that same reference, so it is already sample-aligned and retiming it
+        # against itself would only add WSOLA seams. Level is matched to the
+        # reference so the mix balance below is unchanged.
+        retimed = ai_mono.astype(np.float32)
+        ref_rms = float(np.sqrt(np.mean(ref_mono[:len(retimed)] ** 2))) + 1e-8
+        ai_rms  = float(np.sqrt(np.mean(retimed ** 2))) + 1e-8
+        retimed = (retimed * (ref_rms / ai_rms) * 0.9).astype(np.float32)
 
-        def _feat_matrix(d):
-            f0  = d["f0"]  / (d["f0"].max()  + 1e-8)
-            rms = d["rms"] / (d["rms"].max() + 1e-8)
-            return np.stack([f0, rms], axis=1)
-
-        warp    = dtw_warp(_feat_matrix(ai_feat), _feat_matrix(ref_feat))
-        T_ref   = len(ref_feat["f0"])
-        retimed = wsola(ai_mono, warp * HOP)
-
-        env_ref = np.interp(np.arange(len(retimed)),
-                            np.linspace(0, len(retimed) - 1, T_ref), ref_feat["rms"][:T_ref])
-        env_ai  = np.interp(np.arange(len(retimed)),
-                            np.linspace(0, len(retimed) - 1, len(ai_feat["rms"])),
-                            ai_feat["rms"]) + 1e-8
-        retimed = (retimed * env_ref / env_ai * 0.9).astype(np.float32)
-
-        # Ticket 48 §4: WSOLA seams and the formant-synthesis source both
-        # leave broadband hiss/artifacts in the retimed voice — run the
-        # denoise → deess → compress → normalize chain before it's mixed
-        # and saved as the AI vocal stem.
+        # Ticket 48 §4: the postprocess chain still runs — it is what tidies
+        # the de-essing and level of the converted vocal — but it is no longer
+        # cleaning up after WSOLA seams, because there are none.
         pp = postprocess_chain(retimed, SR)
         retimed = pp["audio"]
         noise_reduction_db = pp["noise_reduction_db"]
@@ -665,5 +726,6 @@ def synthesize_cover(
         rt_ratio=round(rt_ratio, 4),
         vibrato_depth=round(vib_depth, 6),
         noise_reduction_db=round(noise_reduction_db, 2),
+        timbre_applied=target_env is not None,
         passed=bool(rt_ratio <= rt_limit),
     )
