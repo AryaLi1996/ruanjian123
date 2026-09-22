@@ -47,5 +47,9 @@ if [ "$ACTUAL" != "$MODEL_SHA256" ]; then
 fi
 
 mv "$TMP" "$DEST"
+# mktemp creates 0600 and mv preserves it; every other engine/*.onnx is 0644.
+# The bundled app may well be read by a different account than the one that
+# built it, so match the rest rather than shipping an owner-only model.
+chmod 644 "$DEST"
 trap - EXIT
 echo "[fetch-models] installed $DEST"

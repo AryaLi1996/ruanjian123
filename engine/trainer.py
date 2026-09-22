@@ -315,6 +315,7 @@ def isolate_vocals(
     work_dir:   Path,
     min_snr_db: float = MIN_SNR_DB,
     enabled:    bool  = True,
+    progress_cb: "callable[[int, int, str], None] | None" = None,
 ) -> tuple[Path, IsolationReport]:
     """
     Isolate the singing voice in `input_dir` before it reaches the training
@@ -332,6 +333,14 @@ def isolate_vocals(
 
     Returns `input_dir` unchanged when nothing needed isolating, so a clean
     upload copies no audio at all.
+
+    progress_cb(done, total, filename) fires as each file is finished. It is
+    not decoration: this loop runs before the first epoch, and the host kills
+    an engine that goes quiet for five minutes (DEFAULT_STALL_TIMEOUT_MS).
+    Thirty minutes of uploaded material measured 128 s of silence here on a
+    four-core machine — comfortably inside the limit, and comfortably outside
+    it on a slower or busier one, at which point a run that is working
+    perfectly well gets killed as hung.
     """
     exts  = {".wav", ".flac", ".ogg", ".mp3"}
     files = ([f for f in sorted(input_dir.iterdir())
@@ -353,8 +362,13 @@ def isolate_vocals(
     snr_after:  list[float] = []
     plan: list[tuple[Path, bool]] = []   # (file, needs_isolation)
 
-    for f in files:
+    # The scan decodes every file in full, so it is its own silent stretch on a
+    # large upload — report through it for the same reason the isolation loop
+    # below does.
+    for scanned, f in enumerate(files, start=1):
         snr = _file_snr_db(f)
+        if progress_cb is not None:
+            progress_cb(0, len(files), f"checking {f.name} ({scanned}/{len(files)})")
         if snr is None:
             continue           # unreadable: preprocess_vocals skips it too
         snr_before.append(snr)
@@ -371,7 +385,7 @@ def isolate_vocals(
     work_dir.mkdir(parents=True, exist_ok=True)
     stems_dir = work_dir / "_stems"
 
-    for f, needs in plan:
+    for done, (f, needs) in enumerate(plan, start=1):
         if not needs:
             report["n_clean"] += 1
             dst = work_dir / f.name
@@ -396,6 +410,9 @@ def isolate_vocals(
         # Measure what actually landed in the training directory, whichever
         # branch produced it. An isolated file that still reads dirty is the
         # case this whole report exists to surface.
+        if progress_cb is not None:
+            progress_cb(done, len(plan), f.name)
+
         after = _file_snr_db(dst)
         if after is None:
             continue
@@ -933,8 +950,19 @@ def train(
         verified=True, unverified_files=[],
     )
     if not proc_dir.exists() or not any(proc_dir.glob("chunk_*.wav")):
+        def _isolation_progress(done: int, total: int, name: str) -> None:
+            _emit({"status": "training", "type": "progress", "code": "isolating",
+                   "message": (f"Isolating vocals: {name}" if done == 0
+                               else f"Isolating vocals: {done}/{total} ({name})"),
+                   "done": done, "total": total,
+                   # Kept inside the 0-100 band the UI already renders, but
+                   # before epoch 1 so it cannot be mistaken for training
+                   # progress.
+                   "percent": 0.0}, progress_path)
+
         train_src, isolation = isolate_vocals(
-            data_dir, data_dir / "_isolated", MIN_SNR_DB, enabled=isolate)
+            data_dir, data_dir / "_isolated", MIN_SNR_DB, enabled=isolate,
+            progress_cb=_isolation_progress)
         if isolation["n_isolated"]:
             _emit({"status": "training", "type": "notice", "code": "vocals_isolated",
                    "message": (f"Isolated the lead vocal in {isolation['n_isolated']} "
