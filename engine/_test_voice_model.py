@@ -77,8 +77,9 @@ target = vm.target_envelope(audio)
 
 check("content and target line up frame for frame",
       content.shape[1] == target.shape[1]
-      and content.shape[0] == vm.N_CONTENT and target.shape[0] == vm.N_MEL,
-      f"content {content.shape}, target {target.shape}")
+      and content.shape[0] == vm.content_width() and target.shape[0] == vm.N_MEL,
+      f"content {content.shape}, target {target.shape} "
+      f"(format v{vm.current_content_version()})")
 
 # The old objective was target == input. If that ever comes back, a linear
 # read-out of the content would reconstruct the target exactly. Fit the map
@@ -161,17 +162,17 @@ except ImportError:
 
 # ── resynthesis keeps what it is supposed to keep ────────────────────────────
 
+# A decoder whose weights are all zero: it predicts a flat envelope, which is
+# a real (if useless) timbre. Built at whatever width this build's content
+# features are, so it exercises the path that is actually live here.
+_CW = vm.content_width()
 flat = {f"{vm.WEIGHT_PREFIX}{i}.{w}": (
     np.zeros((vm.N_MEL if i == 4 else vm.HIDDEN_STANDARD,
-              vm.HIDDEN_STANDARD if i else vm.N_CONTENT,
+              vm.HIDDEN_STANDARD if i else _CW,
               1 if i == 4 else vm.KERNEL), dtype=np.float32) if w == "weight"
     else np.zeros(vm.N_MEL if i == 4 else vm.HIDDEN_STANDARD, dtype=np.float32))
     for i in (0, 2, 4) for w in ("weight", "bias")}
 
-# An all-zero decoder does not mean "no change" — it predicts a flat
-# envelope, which is a real (if useless) timbre. What must hold is that the
-# result stays finite and bounded: the conversion divides by the source
-# envelope, and an unbounded ratio there would be audible as a blow-up.
 zeroed = vm.convert(audio, flat)
 check("a degenerate decoder produces bounded audio rather than a blow-up",
       np.isfinite(zeroed).all() and float(np.max(np.abs(zeroed))) < 4.0,
@@ -226,42 +227,52 @@ with tempfile.TemporaryDirectory() as tmp:
     except ImportError:
         pass
 
-# ── the gate: a decoder only ships when it beat the envelope it replaces ────
+# ── the cover picks between the two paths, and cannot pick a worse one ──────
 
-try:
-    import torch  # noqa: F811
+from cover_synthesis import _pick_timbre_path  # noqa: E402
+from timbre import cepstrum_order, envelope_from_audio  # noqa: E402
 
-    import soundfile as sf  # noqa: E402
+# ── which path the cover uses, and that it never invents a voice ────────────
 
-    with tempfile.TemporaryDirectory() as tmp:
-        src = Path(tmp) / "raw"
-        src.mkdir()
-        sf.write(str(src / "a.wav"), singer(8.0, 10, DARK, 196.0), vm.SR)
+dark_voice = singer(6.0, 10, DARK, 196.0)
+bright_voice = singer(6.0, 77, BRIGHT, 233.0)
+env_22k = envelope_from_audio(dark_voice, vm.N_FFT, vm.HOP, cepstrum_order(vm.SR))
+# _pick_timbre_path runs at the cover rate, so hand it cover-rate audio: the
+# stored envelope is at 22.05 kHz and gets placed by frequency, and feeding it
+# 22.05 kHz audio misaligns the two by an octave.
+# Band-limited, because linear interpolation leaves images above 11 kHz that
+# the stored envelope has no measurement for, and the ratio between them is
+# exactly what the clamp in timbre.transfer exists to bound.
+at_cover_rate = vm.resample_for_content(bright_voice, vm.SR, 2 * vm.SR)
 
-        env = trainer._learn_timbre(src)
-        untrained = vm.build_torch_decoder()
-        # An untrained decoder outputs near-zero — a flat timbre — which is a
-        # worse description of this singer than their own average envelope.
-        check("an untrained decoder loses to the average envelope",
-              not trainer._decoder_beats_envelope(untrained, src, env, "cpu"))
+# The decoder is preferred when there is one: measured over twelve pairs of
+# real speakers the two paths tie on timbre and the decoder keeps more of the
+# diction, which is the order this was built to.
+check("a decoder is used when the model carries one",
+      _pick_timbre_path(at_cover_rate, flat, env_22k)[0] == "decoder")
+check("without one, the average envelope is used",
+      _pick_timbre_path(at_cover_rate, None, env_22k)[0] == "average_envelope")
+check("with neither, the reference keeps its own voice",
+      _pick_timbre_path(at_cover_rate, None, None)[0] == "none")
 
-        # With nothing to fall back to, the decoder is all there is.
-        check("with no envelope to fall back to the decoder is kept anyway",
-              trainer._decoder_beats_envelope(untrained, src, None, "cpu"))
+for _name, _audio in (("decoder", _pick_timbre_path(at_cover_rate, flat, env_22k)[1]),
+                      ("envelope", _pick_timbre_path(at_cover_rate, None, env_22k)[1]),
+                      ("neither", _pick_timbre_path(at_cover_rate, None, None)[1])):
+    check(f"the {_name} path returns finite audio the length of the reference",
+          len(_audio) == len(at_cover_rate) and np.isfinite(_audio).all()
+          and float(np.max(np.abs(_audio))) < 4.0,
+          f"peak {float(np.max(np.abs(_audio))):.2f}")
 
-        audio = singer(8.0, 10, DARK, 196.0)
-        trained = vm.build_torch_decoder()
-        opt = torch.optim.AdamW(trained.parameters(), lr=3e-3)
-        ct = torch.tensor(vm.content_features(audio), dtype=torch.float32)[None]
-        tt = torch.tensor(vm.target_envelope(audio), dtype=torch.float32)[None]
-        for _ in range(300):
-            opt.zero_grad()
-            nn.functional.l1_loss(trained(ct), tt).backward()
-            opt.step()
-        check("a trained decoder beats the average envelope",
-              trainer._decoder_beats_envelope(trained, src, env, "cpu"))
-except ImportError:
-    pass
+# timbre.transfer used to return a signal with no level of its own — both the
+# excitation and the blended envelope are normalised — so at full strength a
+# 0.5-peak input came back at 20.8, and at 0.75 the level was raised to the
+# power 0.25, flattening the dynamics. The envelope path runs at full strength
+# now, so this has to hold.
+_env_out = _pick_timbre_path(at_cover_rate, None, env_22k)[1]
+_ratio = float(np.sqrt(np.mean(np.asarray(_env_out, np.float64) ** 2))
+               / (np.sqrt(np.mean(at_cover_rate.astype(np.float64) ** 2)) + 1e-12))
+check("re-colouring keeps the reference's level rather than discarding it",
+      0.2 < _ratio < 3.0, f"output/input RMS {_ratio:.2f}")
 
 
 # ── the resampler feeding it has to be band-limited ─────────────────────────
@@ -290,22 +301,30 @@ try:
     tagged = vm.decoder_state_to_arrays(vm.build_torch_decoder())
     check("stored weights carry the content format they were trained on",
           vm.CONTENT_VERSION_KEY in tagged
-          and int(tagged[vm.CONTENT_VERSION_KEY][0]) == vm.CONTENT_VERSION)
+          and int(tagged[vm.CONTENT_VERSION_KEY][0]) == vm.current_content_version())
     check("this build's own decoder is usable", vm.decoder_is_usable(tagged))
 
     future = dict(tagged)
-    future[vm.CONTENT_VERSION_KEY] = np.array([vm.CONTENT_VERSION + 1], dtype=np.float32)
+    future[vm.CONTENT_VERSION_KEY] = np.array([vm.current_content_version() + 1], dtype=np.float32)
     check("a decoder trained on a different content format is refused",
           not vm.decoder_is_usable(future))
 
     # Models exported before the tag existed must keep working: they are
     # already in users' libraries and their features are this format.
+    # Untagged models predate the tag; they are all excitation-format, so
+    # they load only while this build is producing that format too. With the
+    # ContentVec encoder installed they are correctly refused, and the cover
+    # falls back to the average envelope stored beside them.
     legacy = {k: v for k, v in tagged.items() if k != vm.CONTENT_VERSION_KEY}
-    check("an untagged decoder of the right width is still accepted",
-          vm.decoder_is_usable(legacy))
+    excitation_build = vm.current_content_version() == vm.CONTENT_VERSION_EXCITATION
+    check("an untagged decoder loads only on an excitation build",
+          vm.decoder_is_usable(legacy) == excitation_build,
+          f"accepted={vm.decoder_is_usable(legacy)} on a "
+          f"v{vm.current_content_version()} build")
 
     wrong_width = dict(legacy)
-    wrong_width[f"{vm.WEIGHT_PREFIX}0.weight"] = np.zeros((4, 768, vm.KERNEL), dtype=np.float32)
+    wrong_width[f"{vm.WEIGHT_PREFIX}0.weight"] = np.zeros(
+        (4, vm.content_width() + 7, vm.KERNEL), dtype=np.float32)
     check("an untagged decoder of the wrong width is refused",
           not vm.decoder_is_usable(wrong_width))
 

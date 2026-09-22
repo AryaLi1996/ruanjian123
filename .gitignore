@@ -39,3 +39,8 @@ engine/model_t08_*.onnx
 
 # Pretrained separation weights — 66 MB, fetched by scripts/fetch-models.sh
 engine/UVR-MDX-NET-*.onnx
+
+# ContentVec content encoder — 198 MB, fetched and converted by
+# scripts/fetch-models.sh from an MIT checkpoint. Same reason as the MDX
+# weights above: it does not belong in repository history.
+engine/contentvec-base-*.onnx
