@@ -428,6 +428,70 @@ def isolate_vocals(
     return work_dir, report
 
 
+# FFT size the timbre envelope is learned at. Fixed rather than derived from
+# the training hop so the stored envelope has one known length whatever the
+# chunking does; cover synthesis interpolates it onto its own FFT size.
+TIMBRE_N_FFT: int = 1024
+TIMBRE_HOP: int = 256
+# Rate the envelope is learned at. cover_synthesis.TIMBRE_SR must match: an
+# envelope means nothing without the Nyquist it was measured against.
+TIMBRE_SR: int = SYNTH_SR
+
+
+def _learn_timbre(source_dir: Path) -> np.ndarray | None:
+    """Average spectral envelope of the singer, learned from the *uploaded*
+    audio rather than from what the training loop consumes.
+
+    That distinction is the whole correctness of this function. isolate_vocals
+    is a denoiser tuned for SI-SDR, and it recolours what it cleans — measured
+    on a test singer, the envelope of the isolated audio sits 3.43 away from
+    the envelope of the same audio before isolation, where the target's own
+    baseline separation from another singer was 0.72. Learning the envelope
+    downstream of it learns the filter's timbre, not the singer's, and cover
+    synthesis then converts towards a voice nobody has.
+
+    Reading the raw upload instead assumes the training material is a clean
+    vocal, which is what the product asks for on this screen and what
+    MIN_SNR_DB already gates on. A noisy upload gives a noisy envelope; that
+    is visible in the quality report rather than silently wrong.
+
+    Cheap by construction — one STFT pass and a weighted log-average — because
+    the product promises training on ordinary laptops.
+    """
+    from timbre import average_envelope, cepstrum_order  # noqa: PLC0415
+
+    exts = {".wav", ".flac", ".ogg", ".mp3"}
+    files = ([f for f in sorted(Path(source_dir).iterdir())
+              if f.is_file() and f.suffix.lower() in exts]
+             if Path(source_dir).exists() else [])
+    if not files:
+        return None
+
+    window = np.hanning(TIMBRE_N_FFT + 1)[:-1]
+    frames: list[np.ndarray] = []
+    for path in files:
+        try:
+            audio, sr = sf.read(str(path), dtype="float64", always_2d=True)
+        except Exception:
+            continue
+        mono = audio.mean(axis=1)
+        if sr != TIMBRE_SR:
+            mono = _linear_resample(mono.astype(np.float32), sr, TIMBRE_SR).astype(np.float64)
+        # A couple of minutes is a stable average; a 30-minute upload does not
+        # need a second full pass over it just to estimate one envelope.
+        mono = mono[: TIMBRE_SR * 120]
+        if len(mono) < TIMBRE_N_FFT:
+            continue
+        n = 1 + (len(mono) - TIMBRE_N_FFT) // TIMBRE_HOP
+        idx = np.arange(TIMBRE_N_FFT)[None, :] + TIMBRE_HOP * np.arange(n)[:, None]
+        frames.append(np.abs(np.fft.rfft(mono[idx] * window, axis=-1)).T)
+
+    if not frames:
+        return None
+    return average_envelope(np.concatenate(frames, axis=1),
+                            cepstrum_order(TIMBRE_SR)).astype(np.float32)
+
+
 def estimate_snr_db(audio: np.ndarray, frame_size: int = 1024) -> float:
     """
     Coarse SNR estimate from frame-RMS statistics: treats the quietest 10%
@@ -644,12 +708,23 @@ def _merge_lora(model: MicroVITSModel) -> MicroVITSModel:
     return clean
 
 
-def export_to_onnx(model: MicroVITSModel, output_path: Path) -> int:
+TIMBRE_INITIALIZER = "timbre_envelope"
+
+
+def export_to_onnx(model: MicroVITSModel, output_path: Path,
+                   timbre_envelope: np.ndarray | None = None) -> int:
     """
     Build the ONNX graph from trained weights using the onnx library directly.
     Avoids torch.onnx.export (which requires onnxscript in PyTorch ≥ 2.1).
     The graph is identical to the stub model in synthesizer.py.
     Returns file size in bytes.
+
+    `timbre_envelope` is the singer's average spectral envelope, stored as an
+    unused initializer rather than a sidecar file. It is what cover synthesis
+    actually uses to move a reference vocal towards this voice — see
+    engine/timbre.py — and keeping it inside the .onnx means it travels with
+    the model through copying, the library UI and model_crypto's encryption
+    instead of being a second file that can go missing.
     """
     import onnx as _onnx
     from onnx import TensorProto, helper, numpy_helper
@@ -686,6 +761,9 @@ def export_to_onnx(model: MicroVITSModel, output_path: Path) -> int:
         numpy_helper.from_array(b2, "b2"),
         numpy_helper.from_array(ph, "ph_scale"),
     ]
+    if timbre_envelope is not None:
+        inits.append(numpy_helper.from_array(
+            np.asarray(timbre_envelope, dtype=np.float32), TIMBRE_INITIALIZER))
     graph = helper.make_graph(nodes, "micro_vits", [af_vi, pc_vi], [out_vi],
                                initializer=inits)
     proto = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 17)],
@@ -1117,9 +1195,15 @@ def train(
         _emit(prog, progress_path)
         epoch += 1
 
+    # The singer's average spectral envelope, learned from the same chunks the
+    # loop trained on. This is what cover synthesis uses to move a reference
+    # vocal towards this voice; without it the cover has nothing to go on but
+    # near-identity weights and comes out as the reference singer unchanged.
+    timbre_env = _learn_timbre(data_dir)
+
     # Export
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    model_bytes = export_to_onnx(model, output_path)
+    model_bytes = export_to_onnx(model, output_path, timbre_envelope=timbre_env)
     elapsed     = time.perf_counter() - t0
 
     # Ticket 48 §5: score how faithfully the trained model reproduces its

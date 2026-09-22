@@ -79,6 +79,15 @@ jobs:
         working-directory: engine
         run: python _test_synth_noise.py
 
+      # Pins spectral-envelope timbre transfer: the cover's "AI voice" is the
+      # reference vocal recoloured towards the trained singer, and the two
+      # rate-dependent conversions in that path (envelope resampling and the
+      # cepstral lifter) each silently produced output further from the target
+      # than doing nothing.
+      - name: Run timbre transfer test suite
+        working-directory: engine
+        run: python _test_timbre.py
+
       - name: Run benchmark (short duration)
         working-directory: engine
         run: |
