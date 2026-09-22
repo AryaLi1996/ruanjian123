@@ -300,6 +300,26 @@ check("a clean upload skips isolation", clean_report["n_isolated"] == 0,
 check("a clean upload is trained from in place", clean_src == clean_dir)
 check("a clean upload verifies", clean_report["verified"])
 
+# The isolation pre-pass runs before the first epoch, and the host kills an
+# engine that goes quiet for DEFAULT_STALL_TIMEOUT_MS (5 min). Thirty minutes
+# of uploaded material measured 131 s of unbroken silence before this
+# reported anything, which is inside the limit here and outside it on a
+# slower machine — a working run killed as hung. Progress must reach the
+# caller from both phases, the SNR scan and the isolation itself.
+seen: list[tuple[int, int, str]] = []
+scan_dir = tmp / "progress_src"
+scan_dir.mkdir()
+for i in range(3):
+    sf.write(str(scan_dir / f"t{i}.wav"), mix.T, SR, subtype="PCM_16")
+isolate_vocals(scan_dir, tmp / "_progress", progress_cb=lambda d, t, n: seen.append((d, t, n)))
+check("the isolation pre-pass reports progress at all", len(seen) > 0, f"{len(seen)} updates")
+check("it reports during the SNR scan, not only after it",
+      any(d == 0 for d, _t, _n in seen),
+      f"{sum(1 for d, _t, _n in seen if d == 0)} scan updates")
+check("it reports once per isolated file",
+      sorted(d for d, _t, _n in seen if d > 0) == [1, 2, 3],
+      str(sorted(d for d, _t, _n in seen if d > 0)))
+
 off_src, off_report = isolate_vocals(data_dir, tmp / "_off", enabled=False)
 check("isolate=False is a no-op", off_src == data_dir and off_report["n_isolated"] == 0)
 check("opting out is reported", off_report["unavailable"] == "disabled by caller")
