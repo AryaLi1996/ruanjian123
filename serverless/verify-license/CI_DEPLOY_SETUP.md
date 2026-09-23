@@ -1,8 +1,23 @@
-# CI deploy setup for the license backend
+# CI deploy setup for the backend
 
-`.github/workflows/deploy-license.yml` runs `scripts/deploy-license.sh` on
-every push to `main` that touches `serverless/verify-license/**`, and on a
-manual `workflow_dispatch`. It authenticates to AWS via GitHub's OIDC
+`.github/workflows/deploy-license.yml` deploys **both** backend stacks:
+
+| Stack | Directory | Script | What it is |
+|---|---|---|---|
+| `ruanjian-license`     | `serverless/verify-license` | `scripts/deploy-license.sh` | licences, orders, trials, demos, and the two cloud-fill metering routes |
+| `shuyin-cloud-inpaint` | `serverless/cloud-inpaint`  | `scripts/deploy-inpaint.sh` | the learned inpainting filler the desktop app sends a watermark's opaque pixels to |
+
+It runs on every push to `main` touching either directory or either script,
+and on a manual `workflow_dispatch`. A `changes` job decides which stacks a run
+plans and applies, so a licence hotfix does not wait on a 1.2 GB container
+build, and the `apply` job does the inpaint stack **first** — `deploy-license.sh`
+reads its `InpaintUrl` output and passes it on as `FillEndpointUrl`, which is
+what removes the step where somebody copies a URL out of a deploy log.
+
+They are two stacks, not one. Putting the inpaint function into the licence
+template would make that URL a `!GetAtt` and cost nothing to wire — and would
+also mean a failed container build rolls back the function that decides who has
+paid. It authenticates to AWS via GitHub's OIDC
 provider — no long-lived AWS access keys are stored in GitHub — but that
 means IAM roles have to exist first, trusted specifically by this repo.
 This is one-time AWS setup; nothing here runs automatically.
@@ -208,11 +223,61 @@ for every future template change:
       "Sid": "CloudWatchLogsForLambda",
       "Effect": "Allow",
       "Action": ["logs:*"],
-      "Resource": "arn:aws:logs:us-east-1:641628981129:log-group:/aws/lambda/ruanjian-license-*"
+      "Resource": [
+        "arn:aws:logs:us-east-1:641628981129:log-group:/aws/lambda/ruanjian-license-*",
+        "arn:aws:logs:us-east-1:641628981129:log-group:/aws/lambda/shuyin-cloud-inpaint-*",
+        "arn:aws:logs:us-east-1:641628981129:log-group:/aws/lambda/shuyin-cloud-inpaint-*:*"
+      ]
+    },
+    {
+      "Sid": "InpaintStack",
+      "Effect": "Allow",
+      "Action": "cloudformation:*",
+      "Resource": "arn:aws:cloudformation:us-east-1:641628981129:stack/shuyin-cloud-inpaint/*"
+    },
+    {
+      "Sid": "InpaintFunctionAndUrl",
+      "Effect": "Allow",
+      "Action": ["lambda:*"],
+      "Resource": "arn:aws:lambda:us-east-1:641628981129:function:shuyin-cloud-inpaint-*"
+    },
+    {
+      "Sid": "InpaintFunctionRole",
+      "Effect": "Allow",
+      "Action": ["iam:GetRole", "iam:CreateRole", "iam:DeleteRole", "iam:AttachRolePolicy",
+                 "iam:DetachRolePolicy", "iam:ListAttachedRolePolicies", "iam:PutRolePolicy",
+                 "iam:DeleteRolePolicy", "iam:GetRolePolicy", "iam:PassRole", "iam:TagRole"],
+      "Resource": "arn:aws:iam::641628981129:role/shuyin-cloud-inpaint-*"
+    },
+    {
+      "Sid": "SamManagedEcrRepository",
+      "Effect": "Allow",
+      "Action": ["ecr:CreateRepository", "ecr:DescribeRepositories", "ecr:SetRepositoryPolicy",
+                 "ecr:GetRepositoryPolicy", "ecr:PutLifecyclePolicy", "ecr:TagResource",
+                 "ecr:BatchCheckLayerAvailability", "ecr:InitiateLayerUpload",
+                 "ecr:UploadLayerPart", "ecr:CompleteLayerUpload", "ecr:PutImage",
+                 "ecr:BatchGetImage", "ecr:ListImages"],
+      "Resource": "arn:aws:ecr:us-east-1:641628981129:repository/*"
+    },
+    {
+      "Sid": "EcrLogin",
+      "Effect": "Allow",
+      "Action": "ecr:GetAuthorizationToken",
+      "Resource": "*"
     }
   ]
 }
 ```
+
+**The inpaint statements are the new half**, and the ECR ones are why: that
+stack ships a container image, which the licence stack does not.
+`ecr:GetAuthorizationToken` has to be `Resource: "*"` — the API takes no
+resource. Everything else stays scoped by name prefix, and that prefixing is
+what keeps a role that can deploy an inference endpoint from being able to
+touch `ruanjian-license-*` and vice versa.
+
+`DynamoDbTablesControlPlaneOnly` already covers `FillUsageTable`: it is created
+by the licence stack and named `ruanjian-license-*` like the rest.
 
 **Don't drop the `SamTransform` statement, and note its `Resource` is in
 account `aws`, not `641628981129`** — easy to typo away since every other
@@ -300,17 +365,51 @@ job more useful":
       "Action": ["lambda:GetFunction", "lambda:GetFunctionConfiguration",
                  "lambda:GetFunctionUrlConfig", "dynamodb:DescribeTable", "iam:GetRole"],
       "Resource": "*"
+    },
+    {
+      "Sid": "InpaintChangeSetPreviewOnly",
+      "Effect": "Allow",
+      "Action": ["cloudformation:CreateChangeSet", "cloudformation:DescribeChangeSet",
+                 "cloudformation:ListChangeSets", "cloudformation:DescribeStacks",
+                 "cloudformation:DescribeStackEvents", "cloudformation:GetTemplateSummary"],
+      "Resource": "arn:aws:cloudformation:us-east-1:641628981129:stack/shuyin-cloud-inpaint/*"
+    },
+    {
+      "Sid": "EcrPushOnly",
+      "Effect": "Allow",
+      "Action": ["ecr:DescribeRepositories", "ecr:BatchCheckLayerAvailability",
+                 "ecr:InitiateLayerUpload", "ecr:UploadLayerPart",
+                 "ecr:CompleteLayerUpload", "ecr:PutImage", "ecr:BatchGetImage"],
+      "Resource": "arn:aws:ecr:us-east-1:641628981129:repository/*"
+    },
+    {
+      "Sid": "EcrLogin",
+      "Effect": "Allow",
+      "Action": "ecr:GetAuthorizationToken",
+      "Resource": "*"
     }
   ]
 }
 ```
 
+**The plan job pushes a container image.** That is inherent to previewing an
+image-based stack — the change-set has to reference an image that exists — and
+it is why `EcrPushOnly` is here. It writes a layer nobody runs; it cannot point
+a function at it. `ecr:CreateRepository` is deliberately absent for the same
+reason `s3:CreateBucket` is, below.
+
+`DescribeStacks` on `*` (the `CloudFormationPreflight` statement above) is also
+what lets `deploy-license.sh` read the inpaint stack's `InpaintUrl` output
+during a plan, so the previewed `FillEndpointUrl` is the one that would
+actually be applied rather than a blank.
+
 Two things to expect the first time you use it:
 
-- **`s3:CreateBucket` is deliberately absent.** With `--resolve-s3`, SAM
-  creates the managed artifact bucket if it does not exist — so on a brand
-  new account the plan job fails until one `apply` run (or a local
-  `scripts/deploy-license.sh`) has created it. That is the intended
+- **`s3:CreateBucket` and `ecr:CreateRepository` are deliberately absent.** With
+  `--resolve-s3` and `--resolve-image-repos`, SAM creates the managed artifact
+  bucket and image repository if they do not exist — so on a brand new account
+  the plan job fails until one `apply` run (or a local
+  `scripts/deploy-license.sh` / `scripts/deploy-inpaint.sh`) has created them. That is the intended
   trade-off: a preview role should not be able to create buckets.
 - **`iam:PassRole` is absent too.** CloudFormation checks it when a
   change-set is *executed*, not created, so a plan should not need it. If a
@@ -341,10 +440,28 @@ repository secrets:
 | `AWS_PLAN_ROLE_ARN`      | yes            | —            | ARN of the plan role (§2c)                                       |
 | `AWS_DEPLOY_ROLE_ARN`    | —              | yes          | ARN of the deploy role (§2b)                                     |
 | `LICENSE_SIGNING_SECRET` | yes            | yes          | The production HMAC signing secret (never the repo's dev default)|
+| `FILL_SIGNING_SECRET`    | yes            | yes          | Signs the short-lived tokens the inpaint service checks — see below |
 | `STRIPE_API_KEY`         | optional       | optional     | Only if `PaymentProvider=stripe` / Stripe Checkout is enabled     |
 | `STRIPE_WEBHOOK_SECRET`  | optional       | optional     | Only if the Stripe webhook is enabled                            |
 | `LEMON_API_KEY`          | optional       | optional     | Only if `PaymentProvider=lemonsqueezy`                           |
 | `SES_SENDER_EMAIL`       | optional       | optional     | Only to enable license-key delivery emails                       |
+
+**`FILL_SIGNING_SECRET` is not `LICENSE_SIGNING_SECRET`,** and the two must not
+be set to the same string. Generate it with something that is not a person:
+
+```bash
+python3 -c 'import secrets; print(secrets.token_urlsafe(48))'
+```
+
+They guard different things on very different schedules. Rotating this one
+costs at most one export's fallback to the local filler, because a fill token
+lives fifteen minutes; rotating the licence secret needs a build shipped first
+and waited for (see `PREVIOUS_SIGNING_SECRET` in the app). Sharing them would
+drag the cheap rotation onto the expensive one's schedule, permanently.
+
+It is required only on a run that touches `serverless/cloud-inpaint/**` — the
+secret check names it only then, so a licence hotfix is not stopped by a secret
+it does not use.
 
 **Why environment secrets rather than repository secrets.** A repository
 secret is readable by *any* workflow in this repo, including one added or

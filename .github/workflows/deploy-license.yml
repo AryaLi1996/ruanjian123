@@ -1,5 +1,22 @@
-name: Deploy License Backend
+name: Deploy Backend
 
+# Deploys both backend stacks: the licence service in serverless/verify-license
+# and the cloud inpaint service in serverless/cloud-inpaint. One workflow
+# because they share an AWS account, a pair of OIDC roles and an approval gate,
+# and because the licence stack has to be told where the inpaint stack ended up
+# — doing that in one apply, in order, is what removes the step where somebody
+# copies a URL out of a deploy log.
+#
+# Two stacks rather than one, though. Putting the inpaint function into the
+# licence template would make the URL a !GetAtt and cost nothing to wire — and
+# would also mean a failed container build rolls back the function that decides
+# who has paid. Payments do not go down because an inference image would not
+# build.
+#
+# Each stack is planned and applied only when its own files changed (the
+# `changes` job below), so a licence hotfix does not wait on a 1.2 GB image
+# build and a docs change to either does not redeploy the other.
+#
 # Automates what scripts/deploy-license.sh (see DEV_GUIDE.md §2.7) previously
 # only ran by hand — the Ticket 42 trial-duration fix's own rollout was
 # blocked on exactly that manual step. Authenticates to AWS with short-lived
@@ -74,7 +91,9 @@ on:
     branches: [main]
     paths:
       - 'serverless/verify-license/**'
+      - 'serverless/cloud-inpaint/**'
       - 'scripts/deploy-license.sh'
+      - 'scripts/deploy-inpaint.sh'
       - '.github/workflows/deploy-license.yml'
   # Manual re-deploy from the Actions tab (or `gh workflow run
   # deploy-license.yml`). The push trigger above only fires when the
@@ -92,7 +111,7 @@ on:
 # stack in UPDATE_ROLLBACK_FAILED, which needs manual intervention to clear.
 # Note this now also holds the queue while `apply` waits for its reviewer.
 concurrency:
-  group: deploy-license
+  group: deploy-backend
   cancel-in-progress: false
 
 # Workflow-level default. `test` narrows it further; the two AWS jobs need
@@ -101,8 +120,61 @@ permissions:
   contents: read
 
 jobs:
+  # Which stacks this run has to touch. The `paths:` filter above decides
+  # whether the workflow runs at all; this decides which halves of it do.
+  #
+  # A dispatch says "both", because the reason to press the button is usually
+  # that the deployed state is wrong in a way the commit history does not show
+  # — a rotated secret, a stack recovered by hand.
+  changes:
+    name: What changed
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      license: ${{ steps.filter.outputs.license }}
+      inpaint: ${{ steps.filter.outputs.inpaint }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The whole history, so `before` is present to diff against. A push
+          # of several commits is then covered, which HEAD~1 would not be.
+          fetch-depth: 0
+
+      - id: filter
+        env:
+          BEFORE: ${{ github.event.before }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          everything() {
+            echo "license=true" >> "$GITHUB_OUTPUT"
+            echo "inpaint=true"  >> "$GITHUB_OUTPUT"
+          }
+          # A dispatch, a first push to a branch (all-zero `before`), or a
+          # `before` this clone somehow does not have: deploy both rather than
+          # guess. Over-deploying is an empty change-set; under-deploying is a
+          # change that silently never shipped.
+          if [[ "$EVENT" != "push" ]] \
+             || [[ -z "${BEFORE:-}" ]] \
+             || [[ "$BEFORE" =~ ^0+$ ]] \
+             || ! git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+            everything
+            exit 0
+          fi
+          changed="$(git diff --name-only "$BEFORE" "$GITHUB_SHA")"
+          printf 'Changed files:\n%s\n' "$changed"
+          license=false
+          inpaint=false
+          grep -qE '^(serverless/verify-license/|scripts/deploy-license\.sh|\.github/workflows/deploy-license\.yml)' <<<"$changed" && license=true
+          grep -qE '^(serverless/cloud-inpaint/|scripts/deploy-inpaint\.sh|\.github/workflows/deploy-license\.yml)' <<<"$changed" && inpaint=true
+          echo "license=$license" >> "$GITHUB_OUTPUT"
+          echo "inpaint=$inpaint"  >> "$GITHUB_OUTPUT"
+
   test:
     name: Unit tests (pre-deploy gate)
+    needs: changes
     runs-on: ubuntu-latest
     timeout-minutes: 10
     # No id-token here: this job never talks to AWS, so it is not given the
@@ -127,9 +199,40 @@ jobs:
         working-directory: serverless/verify-license
         run: python3 -m unittest discover -p 'test_*.py' -v
 
+      # Runs whatever changed, because the two services meet at one thing: the
+      # token handler.py mints and cloud-inpaint/auth.py checks. The licence
+      # suite covers that meeting itself (it imports the real verifier — auth.py
+      # is stdlib-only, so nothing has to be installed for it), which is why
+      # this step is about the service's own routes and not about the handshake.
+      - name: Install the inpaint service's dependencies
+        if: needs.changes.outputs.inpaint == 'true'
+        working-directory: serverless/cloud-inpaint
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install -r requirements-dev.txt
+
+      - name: Run the inpaint service's unit tests
+        if: needs.changes.outputs.inpaint == 'true'
+        working-directory: serverless/cloud-inpaint
+        run: python3 -m unittest discover -p 'test_*.py' -v
+
+      # Catches a template CloudFormation would reject before the plan job
+      # spends minutes building a container image to find out. Offline and
+      # credential-free: it parses, it does not call AWS.
+      #
+      # `cfn-lint`, not `python -m cfnlint` — the package has no __main__ and
+      # the module form exits 1 with "cannot be directly executed".
+      - name: Check both templates parse
+        run: |
+          python3 -m pip install --quiet 'cfn-lint>=1,<2'
+          # W3002 wants packaged artifacts already in S3; the whole point of
+          # `sam build` is that they are not yet.
+          cfn-lint serverless/verify-license/template.yaml --ignore-checks W3002
+          cfn-lint serverless/cloud-inpaint/template.yaml --ignore-checks W3002
+
   plan:
     name: Plan (change-set preview, cannot apply)
-    needs: test
+    needs: [changes, test]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     # Scopes the plan role ARN and signing secret to this job. Give this
@@ -153,10 +256,17 @@ jobs:
         env:
           PLAN_ROLE_ARN:          ${{ secrets.AWS_PLAN_ROLE_ARN }}
           LICENSE_SIGNING_SECRET: ${{ secrets.LICENSE_SIGNING_SECRET }}
+          FILL_SIGNING_SECRET:    ${{ secrets.FILL_SIGNING_SECRET }}
+          INPAINT:                ${{ needs.changes.outputs.inpaint }}
         run: |
           missing=()
           [[ -n "$PLAN_ROLE_ARN" ]]          || missing+=("AWS_PLAN_ROLE_ARN")
           [[ -n "$LICENSE_SIGNING_SECRET" ]] || missing+=("LICENSE_SIGNING_SECRET")
+          # Only when this run actually touches the inpaint stack: a licence
+          # hotfix should not be stopped by a secret it does not use.
+          if [[ "$INPAINT" == "true" && -z "$FILL_SIGNING_SECRET" ]]; then
+            missing+=("FILL_SIGNING_SECRET")
+          fi
           if (( ${#missing[@]} )); then
             printf 'Missing environment secret(s) on `license-plan`: %s\n' "${missing[*]}" >&2
             printf 'This is one-time setup, not a code failure — see\n' >&2
@@ -177,11 +287,23 @@ jobs:
       # change-set, then stops. Skips the destructive stale-stack cleanup the
       # apply job does. Passing a secret through as an empty env var is fine —
       # the script only adds a parameter override when the value is non-empty.
-      - name: Plan (sam build + change-set, no execute)
+      # The inpaint stack first, matching the order `apply` uses — so a
+      # reviewer reads the two change-sets in the order they will happen.
+      - name: Plan the inpaint stack (sam build + change-set, no execute)
+        if: needs.changes.outputs.inpaint == 'true'
+        env:
+          PLAN_ONLY: "true"
+          AWS_REGION: us-east-1
+          FILL_SIGNING_SECRET: ${{ secrets.FILL_SIGNING_SECRET }}
+        run: scripts/deploy-inpaint.sh
+
+      - name: Plan the licence stack (sam build + change-set, no execute)
+        if: needs.changes.outputs.license == 'true'
         env:
           PLAN_ONLY: "true"
           AWS_REGION: us-east-1
           LICENSE_SIGNING_SECRET: ${{ secrets.LICENSE_SIGNING_SECRET }}
+          FILL_SIGNING_SECRET: ${{ secrets.FILL_SIGNING_SECRET }}
           STRIPE_API_KEY: ${{ secrets.STRIPE_API_KEY }}
           STRIPE_WEBHOOK_SECRET: ${{ secrets.STRIPE_WEBHOOK_SECRET }}
           LEMON_API_KEY: ${{ secrets.LEMON_API_KEY }}
@@ -190,7 +312,7 @@ jobs:
 
   apply:
     name: Apply (requires approval)
-    needs: plan
+    needs: [changes, plan]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     # The approval gate. Configure required reviewers on this environment in
@@ -210,10 +332,15 @@ jobs:
         env:
           DEPLOY_ROLE_ARN:        ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
           LICENSE_SIGNING_SECRET: ${{ secrets.LICENSE_SIGNING_SECRET }}
+          FILL_SIGNING_SECRET:    ${{ secrets.FILL_SIGNING_SECRET }}
+          INPAINT:                ${{ needs.changes.outputs.inpaint }}
         run: |
           missing=()
           [[ -n "$DEPLOY_ROLE_ARN" ]]        || missing+=("AWS_DEPLOY_ROLE_ARN")
           [[ -n "$LICENSE_SIGNING_SECRET" ]] || missing+=("LICENSE_SIGNING_SECRET")
+          if [[ "$INPAINT" == "true" && -z "$FILL_SIGNING_SECRET" ]]; then
+            missing+=("FILL_SIGNING_SECRET")
+          fi
           if (( ${#missing[@]} )); then
             printf 'Missing environment secret(s) on `production`: %s\n' "${missing[*]}" >&2
             printf 'This is one-time setup, not a code failure — see\n' >&2
@@ -238,10 +365,24 @@ jobs:
       # than executing the one `plan` created — same commit, same parameters,
       # so the same diff, and it keeps this job working even if the plan's
       # change-set was pruned while the run waited for approval.
-      - name: Deploy (sam build + sam deploy)
+      # Order is load-bearing. deploy-license.sh reads the inpaint stack's
+      # InpaintUrl output and passes it as FillEndpointUrl, so the inpaint
+      # stack has to exist — and be current — before the licence stack is told
+      # where it is. Reversed, a first deployment would leave the licence
+      # function pointing at nothing until the next run.
+      - name: Deploy the inpaint stack (sam build + sam deploy)
+        if: needs.changes.outputs.inpaint == 'true'
+        env:
+          AWS_REGION: us-east-1
+          FILL_SIGNING_SECRET: ${{ secrets.FILL_SIGNING_SECRET }}
+        run: scripts/deploy-inpaint.sh
+
+      - name: Deploy the licence stack (sam build + sam deploy)
+        if: needs.changes.outputs.license == 'true'
         env:
           AWS_REGION: us-east-1
           LICENSE_SIGNING_SECRET: ${{ secrets.LICENSE_SIGNING_SECRET }}
+          FILL_SIGNING_SECRET: ${{ secrets.FILL_SIGNING_SECRET }}
           STRIPE_API_KEY: ${{ secrets.STRIPE_API_KEY }}
           STRIPE_WEBHOOK_SECRET: ${{ secrets.STRIPE_WEBHOOK_SECRET }}
           LEMON_API_KEY: ${{ secrets.LEMON_API_KEY }}

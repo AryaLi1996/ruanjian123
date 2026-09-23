@@ -1,0 +1,171 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+
+Description: >
+  The learned inpainting filler the app cannot afford to run locally, as one
+  Lambda behind a Function URL.
+
+  Why a Lambda and not a GPU instance: with no users yet, an always-on
+  g4dn.xlarge is about $380 a month to answer nothing, while this costs
+  nothing at all when idle. The client already treats an unreachable or slow
+  service as "fill it locally and say so", so the failure mode of the cheap
+  option is a slower, slightly more legible export rather than a broken one.
+
+  The swap to a GPU endpoint later needs nothing from the app: the client is
+  handed its URL by the licence service's `fill/quota` route, per export. See
+  README.md ("How long a batch takes") for when that swap becomes worth it.
+
+Parameters:
+  FillSigningSecret:
+    Type: String
+    NoEcho: true
+    MinLength: 32
+    Description: >
+      The HMAC secret this service verifies job tokens with. The licence
+      service beside this one signs them with the same string — the
+      FillSigningSecret parameter in serverless/verify-license/template.yaml
+      takes the same value. Not the licence signing secret: a separate secret
+      means a leak of one does not mint the other, and they are rotated on
+      very different schedules (see that template's note).
+
+  FillAppId:
+    Type: String
+    Default: shuyin
+    Description: >
+      Which app's tokens this deployment answers to. Matches APP_ID in
+      electron/license-config.js in AryaLi1996/watermaker-removal-123.
+      Empty accepts any app's, which is only
+      sensible in a scratch deployment.
+
+  MaxFramesPerJob:
+    Type: Number
+    Default: 240
+    MinValue: 1
+    MaxValue: 1000
+    Description: >
+      The largest run of frames one request may carry. The client sends
+      the client's cloud_fill.FRAMES_PER_REQUEST (240) and a smaller value here makes it
+      refuse those jobs outright, so lower this only together with that
+      constant.
+
+  MemorySize:
+    Type: Number
+    Default: 10240
+    MinValue: 1024
+    MaxValue: 10240
+    Description: >
+      Also buys vCPU — Lambda scales cores with memory, and at 10240 MB that
+      is about 6. Inference here is CPU-bound, so this is the throughput dial
+      and the maximum is the sensible setting: a smaller function is not
+      cheaper for the same work, it just takes longer to do it.
+
+  FunctionTimeout:
+    Type: Number
+    Default: 900
+    MinValue: 30
+    MaxValue: 900
+    Description: >
+      Lambda's own ceiling, which is longer than the client's
+      the client's per-batch timeout budget. Deliberately: a request the
+      client has already given up on should finish rather than be killed
+      mid-batch, so the next identical batch is answered by a warm container.
+
+  ReservedConcurrency:
+    Type: Number
+    Default: 4
+    MinValue: 1
+    MaxValue: 100
+    Description: >
+      The spend cap, and the reason it is here rather than left unset. Each
+      concurrent execution is 10 GB of memory being billed; unreserved, a
+      client looping on a bug — or a token that leaked — bills the account at
+      whatever rate it can generate requests. Four is enough for one user's
+      export and small enough to notice.
+
+  LogRetentionDays:
+    Type: Number
+    Default: 30
+    Description: >
+      Logs here record job sizes and token subjects, not picture content.
+      Kept long enough to investigate a bad week, not indefinitely.
+
+Resources:
+  InpaintFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      # Named so the deploy role's IAM policy can be scoped to this ARN prefix
+      # rather than to every role in the account — see
+      # serverless/verify-license/CI_DEPLOY_SETUP.md.
+      RoleName: !Sub '${AWS::StackName}-fn'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
+      # Writing logs is the whole of it. This function reads no table, no
+      # bucket and no secret store: everything it needs arrives in the request
+      # or in its own environment.
+      #
+      # That emptiness is load-bearing, not tidiness. This stack shares an AWS
+      # account with the licence service and the DynamoDB tables holding every
+      # licence, order and trial record, so there is no account boundary here —
+      # this role is what stands between a public inference endpoint and those
+      # tables. Adding a permission to it is a decision about them.
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+
+  InpaintLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${AWS::StackName}-inpaint'
+      RetentionInDays: !Ref LogRetentionDays
+
+  InpaintFunction:
+    Type: AWS::Serverless::Function
+    # The log group above owns the name, so the function has to take it rather
+    # than be given a generated one — otherwise CloudFormation creates the
+    # group and Lambda creates a second, unretained one.
+    DependsOn: InpaintLogGroup
+    Metadata:
+      DockerTag: latest
+      DockerContext: ./
+      Dockerfile: Dockerfile
+    Properties:
+      FunctionName: !Sub '${AWS::StackName}-inpaint'
+      PackageType: Image
+      Role: !GetAtt InpaintFunctionRole.Arn
+      MemorySize: !Ref MemorySize
+      Timeout: !Ref FunctionTimeout
+      ReservedConcurrentExecutions: !Ref ReservedConcurrency
+      Architectures: [x86_64]
+      Environment:
+        Variables:
+          FILL_SIGNING_SECRET: !Ref FillSigningSecret
+          FILL_APP_ID: !Ref FillAppId
+          MAX_FRAMES_PER_JOB: !Ref MaxFramesPerJob
+      FunctionUrlConfig:
+        # NONE, and the bearer token is what actually guards this. IAM auth
+        # would mean the desktop app holding AWS credentials to sign SigV4
+        # with — credentials on tens of thousands of machines, which is a far
+        # worse thing to have than a short-lived token minted per export by
+        # the service that just decided the export was allowed. See auth.py.
+        AuthType: NONE
+        InvokeMode: BUFFERED
+
+Outputs:
+  FunctionUrl:
+    Description: The base URL. The licence service stores this.
+    Value: !GetAtt InpaintFunctionUrl.FunctionUrl
+
+  InpaintUrl:
+    Description: >
+      What `fill/quota` should hand the app as `endpoint.url` — the base URL
+      with the route on it, because the client posts to exactly what it is
+      given.
+    Value: !Sub
+      - '${Base}inpaint'
+      - Base: !GetAtt InpaintFunctionUrl.FunctionUrl
+
+  FunctionArn:
+    Value: !GetAtt InpaintFunction.Arn

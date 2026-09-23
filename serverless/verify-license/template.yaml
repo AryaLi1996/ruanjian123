@@ -137,6 +137,71 @@ Parameters:
     Default: ''
     Description: Overrides the auto-derived <FunctionUrl>/douyin-webhook callback URL.
 
+  # ── Cloud fill metering ─────────────────────────────────────────────────────
+  # The desktop app can hand a watermark's opaque pixels to the inpainting
+  # service in serverless/cloud-inpaint, which costs GPU time. fill/quota and
+  # fill/consume in handler.py decide whether it may and count what it spent.
+  # Every number the app shows comes from here, which is what makes changing
+  # the allowance or the price a parameter change rather than a release
+  # everybody has to install.
+  FillEndpointUrl:
+    Type: String
+    Default: ''
+    Description: >
+      The inpaint service's /inpaint URL, handed to the app with each
+      permission. scripts/deploy-license.sh reads it out of the
+      shuyin-cloud-inpaint stack's outputs, so it is not normally set by hand.
+      Empty switches the feature off for everyone on their next export — which
+      is what "not deployed yet" looks like, and is the default.
+
+  FillSigningSecret:
+    Type: String
+    NoEcho: true
+    Default: ''
+    Description: >
+      Signs the short-lived tokens the inpaint service checks. The same value
+      as that stack's FillSigningSecret parameter, and deliberately NOT
+      LicenseSigningSecret: rotating this one costs at most one export's
+      fallback to the local filler, because a fill token lives minutes, while
+      rotating the licence secret needs a build shipped first. Sharing them
+      would drag the cheap rotation onto the expensive one's schedule. Empty
+      switches the feature off, the same as an empty endpoint.
+
+  FillFreeUnits:
+    Type: Number
+    Default: 100
+    MinValue: 0
+    Description: Exports included per calendar month, per account.
+
+  FillOveragePrice:
+    Type: String
+    Default: ''
+    Description: >
+      What one export beyond the allowance costs, already formatted for the
+      user (e.g. "¥0.30"). A string because this service knows the currency and
+      the app does not. Reported even when overage is switched off, so the app
+      can say what a further export would cost.
+
+  FillOverageAllowed:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: >
+      Whether exports past the allowance are permitted. Off until something
+      actually bills for them: on, with no billing, "charged per export beyond
+      a hundred" means GPU time given away at whatever rate a client can ask
+      for it. This is the switch to flip when there is a charge to make.
+
+  FillTokenTtlSeconds:
+    Type: Number
+    Default: 900
+    MinValue: 60
+    Description: >
+      How long a fill token is honoured. The only thing limiting what a leaked
+      one is worth — the inpaint service has no revocation list and should not
+      grow one. It need not cover a whole export: one is fetched per export,
+      and expiry mid-export costs the remaining batches a local fallback.
+
 Globals:
   Function:
     Runtime: python3.11
@@ -175,6 +240,13 @@ Globals:
         DOUYIN_MERCHANT_ID: !Ref DouyinMerchantId
         DOUYIN_APP_SECRET: !Ref DouyinAppSecret
         DOUYIN_NOTIFY_URL: !Ref DouyinNotifyUrl
+        FILL_USAGE_TABLE: !Ref FillUsageTable
+        FILL_ENDPOINT_URL: !Ref FillEndpointUrl
+        FILL_SIGNING_SECRET: !Ref FillSigningSecret
+        FILL_FREE_UNITS: !Ref FillFreeUnits
+        FILL_OVERAGE_PRICE: !Ref FillOveragePrice
+        FILL_OVERAGE_ALLOWED: !Ref FillOverageAllowed
+        FILL_TOKEN_TTL_SECONDS: !Ref FillTokenTtlSeconds
 
 Resources:
   # ── Ticket 28: order / license store ────────────────────────────────────────
@@ -269,6 +341,33 @@ Resources:
         - AttributeName: demoKey
           KeyType: HASH
 
+  # ── Cloud fill usage, one row per (account, month) ──────────────────────────
+  # userKey is the userId when there is one and "<appId>#<deviceId>" when there
+  # is not, so an allowance belongs to whoever paid rather than to a machine —
+  # the same reasoning as DemosTable's key, and the reason "#" is excluded from
+  # _APP_ID_RE. The month is the sort key so "what has this account spent, and
+  # when" stays a single query.
+  #
+  # TTL on expiresAt, set a year out by _fill_add: without it this grows a row
+  # per account per month forever, and nothing reads a period that old.
+  FillUsageTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: userKey
+          AttributeType: S
+        - AttributeName: period
+          AttributeType: S
+      KeySchema:
+        - AttributeName: userKey
+          KeyType: HASH
+        - AttributeName: period
+          KeyType: RANGE
+      TimeToLiveSpecification:
+        AttributeName: expiresAt
+        Enabled: true
+
   LicenseVerifierRole:
     Type: AWS::IAM::Role
     Properties:
@@ -321,6 +420,11 @@ Resources:
                   - !Sub '${LicensesV2Table.Arn}/index/*'
                   - !GetAtt TrialsV2Table.Arn
                   - !GetAtt DemosTable.Arn
+                  # UpdateItem on this one is the ADD that counts an export;
+                  # see _fill_add. No Scan or DeleteItem: nothing here reads
+                  # the table whole, and a usage row is aged out by TTL rather
+                  # than removed by this function.
+                  - !GetAtt FillUsageTable.Arn
 
   LicenseVerifier:
     Type: AWS::Serverless::Function
@@ -362,6 +466,10 @@ Outputs:
     # !GetAtt LicenseVerifier.FunctionUrl fails stack updates with "Requested
     # attribute FunctionUrl does not exist in schema for AWS::Lambda::Function".
     Value: !GetAtt LicenseVerifierUrl.FunctionUrl
+  FillUsageTableName:
+    Description: Cloud fill usage, one row per account per month
+    Value: !Ref FillUsageTable
+
   OrdersTableName:
     Value: !Ref OrdersTable
   TrialsV2TableName:

@@ -1,0 +1,10 @@
+# The Dockerfile names the files it wants, so nothing here changes the image —
+# it keeps the build context small, which is what gets uploaded to the builder
+# on every deploy.
+__pycache__/
+*.pyc
+.aws-sam/
+test_*.py
+requirements-dev.txt
+*.md
+samconfig.toml
