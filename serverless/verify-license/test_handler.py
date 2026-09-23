@@ -9,11 +9,13 @@ still runs without it (see _ddb_table). Run with:
 
     cd serverless/verify-license && python3 -m unittest test_handler -v
 """
+import base64
 import json
 import os
 import sys
 import time
 import unittest
+import unittest.mock
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -664,3 +666,287 @@ class LicenseAppIdIsolationTests(AppIdTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ── Cloud fill metering (fill/quota, fill/consume) ───────────────────────────
+# What these are for: the routes decide whether an export may spend GPU time on
+# the inpaint service in serverless/cloud-inpaint, and count what it spent. Two
+# things about that are worth a test more than the happy path is — that the
+# count cannot be talked downwards or upwards by the client, and that the token
+# this function mints is one that service will actually honour. A disagreement
+# on the second is invisible here and looks, from the app, exactly like the
+# service being down.
+
+class FakeFillUsageTable:
+    """
+    In-memory stand-in for FillUsageTable, keyed (userKey, period).
+
+    `update_item` implements only the one expression _fill_add sends — ADD on a
+    counter, SET on the rest — because that is the only one this code produces,
+    and a fake that accepted more would be claiming coverage it does not have.
+    """
+
+    def __init__(self, items=None):
+        self.items = dict(items or {})
+
+    @staticmethod
+    def _key(d):
+        return (d["userKey"], d["period"])
+
+    def get_item(self, Key):
+        item = self.items.get(self._key(Key))
+        return {"Item": item} if item is not None else {}
+
+    def update_item(self, Key, UpdateExpression, ExpressionAttributeNames,
+                    ExpressionAttributeValues, ReturnValues=None):
+        key = self._key(Key)
+        item = self.items.setdefault(key, {"userKey": key[0], "period": key[1], "used": 0})
+        item["used"] = int(item.get("used", 0)) + int(ExpressionAttributeValues[":units"])
+        item["appId"] = ExpressionAttributeValues[":app"]
+        item["updatedAt"] = ExpressionAttributeValues[":now"]
+        item["expiresAt"] = ExpressionAttributeValues[":ttl"]
+        return {"Attributes": {"used": item["used"]}}
+
+
+class FillTestCase(unittest.TestCase):
+    """
+    A deployment with the feature switched on, an account holding a live
+    licence, and an empty usage table.
+    """
+
+    APP = "shuyin"
+    USER = "user-1"
+    DEVICE = "d" * 64
+
+    def setUp(self):
+        for name in ("FILL_ENDPOINT_URL", "FILL_SIGNING_SECRET", "FILL_FREE_UNITS",
+                     "FILL_OVERAGE_PRICE", "FILL_OVERAGE_ALLOWED",
+                     "FILL_TOKEN_TTL_SECONDS"):
+            original = getattr(h, name)
+            self.addCleanup(lambda n=name, v=original: setattr(h, n, v))
+        h.FILL_ENDPOINT_URL = "https://fill.example.com/inpaint"
+        h.FILL_SIGNING_SECRET = "s" * 40
+        h.FILL_FREE_UNITS = 100
+        h.FILL_OVERAGE_PRICE = "¥0.30"
+        h.FILL_OVERAGE_ALLOWED = False
+        h.FILL_TOKEN_TTL_SECONDS = 900
+
+        orig_table = h._fill_usage_table
+        self.addCleanup(lambda: setattr(h, "_fill_usage_table", orig_table))
+        self.table = FakeFillUsageTable()
+        h._fill_usage_table = lambda: self.table
+
+        orig_row = h._get_license_row
+        self.addCleanup(lambda: setattr(h, "_get_license_row", orig_row))
+        self.licensed(True)
+
+    def licensed(self, yes: bool, expires_in: int = 30 * DAY):
+        h._get_license_row = (
+            (lambda user_id, app_id: {"expiresAt": int(time.time()) + expires_in})
+            if yes else (lambda user_id, app_id: None))
+
+    def quota(self, **over):
+        body = {"appId": self.APP, "userId": self.USER, "deviceId": self.DEVICE}
+        body.update(over)
+        return json.loads(h._handle_fill_quota({"body": json.dumps(body)})["body"])
+
+    def consume(self, units=1, **over):
+        body = {"appId": self.APP, "userId": self.USER,
+                "deviceId": self.DEVICE, "units": units}
+        body.update(over)
+        return json.loads(h._handle_fill_consume({"body": json.dumps(body)})["body"])
+
+
+class FillQuotaTests(FillTestCase):
+    def test_a_licensed_account_may_use_the_service(self):
+        reply = self.quota()
+        self.assertTrue(reply["allowed"])
+        self.assertEqual(reply["remaining"], 100)
+        self.assertEqual(reply["endpoint"]["url"], "https://fill.example.com/inpaint")
+        self.assertIsNone(reply["reason"])
+
+    def test_an_account_without_a_licence_may_not(self):
+        # Their export still finishes — filled on their own machine, which is
+        # what the app does when this says no.
+        self.licensed(False)
+        reply = self.quota()
+        self.assertFalse(reply["allowed"])
+        self.assertEqual(reply["reason"], "noLicense")
+        self.assertIsNone(reply["endpoint"])
+
+    def test_an_expired_licence_is_not_a_licence(self):
+        self.licensed(True, expires_in=-DAY)
+        self.assertFalse(self.quota()["allowed"])
+
+    def test_a_device_with_no_user_may_not(self):
+        # An allowance belongs to whoever paid. A machine that has not
+        # identified itself has not paid.
+        reply = self.quota(userId="")
+        self.assertFalse(reply["allowed"])
+        self.assertEqual(reply["reason"], "noLicense")
+
+    def test_the_endpoint_never_travels_with_a_no(self):
+        # The token is the only thing guarding the GPU, so it must not be
+        # issued by a reply that just refused.
+        self.licensed(False)
+        self.assertIsNone(self.quota()["endpoint"])
+
+    def test_a_deployment_with_no_endpoint_says_so_rather_than_guessing(self):
+        h.FILL_ENDPOINT_URL = ""
+        reply = self.quota()
+        self.assertFalse(reply["allowed"])
+        self.assertEqual(reply["reason"], "unavailable")
+
+    def test_a_deployment_with_no_signing_secret_refuses_too(self):
+        # Otherwise it would mint tokens signed with an empty string, which the
+        # inpaint service refuses anyway — but from the app that reads as the
+        # service being broken rather than switched off.
+        h.FILL_SIGNING_SECRET = ""
+        self.assertFalse(self.quota()["allowed"])
+
+    def test_the_numbers_are_this_service_s(self):
+        h.FILL_FREE_UNITS = 250
+        h.FILL_OVERAGE_PRICE = "$0.05"
+        reply = self.quota()
+        self.assertEqual(reply["limit"], 250)
+        self.assertEqual(reply["overagePrice"], "$0.05")
+        self.assertTrue(reply["periodEnds"].endswith("-01T00:00:00Z"))
+
+    def test_asking_does_not_spend_anything(self):
+        self.quota()
+        self.quota()
+        self.assertEqual(self.quota()["used"], 0)
+
+    def test_an_unconfigured_table_is_a_501_not_a_crash(self):
+        h._fill_usage_table = lambda: None
+        self.assertEqual(h._handle_fill_quota({"body": "{}"})["statusCode"], 501)
+
+    def test_a_request_naming_nobody_is_refused(self):
+        reply = h._handle_fill_quota({"body": json.dumps({"appId": self.APP})})
+        self.assertEqual(reply["statusCode"], 400)
+
+    def test_a_malformed_device_id_is_refused(self):
+        # It ends up in a DynamoDB partition key by way of _fill_user_key.
+        reply = h._handle_fill_quota({"body": json.dumps(
+            {"appId": self.APP, "deviceId": "../../etc/passwd"})})
+        self.assertEqual(reply["statusCode"], 400)
+
+    def test_a_body_that_is_not_json_is_refused_rather_than_raising(self):
+        reply = h._handle_fill_quota({"body": "not json at all"})
+        self.assertEqual(reply["statusCode"], 400)
+
+
+class FillConsumeTests(FillTestCase):
+    def test_counting_is_what_moves_the_number(self):
+        self.assertEqual(self.consume(1)["used"], 1)
+        self.assertEqual(self.consume(1)["used"], 2)
+        self.assertEqual(self.quota()["remaining"], 98)
+
+    def test_an_export_that_used_nothing_is_not_one_of_the_hundred(self):
+        # What the app sends when every batch fell back to the local filler.
+        self.assertEqual(self.consume(0)["used"], 0)
+
+    def test_a_negative_count_cannot_hand_back_spent_allowance(self):
+        self.consume(5)
+        self.assertEqual(self.consume(-4)["used"], 5)
+
+    def test_an_enormous_count_cannot_burn_a_year_in_one_call(self):
+        reply = self.consume(10 ** 9)
+        self.assertEqual(reply["used"], h.FILL_MAX_UNITS_PER_CALL)
+
+    def test_a_count_that_is_not_a_number_counts_as_nothing(self):
+        self.assertEqual(self.consume("lots")["used"], 0)
+
+    def test_the_allowance_runs_out(self):
+        self.consume(h.FILL_MAX_UNITS_PER_CALL)
+        reply = self.quota()
+        self.assertEqual(reply["remaining"], 0)
+        self.assertFalse(reply["allowed"])
+        self.assertEqual(reply["reason"], "overLimit")
+        # And the price is still reported, so the app can say what a further
+        # export would cost even though it cannot make one.
+        self.assertEqual(reply["overagePrice"], "¥0.30")
+
+    def test_overage_is_a_switch_and_not_a_release(self):
+        self.consume(h.FILL_MAX_UNITS_PER_CALL)
+        h.FILL_OVERAGE_ALLOWED = True
+        reply = self.quota()
+        self.assertTrue(reply["allowed"])
+        self.assertIsNone(reply["reason"])
+
+    def test_the_count_is_kept_per_account_not_per_machine(self):
+        self.consume(3)
+        self.assertEqual(self.quota(deviceId="e" * 64)["used"], 3)
+
+    def test_an_account_with_no_user_is_counted_against_its_device(self):
+        self.licensed(False)
+        self.consume(2, userId="")
+        self.assertEqual(self.quota(userId="")["used"], 2)
+        # And a different machine's count is its own.
+        self.assertEqual(self.quota(userId="", deviceId="f" * 64)["used"], 0)
+
+    def test_the_row_ages_out(self):
+        self.consume(1)
+        row = next(iter(self.table.items.values()))
+        self.assertGreater(row["expiresAt"], int(time.time()) + 300 * DAY)
+
+
+class FillTokenTests(FillTestCase):
+    def test_the_token_says_who_and_when(self):
+        now = int(time.time())
+        token = h._mint_fill_token(self.APP, self.USER, now)
+        payload = json.loads(base64.urlsafe_b64decode(
+            token.split(".")[0] + "=" * (-len(token.split(".")[0]) % 4)))
+        self.assertEqual(payload["app"], self.APP)
+        self.assertEqual(payload["sub"], self.USER)
+        self.assertEqual(payload["exp"], now + h.FILL_TOKEN_TTL_SECONDS)
+
+    def test_fill_token_matches_the_inpaint_service(self):
+        """
+        The two halves of the token agree.
+
+        This is the test worth having. `_mint_fill_token` here and `verify` in
+        serverless/cloud-inpaint/auth.py are written from the same description
+        and checked by nobody — and a disagreement between them is invisible on
+        both sides: the service simply returns 401, the app falls back to the
+        local filler, and everything looks like the service being down. So the
+        real verifier is imported and run against a real token.
+        """
+        sys.path.insert(0, os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "cloud-inpaint"))
+        import auth  # noqa: PLC0415
+
+        now = int(time.time())
+        token = h._mint_fill_token(self.APP, self.USER, now)
+        with unittest.mock.patch.dict(
+                os.environ,
+                {"FILL_SIGNING_SECRET": h.FILL_SIGNING_SECRET, "FILL_APP_ID": self.APP}):
+            payload = auth.verify(token, now=now)
+        self.assertEqual(payload["sub"], self.USER)
+
+    def test_a_token_this_service_did_not_sign_is_not_honoured_there(self):
+        # The other direction: proves the check above is checking something.
+        sys.path.insert(0, os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "cloud-inpaint"))
+        import auth  # noqa: PLC0415
+
+        now = int(time.time())
+        token = h._mint_fill_token(self.APP, self.USER, now)
+        with unittest.mock.patch.dict(
+                os.environ, {"FILL_SIGNING_SECRET": "a different secret entirely"}):
+            with self.assertRaises(auth.Unauthorised):
+                auth.verify(token, now=now)
+
+
+class FillPeriodTests(unittest.TestCase):
+    def test_a_period_is_a_calendar_month_in_utc(self):
+        # 2026-09-23T12:00:00Z
+        self.assertEqual(h._fill_period(1790164800), "2026-09")
+
+    def test_december_rolls_into_the_next_year(self):
+        # 2026-12-31T23:00:00Z — the case an off-by-one here gets wrong, and
+        # gets wrong once a year.
+        self.assertEqual(h._fill_period_ends(1798758000), "2027-01-01T00:00:00Z")
+
+    def test_the_period_ends_at_the_start_of_the_next_month(self):
+        self.assertEqual(h._fill_period_ends(1790164800), "2026-10-01T00:00:00Z")

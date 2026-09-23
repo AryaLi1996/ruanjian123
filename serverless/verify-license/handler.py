@@ -1641,6 +1641,289 @@ def _raw_body(event: dict) -> bytes:
     return body.encode("utf-8") if isinstance(body, str) else body
 
 
+# ── Cloud fill metering (fill/quota, fill/consume) ───────────────────────────
+# The desktop app can hand the opaque pixels of a watermark to the inpainting
+# service in serverless/cloud-inpaint, which costs GPU time. These two routes
+# are what decides whether it may, and what it has spent.
+#
+# They live here rather than beside that service for the same reason the trial
+# and demo routes do: "who is entitled to what" is a question about an account,
+# and the accounts are here. That service holds no account state at all — it
+# checks a token this function minted and nothing else.
+#
+# Every number the app shows comes from here. The allowance, the price beyond
+# it, what counts as one unit, when the period rolls over, and the endpoint
+# itself. Going from a hundred a month to two hundred, changing the price, or
+# moving the service to a GPU is a change to this function's environment and
+# not a release anybody has to install.
+
+FILL_ENDPOINT_URL   = os.environ.get("FILL_ENDPOINT_URL", "")
+FILL_SIGNING_SECRET = os.environ.get("FILL_SIGNING_SECRET", "")
+FILL_FREE_UNITS     = int(os.environ.get("FILL_FREE_UNITS", "100"))
+FILL_OVERAGE_PRICE  = os.environ.get("FILL_OVERAGE_PRICE", "")
+# Whether going past the free allowance is permitted. Off until there is
+# something that actually bills for it: with it on and no billing, "charged per
+# unit beyond a hundred" means GPU time given away, and the amount is bounded
+# only by how fast a client can ask. The price is reported either way, so the
+# app can tell someone what a further export would cost before anything exists
+# to charge them with.
+FILL_OVERAGE_ALLOWED = os.environ.get("FILL_OVERAGE_ALLOWED", "false").lower() == "true"
+# How long a fill token is good for. Minutes, not months: this is the only
+# thing limiting what a leaked one is worth, because the inpaint service has no
+# revocation list and should not grow one. It does not have to cover a whole
+# export — one is fetched per export, and a token that expires mid-export costs
+# the remaining batches a fallback to the local filler, which is a slower
+# export and not a failed one.
+FILL_TOKEN_TTL_SECONDS = int(os.environ.get("FILL_TOKEN_TTL_SECONDS", "900"))
+
+# One unit is one export that used the service. Kept as a name rather than a
+# bare 1 because "per export" is a pricing decision the app does not know it is
+# making — it sends how many units it used, and this decides what a unit is.
+FILL_MAX_UNITS_PER_CALL = 100
+
+
+def _fill_usage_table():  # noqa: ANN201
+    return _ddb_table(os.environ.get("FILL_USAGE_TABLE", ""))
+
+
+def _fill_user_key(app_id: str, user_id: str, device_id: str) -> str:
+    """
+    Whose allowance this is.
+
+    The userId when there is one, so an allowance belongs to whoever paid
+    rather than to a machine they happened to export from. Falling back to
+    "<appId>#<deviceId>" — the same shape _demo_key() uses, and excluded from
+    _APP_ID_RE for the same reason — keeps a row for the anonymous case rather
+    than silently pooling every unidentified device into one bucket.
+    """
+    return user_id or f"{app_id}#{device_id}"
+
+
+def _fill_period(now: int) -> str:
+    """The billing period a moment falls in, as YYYY-MM in UTC."""
+    return time.strftime("%Y-%m", time.gmtime(now))
+
+
+def _fill_period_ends(now: int) -> str:
+    """When the current period rolls over, ISO 8601 Z, for the app to show."""
+    year, month = time.gmtime(now).tm_year, time.gmtime(now).tm_mon
+    year, month = (year + 1, 1) if month == 12 else (year, month + 1)
+    return f"{year:04d}-{month:02d}-01T00:00:00Z"
+
+
+def _fill_b64url(raw: bytes) -> str:
+    """
+    Base64url without padding, over bytes.
+
+    Not `_b64url` above: that one takes a str and is what licence tokens are
+    built from. Defining a second function of that name here shadowed it — this
+    file is one module — and broke every licence token in the suite. Hence the
+    prefix, and hence this note.
+    """
+    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+def _mint_fill_token(app_id: str, subject: str, now: int) -> str:
+    """
+    A token the inpaint service will honour, good for FILL_TOKEN_TTL_SECONDS.
+
+    The format is that service's `auth.sign` and this is the other half of it:
+    base64url of a compact JSON payload, a dot, base64url of the HMAC-SHA256 of
+    *that encoded payload* under FILL_SIGNING_SECRET. Signed over the encoded
+    form rather than the dict so the two ends never have to agree on how a dict
+    serialises. test_fill_token_matches_the_inpaint_service checks they agree.
+    """
+    payload = {"app": app_id, "sub": subject, "exp": now + FILL_TOKEN_TTL_SECONDS}
+    body = _fill_b64url(json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8"))
+    mac = hmac.new(FILL_SIGNING_SECRET.encode("utf-8"), body.encode("ascii"), hashlib.sha256)
+    return f"{body}.{_fill_b64url(mac.digest())}"
+
+
+def _fill_used(user_key: str, period: str) -> int:
+    table = _fill_usage_table()
+    if table is None:
+        return 0
+    row = table.get_item(Key={"userKey": user_key, "period": period}).get("Item")
+    return int(_from_decimal(row.get("used", 0))) if row else 0
+
+
+def _fill_add(user_key: str, period: str, app_id: str, units: int, now: int) -> int:
+    """
+    Add to the count and return the new total.
+
+    ADD rather than read-then-write: two exports finishing at the same moment
+    must not both read 99 and both write 100. `expiresAt` is a TTL a year out,
+    so old periods age out on their own rather than accumulating a row per user
+    per month forever.
+    """
+    table = _fill_usage_table()
+    if table is None:
+        return 0
+    updated = table.update_item(
+        Key={"userKey": user_key, "period": period},
+        UpdateExpression="ADD #used :units SET appId = :app, updatedAt = :now, expiresAt = :ttl",
+        ExpressionAttributeNames={"#used": "used"},
+        ExpressionAttributeValues={
+            ":units": units, ":app": app_id, ":now": now, ":ttl": now + 365 * 86400,
+        },
+        ReturnValues="UPDATED_NEW",
+    )
+    return int(_from_decimal(updated.get("Attributes", {}).get("used", units)))
+
+
+def _fill_reply(app_id: str, user_key: str, subject: str, used: int,
+                entitled: bool, now: int) -> dict:
+    """
+    The one shape both routes answer with.
+
+    `readQuota` in the app's electron/cloud-quota.js reads this field by field
+    and treats anything missing as "not allowed", so a field added here cannot
+    break an installed client and a malformed answer cannot talk one into
+    uploading.
+    """
+    remaining = max(0, FILL_FREE_UNITS - used)
+    within = remaining > 0
+    allowed = bool(entitled and FILL_ENDPOINT_URL and FILL_SIGNING_SECRET
+                   and (within or FILL_OVERAGE_ALLOWED))
+
+    if not entitled:
+        reason = "noLicense"
+    elif not (FILL_ENDPOINT_URL and FILL_SIGNING_SECRET):
+        reason = "unavailable"
+    elif not within and not FILL_OVERAGE_ALLOWED:
+        reason = "overLimit"
+    else:
+        reason = None
+
+    reply = {
+        "allowed": allowed,
+        "appId": app_id,
+        "limit": FILL_FREE_UNITS,
+        "used": used,
+        "remaining": remaining,
+        "periodEnds": _fill_period_ends(now),
+        # Already formatted, because this service knows the user's currency and
+        # the app does not. Empty string reads as "nothing to say about price".
+        "overagePrice": FILL_OVERAGE_PRICE or None,
+        "reason": reason,
+    }
+    # The endpoint travels with the answer, and only with an answer that is
+    # yes. The app never holds a URL for the fill service: it is given one per
+    # export by the thing that just decided the export was allowed, which is
+    # what makes moving that service — or switching it off for everyone — need
+    # nothing from any installed client.
+    reply["endpoint"] = ({"url": FILL_ENDPOINT_URL,
+                          "token": _mint_fill_token(app_id, subject, now)}
+                         if allowed else None)
+    return reply
+
+
+def _fill_request(event: dict) -> tuple[str, str, str, str] | dict:
+    """The (app_id, user_id, device_id, user_key) of a fill request, or a 400."""
+    raw_body = event.get("body") or "{}"
+    try:
+        body = json.loads(raw_body) if isinstance(raw_body, str) else raw_body
+    except ValueError:
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+
+    app_id = _app_id_or_error(body)
+    if isinstance(app_id, dict):
+        return app_id
+
+    user_id   = str(body.get("userId", "") or "").strip()
+    device_id = str(body.get("deviceId", "") or "").strip()
+    # A device id ends up in a DynamoDB partition key by way of _fill_user_key,
+    # so it gets the same check every other route gives it. An absent one is
+    # fine when there is a userId — that is the signed-in case.
+    if device_id and not _valid_device_id_format(device_id):
+        return {"statusCode": 400, "headers": _cors_headers(),
+                "body": json.dumps({"error": "invalid deviceId"})}
+    if not user_id and not device_id:
+        return {"statusCode": 400, "headers": _cors_headers(),
+                "body": json.dumps({"error": "userId or deviceId required"})}
+
+    return app_id, user_id, device_id, _fill_user_key(app_id, user_id, device_id)
+
+
+def _fill_entitled(user_id: str, app_id: str, now: int) -> bool:
+    """
+    Whether this account may use the service at all.
+
+    A live licence, and nothing else: the cloud filler costs real money per
+    export, which is not something to hand to a trial or to an anonymous
+    device. Someone without one still gets every export — filled on their own
+    machine, which is what the app does when this says no.
+    """
+    if not user_id:
+        return False
+    row = _get_license_row(user_id, app_id)
+    return bool(row and int(_from_decimal(row.get("expiresAt", 0))) > now)
+
+
+def _handle_fill_quota(event: dict) -> dict:
+    if _fill_usage_table() is None:
+        return _not_configured("FILL_USAGE_TABLE")
+    parsed = _fill_request(event)
+    if isinstance(parsed, dict):
+        return parsed
+    app_id, user_id, _device_id, user_key = parsed
+
+    now = int(time.time())
+    used = _fill_used(user_key, _fill_period(now))
+    return {"statusCode": 200, "headers": _cors_headers(),
+            "body": json.dumps(_fill_reply(
+                app_id, user_key, user_key,
+                used, _fill_entitled(user_id, app_id, now), now))}
+
+
+def _handle_fill_consume(event: dict) -> dict:
+    """
+    Count an export that used the service.
+
+    Told after the fact rather than reserved before it, so what someone is
+    charged for is what they actually received: an export that fell back to the
+    local filler for every frame calls this with nothing and is not one of
+    their hundred. The alternative — reserving up front — charges for work a
+    timeout, a crash or a cancelled export meant they never got.
+
+    The count is kept here rather than in the app because a local count of
+    something that costs money is a count that can be edited with a text
+    editor.
+    """
+    if _fill_usage_table() is None:
+        return _not_configured("FILL_USAGE_TABLE")
+    parsed = _fill_request(event)
+    if isinstance(parsed, dict):
+        return parsed
+    app_id, user_id, _device_id, user_key = parsed
+
+    raw_body = event.get("body") or "{}"
+    try:
+        body = json.loads(raw_body) if isinstance(raw_body, str) else raw_body
+    except ValueError:
+        body = {}
+    try:
+        units = int((body or {}).get("units", 1))
+    except (TypeError, ValueError):
+        units = 0
+    # Capped and floored rather than trusted. This number arrives over the same
+    # untrusted POST as everything else, and it is the one that decides what
+    # somebody has spent: a negative would hand back allowance that was used,
+    # and an enormous one would burn a year of it in a call.
+    units = max(0, min(units, FILL_MAX_UNITS_PER_CALL))
+
+    now = int(time.time())
+    period = _fill_period(now)
+    used = (_fill_add(user_key, period, app_id, units, now) if units
+            else _fill_used(user_key, period))
+    return {"statusCode": 200, "headers": _cors_headers(),
+            "body": json.dumps(_fill_reply(
+                app_id, user_key, user_key,
+                used, _fill_entitled(user_id, app_id, now), now))}
+
+
 def _request_path(event: dict) -> str:
     if "rawPath" in event:                                    # Function URL, payload format 2.0
         return event["rawPath"]
@@ -1679,6 +1962,10 @@ def handler(event: dict, context: object) -> dict:
         return _handle_demo_status(event)
     if path.endswith("/plans"):
         return _handle_get_plans(event)
+    if path.endswith("/fill/quota"):
+        return _handle_fill_quota(event)
+    if path.endswith("/fill/consume"):
+        return _handle_fill_consume(event)
 
     try:
         raw_body    = event.get("body") or "{}"

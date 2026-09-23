@@ -1,0 +1,5 @@
+# What the tests need on top of requirements.txt, and deliberately not in it:
+# httpx is pulled in only by fastapi's TestClient, and a dependency that exists
+# to be tested with has no business inside the deployed image.
+-r requirements.txt
+httpx==0.28.1

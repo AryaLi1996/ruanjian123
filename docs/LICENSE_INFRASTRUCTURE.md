@@ -145,7 +145,20 @@ Stack 名默认 `ruanjian-license`，区域 `us-east-1`，AWS 账号 `6416289811
 | GET | `/trial/status` | 查询设备试用状态 | `TRIALS_TABLE` |
 | POST | `/demo/activate` | 幂等签发本应用+本设备的演示许可证，返回签名 token | `DEMOS_TABLE` |
 | GET/POST | `/demo/status` | 查询演示许可证状态（不返回 token） | `DEMOS_TABLE` |
+| POST | `/fill/quota` | 本次导出能否使用云端修补服务；可以则附带端点与短时 token | `FILL_USAGE_TABLE` |
+| POST | `/fill/consume` | 记录一次已经用掉的导出 | `FILL_USAGE_TABLE` |
 | OPTIONS | 任意 | CORS 预检，返回 204 | — |
+
+`/fill/*` 两条路由服务的是 `serverless/cloud-inpaint` 那个推理端点。它们放在
+这里而不是放在那个服务旁边，理由和试用、演示两组路由一样：**"谁有资格用什么"
+是关于账号的问题，而账号在这里**。那个服务自己不持有任何账号状态，只验证本
+函数签发的短时 token（`_mint_fill_token` ↔ `cloud-inpaint/auth.py` 的
+`verify`，两边由 `test_fill_token_matches_the_inpaint_service` 交叉验证）。
+
+用量按 (账号, 自然月) 计一行；额度、超出后的单价、一个"单位"是什么、计费周期
+何时翻页、以及端点本身，全部来自本函数的环境变量。把每月 100 条改成 200 条、
+调价、或者把服务搬到 GPU 上，都是改这里的参数，而不是发一个所有人都得装的新
+版本。计数是**事后**上报的：整段都回落到本地修补的那次导出不算在 100 条里。
 
 所有响应都带统一的 CORS 头
 （`Allow-Origin: *`，`Allow-Headers: Content-Type, Stripe-Signature`）。

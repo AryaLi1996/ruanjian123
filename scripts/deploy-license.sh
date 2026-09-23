@@ -81,10 +81,43 @@ overrides=(
   "MockMode=${MOCK_MODE:-false}"
   "ExpiryDays=${EXPIRY_DAYS:-30}"
 )
+
+# ── Cloud fill: where the inpaint service is ────────────────────────────────
+# fill/quota hands the app an endpoint per export, so this function has to know
+# one. Rather than have somebody copy it out of a deploy log, look it up from
+# the stack that produced it — scripts/deploy-inpaint.sh's InpaintUrl output.
+#
+# Omitted, not blanked, when the lookup finds nothing. An omitted parameter
+# keeps whatever the deployed stack already has; passing an empty string would
+# switch the feature off for everyone the first time this ran while that stack
+# happened to be unreachable. "Not deployed yet" and "could not ask right now"
+# must not look the same from here.
+INPAINT_STACK="${INPAINT_STACK:-shuyin-cloud-inpaint}"
+if [[ -z "${FILL_ENDPOINT_URL:-}" ]]; then
+  FILL_ENDPOINT_URL="$(aws cloudformation describe-stacks \
+    --stack-name "$INPAINT_STACK" \
+    --region "$AWS_REGION" \
+    --query "Stacks[0].Outputs[?OutputKey=='InpaintUrl'].OutputValue" \
+    --output text 2>/dev/null || true)"
+  # describe-stacks prints the literal "None" for a stack with no such output.
+  [[ "$FILL_ENDPOINT_URL" == "None" ]] && FILL_ENDPOINT_URL=""
+fi
+if [[ -n "$FILL_ENDPOINT_URL" ]]; then
+  echo "Cloud fill endpoint: $FILL_ENDPOINT_URL (from $INPAINT_STACK)"
+  overrides+=("FillEndpointUrl=$FILL_ENDPOINT_URL")
+else
+  echo "No $INPAINT_STACK endpoint found; leaving FillEndpointUrl as deployed."
+fi
 [[ -n "${STRIPE_API_KEY:-}" ]]        && overrides+=("StripeApiKey=$STRIPE_API_KEY")
 [[ -n "${STRIPE_WEBHOOK_SECRET:-}" ]] && overrides+=("StripeWebhookSecret=$STRIPE_WEBHOOK_SECRET")
 [[ -n "${LEMON_API_KEY:-}" ]]         && overrides+=("LemonApiKey=$LEMON_API_KEY")
 [[ -n "${SES_SENDER_EMAIL:-}" ]]      && overrides+=("SesSenderEmail=$SES_SENDER_EMAIL")
+# The same string the inpaint stack verifies fill tokens with, and not the
+# licence signing secret — see that parameter's description in template.yaml.
+[[ -n "${FILL_SIGNING_SECRET:-}" ]]   && overrides+=("FillSigningSecret=$FILL_SIGNING_SECRET")
+[[ -n "${FILL_FREE_UNITS:-}" ]]       && overrides+=("FillFreeUnits=$FILL_FREE_UNITS")
+[[ -n "${FILL_OVERAGE_PRICE:-}" ]]    && overrides+=("FillOveragePrice=$FILL_OVERAGE_PRICE")
+[[ -n "${FILL_OVERAGE_ALLOWED:-}" ]]  && overrides+=("FillOverageAllowed=$FILL_OVERAGE_ALLOWED")
 
 # --no-execute-changeset makes `sam deploy` stop after creating and printing
 # the change-set; --no-confirm-changeset skips the interactive prompt and
