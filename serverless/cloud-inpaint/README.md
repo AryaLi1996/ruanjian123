@@ -17,10 +17,24 @@ still legible: measured against the mark's own shape, 0.081 where the untouched
 input reads 0.866 and a clean region reads 0.
 
 A learned filler takes that to -0.001 +- 0.071 — indistinguishable from no mark
-at all — without being any less faithful to the true picture (6.65 levels of
-error against known frames, against 6.79 for the local filler). It costs about
-a second a frame on four CPU cores, which is an hour for a two-minute clip, so
-it does not belong on the user's machine.
+at all. It costs about a second a frame on four CPU cores, which is an hour for
+a two-minute clip, so it does not belong on the user's machine.
+
+**On faithfulness, read the next section before trusting any number here.**
+This file used to claim 6.65 levels of error against known frames, against 6.79
+for the local filler. That figure could not be reproduced the first time the
+image was actually built and run: with the code as it stood the service
+measured **90.07 +- 44.96** levels against **8.12 +- 4.67** for the local
+filler — an order of magnitude *worse* than the thing it exists to replace. The
+cause was in `inpaint.py`, it is fixed, and at 1:1 the service now measures
+**6.11 +- 3.08**. The legibility figure above is left as it was found and has
+not been re-measured here; the fidelity figures are ones this repository can
+reproduce.
+
+The lesson is worth keeping: legibility — how much of the mark's shape is left
+— goes *down* when a filler invents smooth nonsense, so it cannot on its own
+tell a good fill from a confident wrong one. Error against a known frame can,
+and is what the tests now pin.
 
 ## What crosses the network
 
@@ -36,6 +50,9 @@ picture, and cannot reconstruct it. The mask is one image for the whole job.
     pip install -r requirements-dev.txt
     FILL_SIGNING_SECRET=$(python3 -c 'import secrets; print(secrets.token_urlsafe(48))') \
     LAMA_ONNX=/path/to/lama.onnx python -m uvicorn app:api --port 8000
+
+The tests and a local run want Python 3.12 or newer, which is what the
+deployed image runs — see the Dockerfile for why 3.11 is not an option.
 
 The model is not vendored here: it is a 208 MB file, and where it lives is a
 deployment decision. `Carve/LaMa-ONNX` on Hugging Face is the one these numbers
@@ -72,6 +89,25 @@ client's answer to an unreachable service is to fill locally and say so, so the
 cheap option's failure mode is a slower, slightly more legible export rather
 than a broken one. The next section is the cost of that choice, and how to
 reverse it.
+
+## How the patch is handed to the model, and why it is not scaled up
+
+`_to_model_frame` pads a patch out to the 512-square the exported graph insists
+on, and never scales it up. That is the fix described above, and it is the one
+thing in this service worth being careful about, so the numbers are here:
+
+    1:1 (what it does)      6.11 +- 3.08 levels of error against the truth
+    2x                    126.49 +- 63.77
+    3x                     88.89 +- 49.07
+    scaled to fill 512     90.07 +- 44.96
+    the local filler        8.12 +- 4.67
+
+Twenty-four regions of three frames of the sample clip, a watermark-shaped
+stroke mask, error measured only inside the mask. Scaling down is still done
+when a patch is larger than the graph's input — it has nowhere else to go.
+
+`ModelFrameTest` in `test_app.py` pins this without needing the model, which is
+what makes it a test the pre-deploy gate can run.
 
 ## How long a batch takes
 
