@@ -204,6 +204,15 @@ jobs:
       # suite covers that meeting itself (it imports the real verifier — auth.py
       # is stdlib-only, so nothing has to be installed for it), which is why
       # this step is about the service's own routes and not about the handshake.
+      # 3.12, matching the image — see the note in the service's Dockerfile.
+      # Testing the service on a Python its own base image cannot run would be
+      # a gate that passes for the wrong reason.
+      - name: Set up Python 3.12 for the inpaint service
+        if: needs.changes.outputs.inpaint == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
       - name: Install the inpaint service's dependencies
         if: needs.changes.outputs.inpaint == 'true'
         working-directory: serverless/cloud-inpaint
