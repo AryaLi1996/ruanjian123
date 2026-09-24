@@ -474,6 +474,40 @@ aws ecr put-lifecycle-policy --repository-name shuyin-cloud-inpaint --region us-
     "action":{"type":"expire"}}]}'
 ```
 
+### 2e. The Lambda memory quota, which a new account does not have
+
+The inpaint function asks for **10240 MB**. A new AWS account is not allowed
+to give it that, and the deploy gets all the way through `sam build`, the ECR
+push and most of the stack before CloudFormation refuses the function itself
+and rolls the whole stack back:
+
+```
+Resource handler returned message: "'MemorySize' value failed to satisfy
+constraint: Member must have value less than or equal to 3008
+(Service: Lambda, Status Code: 400)"
+```
+
+Nothing is misconfigured. AWS puts new accounts on an exploration quota
+profile with reduced concurrency and memory, and
+[says so in the Lambda quotas page](https://docs.aws.amazon.com/lambda/latest/dg/gettingstarted-limits.html):
+*"New AWS accounts have reduced concurrency and memory quotas for Lambda
+Functions and Lambda MicroVMs. AWS raises these quotas automatically based on
+your usage."* Ask for it before the first deploy: Service Quotas console →
+AWS Lambda → the memory entry → request 10240. If the entry is not adjustable
+there, open a support case (Service limit increase → Lambda).
+
+**Do not simply lower `MemorySize` to 3008 to get past this.** Lambda gives
+one vCPU at 1769 MB and scales from there, so 3008 MB is about 1.7 vCPU
+against 10240 MB's 5.8 — roughly a third of the compute, on work that is
+entirely CPU-bound. The client allows about 2 seconds a frame and sends 240
+frames a batch; a third of the compute puts a full batch past Lambda's
+**900-second hard timeout**, which is not adjustable at any price. The
+function would not be slow, it would be killed mid-batch, every batch.
+
+If the quota cannot be raised, the honest fallback is a smaller batch on both
+sides — `MaxFramesPerJob` here and `cloud_fill.FRAMES_PER_REQUEST` in the app,
+lowered together, with the per-frame cost measured rather than assumed.
+
 ## 3. GitHub Environments and their secrets
 
 Create both environments first — Settings → Environments → New environment:
@@ -553,19 +587,23 @@ interpolates to an empty string, so `configure-aws-credentials` drops
 `role-to-assume` from its inputs and falls back to the default provider
 chain.)
 
-1. **Create the plan role** (§2a trust policy with `:environment:license-plan`,
+1. **Create the ECR repository** (§2d) and **request the Lambda memory
+   quota** (§2e). Both are prerequisites for the inpaint stack and neither is
+   something the pipeline can do for itself; the quota request is the one with
+   a waiting time, so raise it first.
+2. **Create the plan role** (§2a trust policy with `:environment:license-plan`,
    §2c permission policy).
-2. **Add `:environment:production` to the existing deploy role's trust
+3. **Add `:environment:production` to the existing deploy role's trust
    policy**, *alongside* its current `ref:refs/heads/main` entry (§2a shows
    the two-entry list). Do this before merging the workflow change.
-3. **Narrow the deploy role's permission policy** to the §2b version
+4. **Narrow the deploy role's permission policy** to the §2b version
    (`dynamodb` control plane, scoped `s3`). Safe to do at any point; it
    removes only permissions deploying never used.
-4. **Create both environments** with their branch restrictions and
+5. **Create both environments** with their branch restrictions and
    `production`'s reviewers, and add the environment secrets (§3).
-5. **Merge the workflow change.** The first run stops at `apply` waiting
+6. **Merge the workflow change.** The first run stops at `apply` waiting
    for a reviewer — that is the gate working.
-6. **After a green run**, delete the repository-level copies of the secrets
+7. **After a green run**, delete the repository-level copies of the secrets
    and drop the `ref:refs/heads/main` entry from the deploy role's trust
    policy. Until you do, a job naming no environment can still assume it
    and bypass the gate.
