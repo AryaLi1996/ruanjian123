@@ -250,12 +250,11 @@ for every future template change:
       "Resource": "arn:aws:iam::641628981129:role/shuyin-cloud-inpaint-*"
     },
     {
-      "Sid": "SamManagedEcrRepository",
+      "Sid": "EcrPush",
       "Effect": "Allow",
-      "Action": ["ecr:CreateRepository", "ecr:DescribeRepositories", "ecr:SetRepositoryPolicy",
-                 "ecr:GetRepositoryPolicy", "ecr:PutLifecyclePolicy", "ecr:TagResource",
-                 "ecr:BatchCheckLayerAvailability", "ecr:InitiateLayerUpload",
-                 "ecr:UploadLayerPart", "ecr:CompleteLayerUpload", "ecr:PutImage",
+      "Action": ["ecr:DescribeRepositories", "ecr:BatchCheckLayerAvailability",
+                 "ecr:InitiateLayerUpload", "ecr:UploadLayerPart",
+                 "ecr:CompleteLayerUpload", "ecr:PutImage",
                  "ecr:BatchGetImage", "ecr:ListImages"],
       "Resource": "arn:aws:ecr:us-east-1:641628981129:repository/*"
     },
@@ -270,9 +269,10 @@ for every future template change:
 ```
 
 **The inpaint statements are the new half**, and the ECR ones are why: that
-stack ships a container image, which the licence stack does not.
-`ecr:GetAuthorizationToken` has to be `Resource: "*"` — the API takes no
-resource. Everything else stays scoped by name prefix, and that prefixing is
+stack ships a container image, which the licence stack does not. Neither role
+can *create* a repository — §2d explains why that is deliberate and what to run
+instead. `ecr:GetAuthorizationToken` has to be `Resource: "*"` — the API takes
+no resource. Everything else stays scoped by name prefix, and that prefixing is
 what keeps a role that can deploy an inference endpoint from being able to
 touch `ruanjian-license-*` and vice versa.
 
@@ -395,8 +395,9 @@ job more useful":
 **The plan job pushes a container image.** That is inherent to previewing an
 image-based stack — the change-set has to reference an image that exists — and
 it is why `EcrPushOnly` is here. It writes a layer nobody runs; it cannot point
-a function at it. `ecr:CreateRepository` is deliberately absent for the same
-reason `s3:CreateBucket` is, below.
+a function at it. It pushes into the repository made once in §2d — neither role
+can create one, which is what keeps this role unable to create anything at
+all.
 
 `DescribeStacks` on `*` (the `CloudFormationPreflight` statement above) is also
 what lets `deploy-license.sh` read the inpaint stack's `InpaintUrl` output
@@ -405,11 +406,12 @@ actually be applied rather than a blank.
 
 Two things to expect the first time you use it:
 
-- **`s3:CreateBucket` and `ecr:CreateRepository` are deliberately absent.** With
-  `--resolve-s3` and `--resolve-image-repos`, SAM creates the managed artifact
-  bucket and image repository if they do not exist — so on a brand new account
+- **`s3:CreateBucket` is deliberately absent.** With `--resolve-s3` SAM creates
+  the managed artifact bucket if it does not exist — so on a brand new account
   the plan job fails until one `apply` run (or a local
-  `scripts/deploy-license.sh` / `scripts/deploy-inpaint.sh`) has created them. That is the intended
+  `scripts/deploy-license.sh`) has created it. The image repository is not in
+  this position: it is made once by hand (§2d), precisely so that neither role
+  needs to create anything. That is the intended
   trade-off: a preview role should not be able to create buckets.
 - **`iam:PassRole` is absent too.** CloudFormation checks it when a
   change-set is *executed*, not created, so a plan should not need it. If a
@@ -422,6 +424,55 @@ describe/get calls that CloudFormation makes while diffing, and several of
 them (notably `iam:GetRole`) reject ARN-scoped policies less predictably
 than they should. If you prefer, scope `lambda:*`/`dynamodb:DescribeTable`
 to the `ruanjian-license-*` prefixes and widen only if a plan fails.
+
+### 2d. The ECR repository, created once by hand
+
+The inpaint stack ships a container image, and the image has to be pushed
+somewhere before the stack that runs it exists. Create that somewhere once:
+
+```bash
+aws ecr create-repository \
+  --repository-name shuyin-cloud-inpaint \
+  --region us-east-1 \
+  --image-scanning-configuration scanOnPush=true
+```
+
+`scripts/deploy-inpaint.sh` derives the URI from the account and region it
+already knows and passes it as `--image-repository`; it checks the repository
+exists first and tells you this command if it does not.
+
+**Why not `--resolve-image-repos`.** Because SAM does not simply create a
+repository for you — it creates a *second CloudFormation stack*,
+`shuyin-cloud-inpaint-<hash>-CompanionStack`, to hold one. That failed here in
+two ways at once, and the error names only the first:
+
+```
+AccessDenied ... not authorized to perform: cloudformation:CreateStack on
+resource: arn:aws:cloudformation:...:stack/shuyin-cloud-inpaint-15584498-CompanionStack/*
+```
+
+The plan role has no `cloudformation:CreateStack` — being unable to create
+anything is the entire point of it — and the deploy role's policy is scoped to
+this stack's own ARN, which the companion's name does not match. Widening
+either one to cover it would mean giving the preview role the ability to create
+stacks, which is the guarantee the two-role split exists to make.
+
+And it deadlocks regardless: `plan` cannot pass until the companion stack
+exists, and `apply` only runs after `plan` passes. There is no order in which
+the pipeline bootstraps itself.
+
+One repository, made once, removes all of it. Neither role needs
+`ecr:CreateRepository` or any CloudFormation permission beyond its own stack.
+
+**Old images accumulate**, one per deploy at roughly 1.7 GB. Worth a lifecycle
+policy once this is deploying regularly:
+
+```bash
+aws ecr put-lifecycle-policy --repository-name shuyin-cloud-inpaint --region us-east-1 \
+  --lifecycle-policy-text '{"rules":[{"rulePriority":1,"description":"keep the last 5",
+    "selection":{"tagStatus":"any","countType":"imageCountMoreThan","countNumber":5},
+    "action":{"type":"expire"}}]}'
+```
 
 ## 3. GitHub Environments and their secrets
 
