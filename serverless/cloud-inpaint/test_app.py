@@ -176,3 +176,51 @@ class CapTest(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class ModelFrameTest(unittest.TestCase):
+    """
+    How a patch is put in front of the model.
+
+    This has one job that is easy to get wrong in the direction nobody
+    notices: a patch scaled *up* to fill the model's input measured 90 levels
+    of error against a known frame where the same patch at 1:1 measured 6 —
+    worse than the local filler this service exists to beat, at GPU prices.
+    Nothing crashes when that happens; the fill just quietly becomes invention.
+    """
+
+    def _frame(self, width, height):
+        patch = np.zeros((height, width, 3), np.uint8)
+        mask = np.zeros((height, width), np.uint8)
+        mask[height // 4:height // 2, width // 4:width // 2] = 1
+        return inpaint._to_model_frame(patch, mask)
+
+    def test_a_small_patch_is_not_scaled_up(self):
+        _, _, working = self._frame(119, 68)
+        self.assertEqual(working, (119, 68))
+
+    def test_a_patch_the_size_of_the_input_is_left_alone(self):
+        side = inpaint.MODEL_SIDE
+        _, _, working = self._frame(side, side // 2)
+        self.assertEqual(working, (side, side // 2))
+
+    def test_a_patch_too_big_for_the_graph_is_scaled_down(self):
+        _, _, working = self._frame(1024, 512)
+        self.assertLessEqual(max(working), inpaint.MODEL_SIDE)
+        # And in proportion, so nothing is squashed.
+        self.assertEqual(working, (inpaint.MODEL_SIDE, inpaint.MODEL_SIDE // 2))
+
+    def test_whatever_the_size_the_tensors_are_the_square_the_graph_wants(self):
+        for width, height in [(119, 68), (1024, 300), (10, 600)]:
+            with self.subTest(size=(width, height)):
+                image, grown, _ = self._frame(width, height)
+                self.assertEqual(image.shape[:2],
+                                 (inpaint.MODEL_SIDE, inpaint.MODEL_SIDE))
+                self.assertEqual(grown.shape, (inpaint.MODEL_SIDE, inpaint.MODEL_SIDE))
+
+    def test_the_padding_is_not_something_the_model_is_asked_to_repaint(self):
+        # Reflected picture in the padding gives the model plausible context;
+        # a mask that reached into it would have it invent there instead.
+        _, grown, working = self._frame(119, 68)
+        self.assertEqual(grown[working[1]:, :].sum(), 0)
+        self.assertEqual(grown[:, working[0]:].sum(), 0)

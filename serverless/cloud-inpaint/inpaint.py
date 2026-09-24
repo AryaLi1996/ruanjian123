@@ -27,12 +27,31 @@ MODEL_SIDE = 512
 # asking the service to inpaint something the size of a whole frame.
 MAX_PATCH_SIDE = 1024
 
-# The patch is scaled so its longer side fills the model's input. LaMa is
-# trained on far larger pictures than a watermark's box and does visibly worse
-# when handed one near its own scale: 7.81 levels of error at 1:1 against 6.65
-# at three times that, and end to end a patch scaled to 384 rather than 512
-# left 0.383 of the mark's shape behind where filling the input leaves none.
-# There is no reason to hand the model less than it will process anyway.
+# The patch is handed to the model at its own size, padded out to the square
+# the graph insists on. It is never scaled up.
+#
+# An earlier version of this file scaled the longer side to fill the model's
+# input, on the reasoning that LaMa is trained on far larger pictures and does
+# worse when handed one near its own scale — quoting 7.81 levels of error at
+# 1:1 against 6.65 at three times that. Measured on real frames, that is
+# backwards, and not marginally. Over 24 regions of three frames of the sample
+# clip, error against the known picture:
+#
+#     1:1 (this)            6.11 +- 3.08 levels
+#     2x                  126.49 +- 63.77
+#     3x                   88.89 +- 49.07
+#     scaled to fill 512   90.07 +- 44.96
+#     the local filler      8.12 +- 4.67
+#
+# Upscaling did not cost a little accuracy, it destroyed the fill: the service
+# would have returned something an order of magnitude further from the truth
+# than the local filler it exists to replace, at GPU prices. Anything that
+# reads as an improvement while the picture gets worse is measuring the wrong
+# thing — the figure that mattered here is error against a known frame, and it
+# is the one the old numbers were not checked against.
+#
+# Scaling *down* is still necessary: the graph is fixed at MODEL_SIDE, so a
+# patch larger than that has nowhere to go.
 
 _lock = threading.Lock()
 _session: ort.InferenceSession | None = None
@@ -63,11 +82,15 @@ def session() -> ort.InferenceSession:
 
 def _to_model_frame(patch: np.ndarray, mask: np.ndarray) -> tuple[np.ndarray, np.ndarray, tuple[int, int]]:
     """
-    Scale a patch up to something the model works well at, then pad it to the
-    square it insists on. Returns the tensors and the size to crop back to.
+    Put a patch into the square the model insists on, at its own size.
+
+    Returns the tensors and the size to crop back to. Only a patch larger than
+    MODEL_SIDE is scaled, and only down.
     """
     height, width = mask.shape
-    scale = MODEL_SIDE / max(width, height)
+    # `min(1.0, ...)`: shrink a patch too big for the graph, never grow a small
+    # one. See the note above — growing it is what the measurement ruled out.
+    scale = min(1.0, MODEL_SIDE / max(width, height))
     working = (min(MODEL_SIDE, max(1, int(round(width * scale)))),
                min(MODEL_SIDE, max(1, int(round(height * scale)))))
 
