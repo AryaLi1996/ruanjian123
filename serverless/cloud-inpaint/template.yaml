@@ -54,10 +54,15 @@ Parameters:
     MinValue: 1024
     MaxValue: 10240
     Description: >
-      Also buys vCPU — Lambda scales cores with memory, and at 10240 MB that
-      is about 6. Inference here is CPU-bound, so this is the throughput dial
-      and the maximum is the sensible setting: a smaller function is not
-      cheaper for the same work, it just takes longer to do it.
+      Also buys vCPU — Lambda gives one at 1769 MB and scales from there, so
+      10240 MB is about 5.8. Inference here is CPU-bound, so this is the
+      throughput dial and the maximum is the sensible setting: a smaller
+      function is not cheaper for the same work, it just takes longer.
+      A new AWS account is capped at 3008 MB and the stack rolls back on
+      'MemorySize value failed to satisfy constraint'; ask for the quota
+      rather than lowering this. At 3008 MB a 240-frame batch runs past
+      Lambda's 900-second hard timeout, so the function would be killed
+      mid-batch rather than merely slow. See CI_DEPLOY_SETUP.md section 2e.
 
   FunctionTimeout:
     Type: Number
