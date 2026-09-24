@@ -492,9 +492,28 @@ profile with reduced concurrency and memory, and
 [says so in the Lambda quotas page](https://docs.aws.amazon.com/lambda/latest/dg/gettingstarted-limits.html):
 *"New AWS accounts have reduced concurrency and memory quotas for Lambda
 Functions and Lambda MicroVMs. AWS raises these quotas automatically based on
-your usage."* Ask for it before the first deploy: Service Quotas console →
-AWS Lambda → the memory entry → request 10240. If the entry is not adjustable
-there, open a support case (Service limit increase → Lambda).
+your usage."*
+
+Ask for it before the first deploy — and **not through Service Quotas**,
+which is the obvious place and the wrong one. Lambda's memory is not an
+adjustable quota there; the console lists only concurrent executions, function
+and layer storage, and network interfaces per VPC. Memory sits in the quotas
+page's *"Function configuration, deployment, and execution"* table, under a
+heading that reads "Except as noted, they can't be changed". Someone sent to
+Service Quotas for it will hunt for an entry that does not exist.
+
+It takes a support case, and the category matters:
+
+> AWS Support → Create case → **Account and billing** (not Technical support)
+> → Service: **Lambda** → ask to raise the per-function memory limit from
+> 3008 MB to 10240 MB.
+
+Account and billing because the increase is reviewed by hand, and because that
+category is available on the Basic support plan while technical support is not.
+
+Expect "the account is too new" as a possible answer rather than a filing
+mistake: AWS raises these automatically with usage, and the reduced profile is
+meant to lift on its own.
 
 **Do not simply lower `MemorySize` to 3008 to get past this.** Lambda gives
 one vCPU at 1769 MB and scales from there, so 3008 MB is about 1.7 vCPU
