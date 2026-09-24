@@ -82,6 +82,34 @@ if [[ "$PLAN_ONLY" != "true" ]]; then
   fi
 fi
 
+# Where the built image goes.
+#
+# Named explicitly rather than left to `sam deploy --resolve-image-repos`,
+# which does not simply create an ECR repository: it creates a *second*
+# CloudFormation stack, `<stack>-<hash>-CompanionStack`, to hold one. That
+# broke the pipeline in two ways at once. The plan role has no
+# `cloudformation:CreateStack` — being unable to create anything is the whole
+# point of it — and the deploy role's policy is scoped to this stack's own
+# ARN, which the companion's name does not match. Worse, it deadlocks: `plan`
+# cannot pass until the companion exists, and `apply` only runs after `plan`
+# passes.
+#
+# One repository, created once by hand (see CI_DEPLOY_SETUP.md), removes all
+# of that. The URI is derived rather than configured — the account and region
+# are already here, and a fourth thing to keep in step is a fourth thing to
+# get wrong.
+IMAGE_REPO_NAME="${IMAGE_REPO_NAME:-$STACK_NAME}"
+IMAGE_REPO="${IMAGE_REPO:-${EXPECTED_ACCOUNT}.dkr.ecr.${AWS_REGION}.amazonaws.com/${IMAGE_REPO_NAME}}"
+
+if ! aws ecr describe-repositories --repository-names "$IMAGE_REPO_NAME" \
+     --region "$AWS_REGION" >/dev/null 2>&1; then
+  echo "ECR repository '$IMAGE_REPO_NAME' does not exist in $AWS_REGION." >&2
+  echo "It is created once, by hand — neither role here is allowed to:" >&2
+  echo "  aws ecr create-repository --repository-name $IMAGE_REPO_NAME --region $AWS_REGION" >&2
+  echo "See serverless/verify-license/CI_DEPLOY_SETUP.md section 2d." >&2
+  exit 1
+fi
+
 cd "$TEMPLATE_DIR"
 sam build --template-file template.yaml
 
@@ -117,7 +145,7 @@ sam deploy \
   --stack-name "$STACK_NAME" \
   --region "$AWS_REGION" \
   --resolve-s3 \
-  --resolve-image-repos \
+  --image-repository "$IMAGE_REPO" \
   --capabilities CAPABILITY_NAMED_IAM \
   "${execute_flag[@]}" \
   --parameter-overrides "${overrides[@]}" 2>&1 | tee "$deploy_log"
