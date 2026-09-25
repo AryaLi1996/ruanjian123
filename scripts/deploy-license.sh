@@ -50,20 +50,31 @@ fi
 # They contain no usable deployment outputs, so remove them before retrying.
 # Skipped entirely in plan mode: deleting a stack is the single most
 # destructive thing this script does, and a preview must not do it — the
-# plan role has no DeleteStack permission either way, so attempting it there
-# would just fail the preview with an access-denied instead of the accurate
-# "this stack can't be updated" message the apply job will produce.
-if [[ "$PLAN_ONLY" != "true" ]]; then
+# plan role has no DeleteStack permission either way.
+#
+# The status itself is read in both modes, and that distinction matters more
+# than it looks. This comment used to say the apply job would produce the
+# accurate "this stack can't be updated" message, so the preview could ignore
+# the case. It cannot: CreateChangeSet refuses a ROLLBACK_COMPLETE stack
+# outright, so `plan` fails, and `apply` — the only job allowed to delete it —
+# never runs, because it waits on `plan`. The pipeline could not recover from
+# its own first failed deployment. Measured on the inpaint stack, which is
+# where it happened; this script had the same shape and the same trap.
 stack_status="$(aws cloudformation describe-stacks \
   --stack-name "$STACK_NAME" \
   --region "$AWS_REGION" \
   --query 'Stacks[0].StackStatus' \
   --output text 2>/dev/null || true)"
+
+stack_unusable=false
 if [[ "$stack_status" == "REVIEW_IN_PROGRESS" || "$stack_status" == "ROLLBACK_COMPLETE" || "$stack_status" == "CREATE_FAILED" ]]; then
+  stack_unusable=true
+fi
+
+if [[ "$stack_unusable" == "true" && "$PLAN_ONLY" != "true" ]]; then
   echo "Cleaning up unusable $STACK_NAME stack in status $stack_status..."
   aws cloudformation delete-stack --stack-name "$STACK_NAME" --region "$AWS_REGION"
   aws cloudformation wait stack-delete-complete --stack-name "$STACK_NAME" --region "$AWS_REGION"
-fi
 fi
 
 cd "$TEMPLATE_DIR"
@@ -118,6 +129,21 @@ fi
 [[ -n "${FILL_FREE_UNITS:-}" ]]       && overrides+=("FillFreeUnits=$FILL_FREE_UNITS")
 [[ -n "${FILL_OVERAGE_PRICE:-}" ]]    && overrides+=("FillOveragePrice=$FILL_OVERAGE_PRICE")
 [[ -n "${FILL_OVERAGE_ALLOWED:-}" ]]  && overrides+=("FillOverageAllowed=$FILL_OVERAGE_ALLOWED")
+
+# Nothing can be planned against a stack CloudFormation will not update, and
+# the build above has already done the useful half of a plan. Say what the
+# apply will do and stop, rather than failing on a CreateChangeSet that was
+# never going to be accepted. There is no change-set for the reviewer in this
+# case, and that is honest: the stack is deleted and made again, so every
+# resource in it is new, and that is what approving 'apply' agrees to.
+if [[ "$PLAN_ONLY" == "true" && "$stack_unusable" == "true" ]]; then
+  echo
+  echo "The $STACK_NAME stack is in $stack_status, which CloudFormation cannot"
+  echo "update — the result of an earlier deployment that failed and rolled back."
+  echo "There is no change-set to preview: approving 'apply' will delete this"
+  echo "stack and create it again from scratch."
+  exit 0
+fi
 
 # --no-execute-changeset makes `sam deploy` stop after creating and printing
 # the change-set; --no-confirm-changeset skips the interactive prompt and
