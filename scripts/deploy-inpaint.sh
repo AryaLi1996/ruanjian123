@@ -66,20 +66,34 @@ if [[ "$account" != "$EXPECTED_ACCOUNT" ]]; then
 fi
 
 # REVIEW_IN_PROGRESS and ROLLBACK_COMPLETE stacks cannot be updated. They hold
-# no usable outputs, so remove them before retrying. Skipped in plan mode:
-# deleting a stack is the most destructive thing this script does and a preview
-# must not do it.
-if [[ "$PLAN_ONLY" != "true" ]]; then
-  stack_status="$(aws cloudformation describe-stacks \
-    --stack-name "$STACK_NAME" \
-    --region "$AWS_REGION" \
-    --query 'Stacks[0].StackStatus' \
-    --output text 2>/dev/null || true)"
-  if [[ "$stack_status" == "REVIEW_IN_PROGRESS" || "$stack_status" == "ROLLBACK_COMPLETE" || "$stack_status" == "CREATE_FAILED" ]]; then
-    echo "Cleaning up unusable $STACK_NAME stack in status $stack_status..."
-    aws cloudformation delete-stack --stack-name "$STACK_NAME" --region "$AWS_REGION"
-    aws cloudformation wait stack-delete-complete --stack-name "$STACK_NAME" --region "$AWS_REGION"
-  fi
+# no usable outputs, so they have to go before a retry can work.
+#
+# The status is read in both modes; only the deletion is withheld from plan
+# mode, because deleting a stack is the most destructive thing this script
+# does and a preview must not do it. Reading it in plan mode is what stops the
+# second deadlock this pipeline has had.
+#
+# The first was `--resolve-image-repos` (see below). This one is the same
+# shape and was hiding one block further up: a failed *create* leaves the
+# stack in ROLLBACK_COMPLETE, CreateChangeSet then refuses it outright, so
+# `plan` fails — and `apply`, the only job allowed to delete it, never runs,
+# because it waits on `plan`. The pipeline could not recover from its own
+# first failed deployment without somebody deleting the stack by hand.
+stack_status="$(aws cloudformation describe-stacks \
+  --stack-name "$STACK_NAME" \
+  --region "$AWS_REGION" \
+  --query 'Stacks[0].StackStatus' \
+  --output text 2>/dev/null || true)"
+
+stack_unusable=false
+if [[ "$stack_status" == "REVIEW_IN_PROGRESS" || "$stack_status" == "ROLLBACK_COMPLETE" || "$stack_status" == "CREATE_FAILED" ]]; then
+  stack_unusable=true
+fi
+
+if [[ "$stack_unusable" == "true" && "$PLAN_ONLY" != "true" ]]; then
+  echo "Cleaning up unusable $STACK_NAME stack in status $stack_status..."
+  aws cloudformation delete-stack --stack-name "$STACK_NAME" --region "$AWS_REGION"
+  aws cloudformation wait stack-delete-complete --stack-name "$STACK_NAME" --region "$AWS_REGION"
 fi
 
 # Where the built image goes.
@@ -120,6 +134,27 @@ overrides=(
   "MemorySize=${MEMORY_SIZE:-10240}"
   "ReservedConcurrency=${RESERVED_CONCURRENCY:-4}"
 )
+
+# Nothing can be planned against a stack CloudFormation will not update, and
+# the build above has already done the useful half of a plan — it proves the
+# image still builds, which is what a broken Dockerfile would fail at. Say
+# what the apply will do and stop, rather than failing on a CreateChangeSet
+# that was never going to be accepted.
+#
+# There is no change-set for the reviewer to read in this case, and that is
+# honest: the stack is being deleted and made again, so every resource in it
+# is new. The reviewer is approving exactly that.
+if [[ "$PLAN_ONLY" == "true" && "$stack_unusable" == "true" ]]; then
+  echo
+  echo "The $STACK_NAME stack is in $stack_status, which CloudFormation cannot"
+  echo "update — the result of an earlier deployment that failed and rolled back."
+  echo "There is no change-set to preview: approving 'apply' will delete this"
+  echo "stack and create it again from scratch."
+  echo
+  echo "The container image built successfully, so the deployment itself is not"
+  echo "known to be broken."
+  exit 0
+fi
 
 if [[ "$PLAN_ONLY" == "true" ]]; then
   echo "PLAN_ONLY=true — creating a change-set for review; nothing will be applied."
